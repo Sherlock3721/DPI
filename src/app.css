@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-labdark text-slate-100 font-sans antialiased overflow-hidden select-none;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+  }
+}
+
+/* Skvělé posuvníky pro laboratorní design */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Glassmorphismus pro okna */
+.glass-panel {
+  background: rgba(18, 25, 38, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Stylový vstupní prvek */
+.input-premium {
+  @apply bg-slate-900/60 border border-slate-700/50 rounded px-2 py-1 text-slate-100 focus:outline-none focus:border-labaccent transition-all duration-200;
+  color-scheme: dark;
+}
+
+select.input-premium option {
+  background-color: #0b0f19;
+  color: #f1f5f9;
+}
+
+/* ═══ THEME SYSTEM ═══════════════════════════════════════════════════════ */
+
+/* Tmavý motiv (výchozí) */
+:root,
+[data-theme="dark"] {
+  --bg-app:        #0b0f19;
+  --bg-white:      #121926;   /* "bílá" v tmavém motivu = tmavá karta */
+  --bg-panel:      rgba(18, 25, 38, 0.8);
+  --bg-surface:    #111827;
+  --bg-input:      rgba(2, 6, 23, 0.6);
+  --border-color:  rgba(255,255,255,0.05);
+  --border-muted:  #1e293b;
+  --text-primary:  #f1f5f9;
+  --text-muted:    #94a3b8;
+  --text-faint:    #475569;
+  --accent:        #3b82f6;
+  --scrollbar-bg:  rgba(255,255,255,0.10);
+}
+
+/* Světlý motiv */
+[data-theme="light"] {
+  --bg-app:        #f1f5f9;
+  --bg-white:      #ffffff;   /* skutečná bílá ve světlém motivu */
+  --bg-panel:      rgba(255, 255, 255, 0.90);
+  --bg-surface:    #ffffff;
+  --bg-input:      #f8fafc;
+  --border-color:  rgba(0,0,0,0.08);
+  --border-muted:  #e2e8f0;
+  --text-primary:  #0f172a;
+  --text-muted:    #475569;
+  --text-faint:    #94a3b8;
+  --accent:        #2563eb;
+  --scrollbar-bg:  rgba(0,0,0,0.12);
+
+  color-scheme: light;
+}
+
+[data-theme="light"] body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+}
+
+/* Přepis glassmorphism pro světlý motiv */
+[data-theme="light"] .glass-panel {
+  background: var(--bg-panel);
+  border-color: var(--border-color);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Přepis vstupních polí pro světlý motiv */
+[data-theme="light"] .input-premium {
+  background: var(--bg-input);
+  border-color: var(--border-muted);
+  color: var(--text-primary);
+  color-scheme: light;
+}
+[data-theme="light"] select.input-premium option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+/* Pozadí aplikace */
+[data-theme="light"] main {
+  background-color: var(--bg-app) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Panely, tlačítka – pokrytí základních bg tříd */
+[data-theme="light"] .bg-slate-900\/40      { background-color: rgba(241,245,249,0.8) !important; }
+[data-theme="light"] .bg-slate-950\/40      { background-color: rgba(226,232,240,0.6) !important; }
+[data-theme="light"] .bg-slate-950\/80      { background-color: rgba(226,232,240,0.9) !important; }
+[data-theme="light"] .bg-slate-950\/95      { background-color: rgba(248,250,252,0.98) !important; }
+[data-theme="light"] .bg-slate-950\/50      { background-color: rgba(226,232,240,0.5) !important; }
+
+/* bg-slate-950 solid (bez opacity) – na bílé pozadí */
+[data-theme="light"] .bg-slate-950          { background-color: var(--bg-white) !important; }
+
+[data-theme="light"] .border-slate-800      { border-color: var(--border-muted) !important; }
+[data-theme="light"] .border-slate-800\/80  { border-color: rgba(226,232,240,0.8) !important; }
+[data-theme="light"] .border-slate-800\/60  { border-color: rgba(226,232,240,0.6) !important; }
+[data-theme="light"] .border-slate-700      { border-color: #cbd5e1 !important; }
+[data-theme="light"] .border-slate-700\/80  { border-color: rgba(203,213,225,0.8) !important; }
+[data-theme="light"] .border-slate-700\/50  { border-color: rgba(203,213,225,0.5) !important; }
+[data-theme="light"] .text-slate-400        { color: #475569 !important; }
+[data-theme="light"] .text-slate-300        { color: #334155 !important; }
+[data-theme="light"] .text-slate-200        { color: #0f172a !important; }
+[data-theme="light"] .text-slate-500        { color: #64748b !important; }
+[data-theme="light"] .text-slate-600        { color: #94a3b8 !important; }
+[data-theme="light"] .bg-slate-900          { background-color: #f8fafc !important; }
+[data-theme="light"] .bg-slate-800          { background-color: #f1f5f9 !important; }
+[data-theme="light"] .bg-slate-900\/90      { background-color: rgba(248,250,252,0.95) !important; }
+[data-theme="light"] .bg-slate-950\/20      { background-color: rgba(226,232,240,0.5) !important; }
+[data-theme="light"] .bg-slate-950\/5       { background-color: rgba(241,245,249,0.3) !important; }
+[data-theme="light"] .bg-slate-950\/10      { background-color: rgba(226,232,240,0.3) !important; }
+[data-theme="light"] .bg-slate-900\/60      { background-color: rgba(248,250,252,0.9) !important; }
+[data-theme="light"] .bg-slate-900\/30      { background-color: rgba(241,245,249,0.6) !important; }
+[data-theme="light"] .bg-slate-900\/20      { background-color: rgba(241,245,249,0.4) !important; }
+
+/* Hover stavy */
+[data-theme="light"] .hover\:bg-slate-800:hover        { background-color: #e2e8f0 !important; }
+[data-theme="light"] .hover\:bg-slate-900\/30:hover    { background-color: rgba(226,232,240,0.4) !important; }
+[data-theme="light"] .hover\:bg-slate-900\/40:hover    { background-color: rgba(226,232,240,0.5) !important; }
+
+/* Divide barvy */
+[data-theme="light"] .divide-slate-800 > * + * { border-color: var(--border-muted) !important; }
+
+/* Scrollbar pro světlý motiv */
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-bg);
+}

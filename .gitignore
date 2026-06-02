@@ -1,0 +1,37 @@
+# =========================
+# Sestavení a cache
+# =========================
+target/
+dist/
+node_modules/
+
+# =========================
+# Logy a testy
+# =========================
+*.log
+test-results/
+playwright-report/
+playwright/.cache/
+
+# =========================
+# Prostředí a systém
+# =========================
+.env
+.env.*
+.DS_Store
+Thumbs.db
+
+# =========================
+# AI a vývojářské nástroje
+# =========================
+.claude/
+.gemini/
+.cursor/
+.aider/
+.vscode/
+.idea/
+
+# =========================
+# Lokální skripty
+# =========================
+release.sh

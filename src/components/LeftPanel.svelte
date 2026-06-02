@@ -1,0 +1,1041 @@
+<script lang="ts">
+  import { onMount, createEventDispatcher } from "svelte";
+  import {
+    get_available_ports,
+    connect_to_printer,
+    auto_connect_printer,
+    disconnect_from_printer,
+    subscribe_printer_status,
+    start_print,
+    pause_print,
+    resume_print,
+    stop_print,
+    get_app_settings,
+    send_manual_command,
+    send_manual_blocking,
+    resume_app_pause,
+    type PrinterStatus,
+    type ProcessParams,
+    type AppSettings,
+    type LayoutPosition,
+  } from "../lib/tauri";
+  import { listen } from "@tauri-apps/api/event";
+  import CustomSelect from "./CustomSelect.svelte";
+  import NumberInput from "./NumberInput.svelte";
+  import ZCalibrationModal from "./ZCalibrationModal.svelte";
+  import {
+    Play,
+    Pause,
+    Square,
+    Link,
+    Link2Off,
+    RefreshCw,
+    Cpu,
+    Thermometer,
+    FolderOpen,
+    Save,
+    FileSpreadsheet,
+    AlignJustify,
+    Activity,
+    Grip,
+    Grid,
+    LayoutGrid,
+  } from "lucide-svelte";
+
+  const dispatch = createEventDispatcher();
+
+  // --- GLOBÁLNÍ PARAMETRY TISKU (Matching Python schema) ---
+  export const isTauri: boolean = true;
+  export let params: ProcessParams = {
+    sample_count: 1,
+    prime_active: true,
+    slide_w: 25.0,
+    slide_h: 75.0,
+    slide_z: 2.0,
+    z_offset: 0.2,
+    z_unit: "mm", // "mm" nebo "µm"
+    nozzle_height: 30.0,
+    nozzle_hidden: 4.0,
+    filament_diameter: 9.5,
+    flow_multiplier: 1.0,
+    bed_temp: 0.0,
+    extrusion_rate: 100.0,
+    extrusion_unit: "nl/mm", // "µl/mm", "nl/mm", "kroky/mm"
+    nozzle_diam: 0.4,
+    infill_style: "Okraje + Výplň",
+    infill_val: 1.0,
+    infill_type: "mm", // "mm" nebo "%"
+    infill_angle: 0,
+    print_speed: 1500.0,
+    bed_leveling: true,
+    nozzle_type: "Modrá",
+  };
+
+  export let totalDist = 0;
+  export let totalTime: number = 0;
+  export let generatedGCode: string = "";
+  export let generateGCodeSilently:
+    | ((overrideStartGcode?: string) => Promise<{ gcode: string; dist: number; time: number }>)
+    | undefined = undefined;
+  export let positions: LayoutPosition[] = [];
+
+  // --- PARAMETRY PŘIPOJENÍ ---
+  let ports: string[] = [];
+  let selectedPort = "";
+  let baudrate = 115200;
+  let status: PrinterStatus = {
+    is_connected: false,
+    is_printing: false,
+    is_paused: false,
+    current_x: 0.0,
+    current_y: 0.0,
+    current_z: 0.0,
+    temp_extruder: 0.0,
+    temp_bed: 0.0,
+    progress: 0,
+    total_dist: 0.0,
+    time_remaining: 0.0,
+  };
+
+  // Presety načítané z nastavení
+  let sklo_dims: Record<string, number[]> = {
+    "Laboratorní Sklo (76 x 26 x 1 mm)": [76.0, 26.0, 1.0],
+    "FTO (76 x 50 x 1 mm)": [50.0, 76.0, 1.0],
+  };
+  let nozzle_defs: Record<string, [number, number, number, string]> = {
+    Červená: [31.1, 0.3, 4.0, "#ef4444"],
+    Modrá: [31.0, 0.41, 4.0, "#3b82f6"],
+  };
+  let glassPresets: string[] = [
+    "Laboratorní Sklo (76 x 26 x 1 mm)",
+    "FTO (76 x 50 x 1 mm)",
+    "Vlastní",
+  ];
+  let nozzlePresets: string[] = ["Červená", "Modrá", "Vlastní"];
+
+  export let selectedGlass = glassPresets[0];
+  let selectedNozzle = nozzlePresets[1];
+
+  let bed_max_x = 200.0;
+  let bed_max_y = 200.0;
+  let bed_max_temp = 100.0;
+  let bed_min_temp = 30; // Min. teplota při zapnutí (konfigurovatelno v nastavení)
+  let firstPrintCompleted = false;
+
+  // Kalibrace
+  let showZCalibrationModal = false;
+  let glassZTheoretical = 0.0;
+  let settingsCache: AppSettings | null = null;
+
+  // Ochrana proti double-click / re-kliku během blokující fáze 1
+  let isStarting = false;
+
+  // Pauza (M1 / M0 / M601 příkazy v start_gcode)
+  let pauseMessage: string | null = null;
+  let pauseResolve: (() => void) | null = null;
+  // true = pauza pochází z tiskové fronty (fáze 2) → resume_app_pause(); false = fáze 1 → promise resolve
+  let pauseIsFromPrintQueue = false;
+
+  function waitForPause(message: string): Promise<void> {
+    return new Promise((resolve) => {
+      pauseMessage = message || "Stiskněte libovolnou klávesu pro pokračování";
+      pauseIsFromPrintQueue = false;
+      pauseResolve = resolve;
+    });
+  }
+
+  async function dismissPause() {
+    pauseMessage = null;
+    if (pauseIsFromPrintQueue) {
+      pauseIsFromPrintQueue = false;
+      await resume_app_pause();
+    } else if (pauseResolve) {
+      pauseResolve();
+      pauseResolve = null;
+    }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (pauseMessage !== null) dismissPause();
+  }
+
+  // Rozdělí gcode na segmenty oddělené pausovacími příkazy (M0/M1/M601).
+  // Vrací pole [{code, msg}] kde msg je text z M1 příkazu nebo null pro poslední segment.
+  function splitGcodeByPauses(gcode: string): Array<{ code: string; msg: string | null }> {
+    const segments: Array<{ code: string; msg: string | null }> = [];
+    const lines = gcode.split("\n");
+    let current: string[] = [];
+
+    for (const line of lines) {
+      const cmdPart = line.split(";")[0].trim();
+      const cmdUpper = cmdPart.toUpperCase();
+      const isM0 = cmdUpper === "M0" || cmdUpper.startsWith("M0 ");
+      const isM1 = cmdUpper === "M1" || cmdUpper.startsWith("M1 ");
+      const isM601 = cmdUpper === "M601";
+
+      if (isM0 || isM1 || isM601) {
+        const msg = cmdPart.replace(/^M\d+\s*/i, "").trim() || "Stiskněte libovolnou klávesu pro pokračování";
+        segments.push({ code: current.join("\n"), msg });
+        current = [];
+      } else {
+        current.push(line);
+      }
+    }
+    segments.push({ code: current.join("\n"), msg: null });
+    return segments;
+  }
+
+  // Výhřev podložky: sleduje poslední platnou hodnotu pro správný skok přes šedou zónu
+  let lastBedTemp = 0;
+  function handleBedTempChange() {
+    // Šedá zóna: při přechodu z 0 skočíme na bed_min_temp (viz nastavení), jinak na 0
+    if (params.bed_temp > 0 && params.bed_temp < bed_min_temp) {
+      params.bed_temp = lastBedTemp === 0 ? bed_min_temp : 0;
+    }
+    // Omezení na maximální teplotu z nastavení (0 = neomezeno)
+    if (bed_max_temp > 0 && params.bed_temp > bed_max_temp) {
+      params.bed_temp = bed_max_temp;
+    }
+    lastBedTemp = params.bed_temp;
+    dispatch("paramsChanged", params);
+  }
+
+  function getNozzleColor(name: string): string {
+    if (name === "Vlastní") return "transparent";
+    const def = nozzle_defs[name];
+    // nozzle_defs ukládá [výška, průměr, skrytá, barva]
+    if (def && def.length >= 4 && def[3]) {
+      return String(def[3]);
+    }
+    return "#3b82f6"; // výchozí modrá
+  }
+
+  $: maxSamples =
+    Math.floor(bed_max_x / (params.slide_w + 5.0)) *
+      Math.floor(bed_max_y / (params.slide_h + 5.0)) || 1;
+  $: if (!firstPrintCompleted) params.bed_leveling = true;
+
+  // --- UNIT CONVERSIONS LOGIC (Strictly mirrored from Python LeftPanel) ---
+  let lastZUnit = "mm";
+  function handleZUnitChange() {
+    if (params.z_unit === "µm" && lastZUnit === "mm") {
+      params.z_offset = params.z_offset * 1000.0;
+    } else if (params.z_unit === "mm" && lastZUnit === "µm") {
+      params.z_offset = params.z_offset / 1000.0;
+    }
+    lastZUnit = params.z_unit;
+    dispatch("paramsChanged", params);
+  }
+
+  let lastExtUnit = "nl/mm";
+  const extUnitOptions: Record<string, number> = {
+    "µl/mm": 1.0,
+    "nl/mm": 0.001,
+    "kroky/mm": 1.0,
+  };
+
+  function handleExtUnitChange() {
+    const calFactor = settingsCache?.calibration_factor ?? 0.014108;
+    let baseVal = params.extrusion_rate;
+
+    // 1. Převod z předchozí jednotky na µl/mm
+    if (lastExtUnit === "kroky/mm") {
+      baseVal = params.extrusion_rate / calFactor;
+    } else {
+      baseVal = params.extrusion_rate * extUnitOptions[lastExtUnit];
+    }
+
+    // 2. Převod z µl/mm na novou jednotku
+    if (params.extrusion_unit === "kroky/mm") {
+      params.extrusion_rate = baseVal * calFactor;
+    } else {
+      params.extrusion_rate = baseVal / extUnitOptions[params.extrusion_unit];
+    }
+
+    lastExtUnit = params.extrusion_unit;
+    dispatch("paramsChanged", params);
+  }
+
+  // --- PRESETS SYNC ---
+  function handleGlassChange() {
+    if (selectedGlass === "Vlastní") return;
+    const dims = sklo_dims[selectedGlass];
+    if (dims && dims.length >= 3) {
+      params.slide_w = dims[0];
+      params.slide_h = dims[1];
+      params.slide_z = dims[2];
+      dispatch("paramsChanged", params);
+    }
+  }
+
+  function handleNozzleChange() {
+    params.nozzle_type = selectedNozzle;
+    if (selectedNozzle === "Vlastní") return;
+    const def = nozzle_defs[selectedNozzle];
+    if (def && def.length >= 3) {
+      params.nozzle_height = def[0];
+      params.nozzle_diam = def[1];
+      params.nozzle_hidden = def[2];
+      dispatch("paramsChanged", params);
+    }
+  }
+
+  // Načtení portů a nastavení
+  async function refreshPorts() {
+    ports = await get_available_ports();
+    if (!selectedPort) {
+      selectedPort = "Automaticky";
+    }
+  }
+
+  export async function loadSettings() {
+    try {
+      const settings = await get_app_settings();
+      settingsCache = settings;
+      if (settings.sklo_dims) sklo_dims = settings.sklo_dims;
+      if (settings.nozzle_defs) nozzle_defs = settings.nozzle_defs;
+
+      bed_max_x = settings.bed_max_x || 200.0;
+      bed_max_y = settings.bed_max_y || 200.0;
+      bed_max_temp = settings.bed_max_temp ?? 0; // 0 = neomezeno
+      bed_min_temp = settings.bed_min_temp ?? 30; // z nastavení
+      lastBedTemp = params.bed_temp;
+    } catch (e) {
+      console.warn("Failed to load settings (Web Mode), using defaults.");
+    }
+
+    // Provede se i při chybě (s defaulty)
+    glassPresets = Array.from(new Set([...Object.keys(sklo_dims), "Vlastní"]));
+    nozzlePresets = Array.from(new Set([...Object.keys(nozzle_defs), "Vlastní"]));
+
+    if (!glassPresets.includes(selectedGlass)) selectedGlass = glassPresets[0] || "Vlastní";
+    if (!nozzlePresets.includes(selectedNozzle)) selectedNozzle = nozzlePresets[0] || "Vlastní";
+
+    handleGlassChange();
+    handleNozzleChange();
+  }
+
+  async function toggleConnection() {
+    if (status.is_connected) {
+      await disconnect_from_printer();
+      return;
+    }
+    try {
+      const res =
+        selectedPort === "Automaticky"
+          ? await auto_connect_printer(baudrate)
+          : await connect_to_printer(selectedPort, baudrate);
+      status = res;
+    } catch (e) {
+      alert(`Připojení selhalo: ${e}`);
+    }
+  }
+
+  async function handleStart() {
+    if (!status.is_connected || isStarting) return;
+    isStarting = true;
+
+    const setts = await get_app_settings();
+    const blockH = setts.block_height || 34.0;
+    const safeZ: number = (setts as any).safe_z ?? 20.0;
+    glassZTheoretical = -blockH + params.nozzle_height - params.nozzle_hidden + params.slide_z;
+
+    const firstPos = positions[0];
+    const targetX = firstPos
+      ? (firstPos.x + firstPos.width / 2).toFixed(3)
+      : (bed_max_x / 2).toFixed(3);
+    const targetY = firstPos
+      ? (firstPos.y + firstPos.height / 2).toFixed(3)
+      : (bed_max_y / 2).toFixed(3);
+
+    // Pokud je kalibračníZ záporné, Marlin odmítne pohyb — posuneme souřadnicový systém
+    // stejnou logikou jako z_shift v generátoru G-kódu (dpi-core/gcode.rs)
+    const zShift = glassZTheoretical < 0 ? Math.abs(glassZTheoretical) + 1.0 : 0.0;
+    const calibVirtualZ = glassZTheoretical + zShift;    // vždy >= 1
+    const approachVirtualZ = calibVirtualZ + 2.0;
+
+    let initGcode = setts.start_gcode ?? "";
+    if (!params.bed_leveling) {
+      initGcode = initGcode.replace(/\bG28\b(?!\s*[XYZW])/g, "G28 W");
+    }
+    const initSegments = splitGcodeByPauses(initGcode);
+
+    try {
+      // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí modal)
+      for (let i = 0; i < initSegments.length; i++) {
+        const gcode = initSegments[i].code.trim();
+        const prefix = i === 0 ? "M410\n" : "";
+        if (gcode || i === 0) {
+          await send_manual_blocking(prefix + gcode);
+        }
+        if (initSegments[i].msg !== null) {
+          await waitForPause(initSegments[i].msg!);
+        }
+      }
+
+      // 2. Bezpečná výška + případný G92 posun + přejezd nad první pozici
+      const shiftCmd = zShift > 0
+        ? `G0 Z${safeZ.toFixed(3)} F1000\nG92 Z${(safeZ + zShift).toFixed(3)}\n`
+        : `G0 Z${safeZ.toFixed(3)} F1000\n`;
+
+      await send_manual_blocking(
+        shiftCmd +
+        `G0 X${targetX} Y${targetY} F3000\nM400\n` +
+        `G0 Z${approachVirtualZ.toFixed(3)} F1000\n` +
+        `G1 Z${calibVirtualZ.toFixed(3)} F300\nM400`
+      );
+
+      showZCalibrationModal = true;
+    } catch (e) {
+      alert(`Chyba při přípravě tisku: ${e}`);
+      isStarting = false;
+    }
+  }
+
+  // Uložíme parametry kalibrace pro druhý krok (po odstranění kalibrátoru)
+  let pendingZOffset = 0;
+  let pendingOriginalZOffset = 0;
+  let showRemoveCalibratorModal = false;
+
+  async function startPrintAfterCalibration(e: CustomEvent) {
+    showZCalibrationModal = false;
+    pendingZOffset = params.z_offset + e.detail.shift;
+    pendingOriginalZOffset = params.z_offset;
+    try {
+      await send_manual_blocking("G91\nG0 Z5 F1000\nG90");
+      showRemoveCalibratorModal = true;
+    } catch (err) {
+      alert(`Chyba při oddálení trysky: ${err}`);
+    }
+  }
+
+  async function confirmCalibratorRemoved() {
+    showRemoveCalibratorModal = false;
+    params.z_offset = pendingZOffset;
+    try {
+      // Plný start_gcode (PINDA, M201…) proběhl v handleStart (fáze 1).
+      // G28 mesh je v paměti tiskárny → stačí G28 W (obnova meshe, rychlý home,
+      // bez opakování PINDA sekvence a bez timeoutu OK_TIMEOUT_SECS).
+      const res = generateGCodeSilently
+        ? await generateGCodeSilently("G28 W\nG92 E0.0")
+        : { gcode: generatedGCode, dist: totalDist, time: totalTime };
+      await start_print(res.gcode, res.dist, res.time);
+      firstPrintCompleted = true;
+      params.bed_leveling = false;
+      dispatch("paramsChanged", params);
+    } catch (err) {
+      alert(`Nepodařilo se zahájit tisk: ${err}`);
+    } finally {
+      params.z_offset = pendingOriginalZOffset;
+      isStarting = false;
+    }
+  }
+
+  async function handlePause() {
+    status.is_paused ? await resume_print() : await pause_print();
+  }
+
+  async function handleStop() {
+    if (confirm("Opravdu chcete tisk okamžitě zrušit?")) {
+      await stop_print();
+    }
+  }
+
+  // Spouštění externího načtení z nadřazeného App.svelte
+  function triggerLoadFile() {
+    dispatch("loadFile");
+  }
+
+  function triggerSaveFile() {
+    dispatch("saveFile");
+  }
+
+  function triggerExportCSV() {
+    dispatch("exportCSV");
+  }
+
+  // POZOR: Záměrně ŽÁDNÝ catch-all reaktivní blok pro dispatch.
+  // Dřívější `$: { if (params) dispatch(...) }` způsoboval nekonečnou
+  // reaktivní smyčku při editaci teploty podložky → zamrzání GUI.
+  // Dispatch je voláno explicitně v každém handleru kde je potřeba.
+
+  onMount(() => {
+    refreshPorts();
+    loadSettings();
+
+    const unsubscribe = subscribe_printer_status((newStatus) => {
+      const wasConnected = status.is_connected;
+      status = newStatus;
+      // Po odpojení → při dalším připojení musí být bed leveling povinný
+      if (wasConnected && !newStatus.is_connected) {
+        firstPrintCompleted = false;
+        params.bed_leveling = true;
+        dispatch("paramsChanged", params);
+      }
+    });
+
+    const unlistenPause = listen<string>("app-pause-requested", (event) => {
+      // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis pauseResolve = null
+      // by natrvalo zablokoval waitForPause() promise.
+      if (isStarting) return;
+      pauseMessage = event.payload || "Stiskněte pro pokračování";
+      pauseIsFromPrintQueue = true;
+      pauseResolve = null;
+    });
+
+    return () => {
+      unsubscribe.then((unsub) => unsub());
+      unlistenPause.then((unsub) => unsub());
+    };
+  });
+</script>
+
+<div
+  class="glass-panel rounded-lg p-2 flex flex-col gap-2 overflow-hidden h-full text-xs select-text"
+>
+  <!-- HLAVNÍ FORMULÁŘ -->
+  <div class="flex flex-col gap-1.5 flex-1 overflow-y-auto min-h-0">
+    <!-- SEKCE: PODLOŽKA -->
+    <div
+      class="bg-slate-900/40 rounded-xl p-2 border border-slate-800 shadow-xl space-y-1 relative group shrink"
+    >
+      <h3
+        class="text-xs font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-1 mb-0.5"
+      >
+        Podložka
+      </h3>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Typ laboratorního sklíčka nebo vlastní rozměr"
+      >
+        <span class="col-span-1 text-slate-400">Sklíčko:</span>
+        <div class="col-span-2">
+          <CustomSelect
+            bind:value={selectedGlass}
+            on:change={handleGlassChange}
+            options={glassPresets.map((p) => ({
+              value: p,
+              label: p,
+              cssStyle: "background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(4px);",
+            }))}
+          />
+        </div>
+      </div>
+
+      <!-- VLASTNÍ ROZMĚRY SKLA (Visible if custom selected) -->
+      {#if selectedGlass === "Vlastní"}
+        <div
+          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded border border-slate-850"
+        >
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[9px] text-slate-500">Šířka (mm)</span>
+            <NumberInput
+              step={0.5}
+              bind:value={params.slide_w}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="col-span-2 py-0.5"
+            />
+          </div>
+          <div class="flex flex-col gap-1 items-center">
+            <span class="text-[10px] text-slate-400">Y [mm]</span>
+            <NumberInput
+              step={0.5}
+              bind:value={params.slide_h}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="py-0.5"
+            />
+          </div>
+          <div class="flex flex-col gap-1 items-center">
+            <span class="text-[10px] text-slate-400">Z [mm]</span>
+            <NumberInput
+              step={0.5}
+              bind:value={params.slide_z}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="py-0.5"
+            />
+          </div>
+          <span class="text-[10px] text-slate-400 pt-3">mm</span>
+        </div>
+      {/if}
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Počet sklíček, která budou vysázena vedle sebe"
+      >
+        <span class="col-span-1 text-slate-400">Počet vzorků:</span>
+        <div class="col-span-2 h-8">
+          <NumberInput
+            min={1}
+            max={maxSamples}
+            step={1}
+            bind:value={params.sample_count}
+            on:input={() => dispatch("paramsChanged", params)}
+            class="w-full h-full"
+          />
+        </div>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Teplota vyhřívané podložky ve stupních Celsia"
+      >
+        <span class="col-span-1 text-slate-400">Výhřev podložky:</span>
+        <div class="col-span-2 flex gap-2 items-center">
+          <div class="flex-1 h-8">
+            <NumberInput
+              min={0}
+              max={bed_max_temp > 0 ? bed_max_temp : undefined}
+              step={5}
+              bind:value={params.bed_temp}
+              on:input={handleBedTempChange}
+              class="w-full h-full"
+            />
+          </div>
+          <span class="text-slate-400 text-xs w-16">{params.bed_temp > 0 ? "°C" : "Vypnuto"}</span>
+        </div>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Vytvoří mapu nerovností podložky před prvním tiskem"
+      >
+        <span class="col-span-1 text-slate-400">Příprava podložky:</span>
+        <button
+          disabled={!firstPrintCompleted}
+          on:click={() => {
+            if (firstPrintCompleted) {
+              params.bed_leveling = !params.bed_leveling;
+              dispatch("paramsChanged", params);
+            }
+          }}
+          class="col-span-2 text-center py-1 rounded font-bold border transition-colors {params.bed_leveling
+            ? 'bg-labaccent/20 border-labaccent/50 text-labaccent'
+            : 'bg-slate-900 border-slate-800 text-slate-400'} {!firstPrintCompleted
+            ? 'opacity-50 cursor-not-allowed'
+            : ''}"
+        >
+          Bed Leveling {params.bed_leveling ? "AKTIVNÍ" : "VYPNUTÝ"}
+          {!firstPrintCompleted ? "(Nutné)" : ""}
+        </button>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Prvotní nanesení kapaliny na extra sklíčko pro vyčištění trysky"
+      >
+        <span class="col-span-1 text-slate-400">Příprava trysky:</span>
+        <button
+          on:click={() => {
+            params.prime_active = !params.prime_active;
+            dispatch("paramsChanged", params);
+          }}
+          class="col-span-2 text-center py-1 rounded font-bold border transition-colors {params.prime_active
+            ? 'bg-orange-500/20 border-orange-500/50 text-orange-500'
+            : 'bg-slate-900 border-slate-800 text-slate-400'}"
+        >
+          Odpliv {params.prime_active ? "AKTIVNÍ" : "VYPNUTÝ"}
+        </button>
+      </div>
+    </div>
+
+    <!-- SEKCE: TISKOVÉ PARAMETRY -->
+    <div
+      class="bg-slate-900/40 rounded-xl p-2 border border-slate-800 shadow-xl space-y-1 relative group shrink"
+    >
+      <h3
+        class="text-xs font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-1 mb-0.5"
+      >
+        Tiskové parametry
+      </h3>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Výška hlavy nad podložkou při tisku (Z-offset)"
+      >
+        <span class="col-span-1 text-slate-400">Tloušťka vrstvy:</span>
+        <div class="col-span-2 grid grid-cols-3 gap-1">
+          <div class="col-span-2 h-8">
+            <NumberInput
+              min={0.001}
+              step={0.05}
+              bind:value={params.z_offset}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="w-full h-full"
+            />
+          </div>
+          <div class="col-span-1 h-8">
+            <CustomSelect
+              bind:value={params.z_unit}
+              on:change={handleZUnitChange}
+              options={[
+                { value: "mm", label: "mm" },
+                { value: "µm", label: "µm" },
+              ]}
+              cssStyle="height: 100%; font-size: 11px;"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Rychlost vytlačování kapaliny (dávkování na milimetr trasy)"
+      >
+        <span class="col-span-1 text-slate-400">Extruze:</span>
+        <div class="col-span-2 grid grid-cols-3 gap-1">
+          <div class="col-span-2 h-8">
+            <NumberInput
+              min={0.001}
+              step={0.1}
+              bind:value={params.extrusion_rate}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="w-full h-full"
+            />
+          </div>
+          <div class="col-span-1 h-8">
+            <CustomSelect
+              bind:value={params.extrusion_unit}
+              on:change={handleExtUnitChange}
+              options={[
+                { value: "µl/mm", label: "µl/mm" },
+                { value: "nl/mm", label: "nl/mm" },
+                { value: "kroky/mm", label: "krok/mm" },
+              ]}
+              cssStyle="height: 100%; font-size: 10px; padding-left: 2px; padding-right: 2px;"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Fyzický tvar a průměr nasazené trysky"
+      >
+        <span class="col-span-1 text-slate-400">Typ trysky:</span>
+        <div class="col-span-2">
+          <CustomSelect
+            bind:value={selectedNozzle}
+            on:change={handleNozzleChange}
+            options={nozzlePresets.map((p) => ({
+              value: p,
+              label: p,
+              color: p !== "Vlastní" ? getNozzleColor(p) : undefined,
+            }))}
+          />
+        </div>
+      </div>
+
+      <!-- VLASTNÍ ROZMĚRY TRYSKY -->
+      {#if selectedNozzle === "Vlastní"}
+        <div
+          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded border border-slate-850"
+        >
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[9px] text-slate-500">Výška (mm)</span>
+            <NumberInput
+              step={1}
+              bind:value={params.nozzle_height}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="w-full h-full"
+            />
+          </div>
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[9px] text-slate-500">Průměr (mm)</span>
+            <div class="flex-1 h-8">
+              <NumberInput
+                step={0.05}
+                min={0.01}
+                bind:value={params.nozzle_diam}
+                on:input={() => dispatch("paramsChanged", params)}
+                class="w-full h-full"
+              />
+            </div>
+          </div>
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[9px] text-slate-500">Schovaná (mm)</span>
+            <NumberInput
+              step={0.5}
+              bind:value={params.nozzle_hidden}
+              on:input={() => dispatch("paramsChanged", params)}
+              class="w-full h-full"
+            />
+          </div>
+          <span class="text-[10px] text-slate-400 pt-3">mm</span>
+        </div>
+      {/if}
+    </div>
+
+    <!-- SEKCE: VEKTOROVÉ VÝPLNĚ -->
+    <div
+      class="bg-slate-900/40 rounded-xl p-2 border border-slate-800 shadow-xl space-y-1 relative group shrink"
+    >
+      <h3
+        class="text-xs font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-1 mb-0.5"
+      >
+        Vektorové výplně
+      </h3>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Vzor, jakým bude obrazec uvnitř vyplněn"
+      >
+        <span class="col-span-1 text-slate-400">Styl výplně:</span>
+        <div class="col-span-2">
+          <CustomSelect
+            bind:value={params.infill_style}
+            on:change={() => dispatch("paramsChanged", params)}
+            options={[
+              { value: "Okraje + Výplň", label: "Okraje + Výplň", icon: Grid },
+              { value: "Výplň", label: "Výplň", icon: AlignJustify },
+              { value: "Okraje", label: "Okraje", icon: Square },
+              { value: "Had", label: "Had", icon: Activity },
+              { value: "Mřížka", label: "Mřížka", icon: LayoutGrid },
+              { value: "Tečky", label: "Tečky", icon: Grip },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Rozestup mezi tiskovými čarami ve výplni"
+      >
+        <span class="col-span-1 text-slate-400">Hustota výplně:</span>
+        <div class="col-span-2 grid grid-cols-3 gap-1">
+          <div class="col-span-2 h-8">
+            <NumberInput
+              min={params.infill_type === "počet" ? 1 : 0.001}
+              step={params.infill_type === "počet" ? 1 : 0.1}
+              bind:value={params.infill_val}
+              on:input={() => {
+                if (params.infill_type === "počet")
+                  params.infill_val = Math.max(1, Math.round(params.infill_val));
+                dispatch("paramsChanged", params);
+              }}
+              class="w-full h-full"
+            />
+          </div>
+          <div class="col-span-1 h-8">
+            <CustomSelect
+              bind:value={params.infill_type}
+              on:change={() => {
+                if (params.infill_type === "počet")
+                  params.infill_val = Math.max(1, Math.round(params.infill_val));
+                dispatch("paramsChanged", params);
+              }}
+              options={[
+                { value: "mm", label: "mm" },
+                { value: "%", label: "%" },
+                { value: "počet", label: "počet" },
+              ]}
+              cssStyle="height: 100%; font-size: 11px;"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 items-center gap-2" title="Natočení čar výplně ve stupních">
+        <span class="col-span-1 text-slate-400">Úhel výplně [°]:</span>
+        <div class="col-span-2 h-8">
+          <NumberInput
+            min={0}
+            max={90}
+            step={5}
+            bind:value={params.infill_angle}
+            on:input={() => dispatch("paramsChanged", params)}
+            class="w-full h-full"
+          />
+        </div>
+      </div>
+    </div>
+
+    <!-- SEKCE: OVLÁDÁNÍ TISKÁRNY -->
+    <div
+      class="bg-slate-900/40 rounded-xl p-2 border border-slate-800 shadow-xl space-y-1 relative group shrink"
+    >
+      <h3
+        class="text-xs font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-1 mb-0.5"
+      >
+        Ovládání tiskárny
+      </h3>
+
+      <div class="text-slate-300 font-semibold mb-0.5">
+        Stav: <span
+          class={status.is_printing
+            ? "text-labgreen"
+            : status.is_connected
+              ? "text-blue-400"
+              : "text-slate-400"}
+        >
+          {status.is_printing
+            ? status.is_paused
+              ? "Pozastaveno"
+              : "Tiskne..."
+            : status.is_connected
+              ? "Připojeno"
+              : "Odpojeno"}
+        </span>
+      </div>
+
+      <div class="grid grid-cols-3 items-center gap-2" title="Komunikační sériový port tiskárny">
+        <span class="col-span-1 text-slate-400">Port:</span>
+        <div class="col-span-2 flex gap-1 items-center">
+          <div class="flex-1">
+            <CustomSelect
+              bind:value={selectedPort}
+              options={[
+                { value: "Automaticky", label: "Automaticky" },
+                ...ports.map((p) => ({ value: p, label: p.replace("/dev/tty", "") })),
+              ]}
+              cssStyle="font-size: 11px;"
+            />
+          </div>
+          <button
+            on:click={refreshPorts}
+            class="bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-400 p-1.5 rounded"
+          >
+            <RefreshCw class="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 items-center gap-2" title="Rychlost komunikace po sériové lince">
+        <span class="col-span-1 text-slate-400">Rychlost (Baud):</span>
+        <div class="col-span-2">
+          <CustomSelect
+            bind:value={baudrate}
+            options={[
+              { value: 115200, label: "115200" },
+              { value: 250000, label: "250000" },
+            ]}
+          />
+        </div>
+      </div>
+
+      <!-- Tlačítko Připojit / Odpojit -->
+      <button
+        on:click={toggleConnection}
+        class="w-full font-bold py-1 rounded text-white transition-colors {status.is_connected
+          ? 'bg-labred hover:bg-red-600'
+          : 'bg-labaccent hover:bg-blue-600'}"
+      >
+        {status.is_connected ? "Odpojit tiskárnu" : "Připojit tiskárnu"}
+      </button>
+
+      {#if status.is_connected}
+        <!-- Tlačítko Start Tisku -->
+        {#if !status.is_printing}
+          <button
+            on:click={handleStart}
+            disabled={isStarting}
+            class="w-full bg-labgreen hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-1 rounded transition-colors flex items-center justify-center gap-1.5"
+          >
+            {#if isStarting}
+              <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+              </svg>
+              Inicializace…
+            {:else}
+              <Play class="w-4 h-4" /> Start tisku
+            {/if}
+          </button>
+        {:else}
+          <!-- Ovládání za běhu (Pauza, Stop) -->
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              on:click={handlePause}
+              class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded transition-colors flex items-center justify-center gap-1"
+            >
+              <Pause class="w-3.5 h-3.5" />
+              {status.is_paused ? "Pokračovat" : "Pozastavit"}
+            </button>
+            <button
+              on:click={handleStop}
+              class="bg-labred hover:bg-red-600 text-white font-bold py-1 rounded transition-colors flex items-center justify-center gap-1"
+            >
+              <Square class="w-3.5 h-3.5" /> Zastavit
+            </button>
+          </div>
+        {/if}
+
+        <!-- Progress bar a statistiky -->
+        <div class="flex flex-col gap-1.5 mt-1 border-t border-slate-800 pt-2">
+          <div class="w-full bg-slate-850 rounded-full h-2 overflow-hidden border border-slate-800">
+            <div
+              class="bg-labaccent h-full rounded-full transition-all duration-300"
+              style="width: {status.progress}%"
+            ></div>
+          </div>
+          {#if status.is_printing}
+            <div class="text-center text-[10px] text-slate-400">
+              Dokončeno: {status.progress}% | Zbývá: {Math.ceil(status.time_remaining / 60)} min
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  <div class="border-b border-slate-800 my-0.5"></div>
+
+  <!-- TLAČÍTKO FEEDBACK (NAHLÁSIT CHYBU) -->
+  <button
+    on:click={() => window.dispatchEvent(new CustomEvent("open-feedback-form"))}
+    class="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded transition-colors text-xs"
+  >
+    Nahlásit chybu / Nápad
+  </button>
+</div>
+
+<svelte:window on:keydown={handleKeydown} />
+
+{#if pauseMessage !== null}
+  <div
+    class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]"
+    on:click={dismissPause}
+    on:keydown={handleKeydown}
+    role="dialog"
+    aria-modal="true"
+  >
+    <div
+      class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600"
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <p class="text-slate-100 font-semibold text-sm mb-3">{pauseMessage}</p>
+      <p class="text-slate-400 text-xs mb-4">Stiskněte libovolnou klávesu nebo klikněte pro pokračování</p>
+      <button
+        on:click={dismissPause}
+        class="px-5 py-2 bg-labaccent hover:bg-blue-600 text-white rounded-lg font-bold text-sm transition-colors"
+      >
+        Pokračovat →
+      </button>
+    </div>
+  </div>
+{/if}
+
+{#if showRemoveCalibratorModal}
+  <div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]">
+    <div class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600">
+      <p class="text-slate-100 font-semibold text-sm mb-3">Odstraňte kalibrátor</p>
+      <p class="text-slate-400 text-xs mb-4">Po odstranění klikněte pro spuštění tisku</p>
+      <button
+        on:click={confirmCalibratorRemoved}
+        class="px-5 py-2 bg-labgreen hover:bg-green-600 text-white rounded-lg font-bold text-sm transition-colors"
+      >
+        Spustit tisk →
+      </button>
+    </div>
+  </div>
+{/if}
+
+{#if showZCalibrationModal}
+  <ZCalibrationModal
+    {glassZTheoretical}
+    blockHeight={settingsCache?.calibration_object_height ?? 0.1}
+    on:confirm={startPrintAfterCalibration}
+    on:cancel={() => (showZCalibrationModal = false)}
+  />
+{/if}

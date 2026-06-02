@@ -1,0 +1,26 @@
+[package]
+name = "dpi-app"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.2", features = [] }
+tauri-plugin-shell = "2.3.5"
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-fs = "2.5.1"
+serialport = "4.3.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+dpi-core = { path = "../dpi-core" }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
+local-ip-address = "0.6.13"
+tokio-tungstenite = "0.29.0"
+futures-util = "0.3.32"
+tokio = { version = "1.52.3", features = ["full"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"

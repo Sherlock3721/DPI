@@ -1,0 +1,41 @@
+{
+  "productName": "Droplet Printing Interface",
+  "version": "1.5.1",
+  "identifier": "cz.vut.droplet-printer",
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../icon.png"
+    ]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Droplet Printing Interface (DPI)",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyNEQ2NjFCMzNBMTIxRjQKUldUMElhRXpHMlpONGtaUldPcXYzUkRGWlNSb3F0dGF0TEk5Mkx1ZFg3aDd5NzhHdzltUC9UTk4K",
+      "endpoints": [
+        "https://github.com/Sherlock3721/DPI/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  }
+}
