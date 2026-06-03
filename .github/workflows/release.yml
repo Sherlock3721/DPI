@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag k sestavení (např. v1.7.2)'
+        description: 'Tag (napr. v1.7.2)'
         required: true
         type: string
 
@@ -113,26 +113,19 @@ jobs:
             --dir /tmp/ \
             --clobber 2>/dev/null || true
 
-          python3 - "$WIN_SIG" "$WIN_URL" "$VERSION" << 'PYEOF'
-import json, sys
-sig, url, version = sys.argv[1], sys.argv[2], sys.argv[3]
-path = '/tmp/latest.json'
-try:
-    with open(path) as f:
-        data = json.load(f)
-except FileNotFoundError:
-    import datetime
-    data = {
-        'version': version,
-        'notes': f'Verze {version}',
-        'pub_date': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'platforms': {}
-    }
-data['platforms']['windows-x86_64'] = {'signature': sig, 'url': url}
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-print(json.dumps(data, indent=2))
-PYEOF
+          # Vytvoř latest.json pokud neexistuje (Linux build ho nevytvořil)
+          if [ ! -f /tmp/latest.json ]; then
+            PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            printf '{"version":"%s","notes":"Verze %s","pub_date":"%s","platforms":{}}' \
+              "$VERSION" "$VERSION" "$PUB_DATE" > /tmp/latest.json
+          fi
+
+          # Přidej windows-x86_64 platformu pomocí jq
+          jq --arg sig "$WIN_SIG" --arg url "$WIN_URL" \
+            '.platforms["windows-x86_64"] = {"signature": $sig, "url": $url}' \
+            /tmp/latest.json > /tmp/latest_new.json
+          mv /tmp/latest_new.json /tmp/latest.json
+          cat /tmp/latest.json
 
       # ── Nahraj vše do GitHub release ─────────────────────────────────────────
       - name: Upload Windows artifacts
