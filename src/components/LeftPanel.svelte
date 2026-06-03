@@ -153,16 +153,17 @@
   // Pauza (M1 / M0 / M601 příkazy v start_gcode)
   let pauseMessage: string | null = null;
   let pauseResolve: (() => void) | null = null;
-  // true = pauza pochází z tiskové fronty (fáze 2) → resume_app_pause(); false = fáze 1 → promise resolve
   let pauseIsFromPrintQueue = false;
-  // Timestamp kdy byl dialog zobrazen — chrání před okamžitým zavřením způsobeným
-  // "click-through" (mouseup z tlačítka dopadne na backdrop) nebo zbytkovými keydown eventy.
+  // pauseShownAt: kdy dialog vznikl (filtruje zbytkové keydown eventy ze spouštěcí akce)
+  // backdropPointerDownAt: kdy padl pointerdown přímo na backdrop — musí být >= pauseShownAt,
+  //   jinak jde o click-through z tlačítka, které dialog otevřelo
   let pauseShownAt = 0;
-  const PAUSE_DISMISS_GUARD_MS = 300;
+  let backdropPointerDownAt = 0;
 
   function showPause(message: string) {
-    pauseMessage = message || "Stiskněte libovolnou klávesu pro pokračování";
+    pauseMessage = message || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování";
     pauseShownAt = Date.now();
+    backdropPointerDownAt = 0;
   }
 
   function waitForPause(message: string): Promise<void> {
@@ -176,7 +177,6 @@
   }
 
   async function dismissPause() {
-    if (Date.now() - pauseShownAt < PAUSE_DISMISS_GUARD_MS) return;
     pauseMessage = null;
     if (pauseIsFromPrintQueue) {
       pauseIsFromPrintQueue = false;
@@ -187,17 +187,27 @@
     }
   }
 
+  function handleBackdropPointerDown() {
+    backdropPointerDownAt = Date.now();
+  }
+
+  async function handleBackdropClick() {
+    // Akceptovat pouze klik, jehož pointerdown nastal AŽ PO zobrazení dialogu.
+    // Tím se eliminuje "click-through" — mouseup z tlačítka, které dialog spustilo.
+    if (backdropPointerDownAt >= pauseShownAt) {
+      await dismissPause();
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (pauseMessage === null) return;
-    if (Date.now() - pauseShownAt < PAUSE_DISMISS_GUARD_MS) return;
+    // 100 ms guard: filtruje pouze keydown eventy, které byly ve frontě
+    // ještě před zobrazením dialogu (fyzické stisknutí tlačítka, které dialog spustilo).
+    // Windows auto-repeat nastupuje až po ~500 ms, takže záměrné stisky tím nejsou blokovány.
+    if (Date.now() - pauseShownAt < 100) return;
 
-    const ignoredKeys = [
-      "Shift", "Control", "Alt", "Meta", "CapsLock",
-      "NumLock", "ScrollLock", "Unidentified", "Dead",
-      "Process", "WakeUp", "Sleep", "AltGraph"
-    ];
-
-    if (ignoredKeys.includes(e.key) || e.repeat) return;
+    if (e.key !== "Enter" && e.key !== " " && e.key !== "Escape") return;
+    if (e.repeat) return;
 
     e.preventDefault();
     dismissPause();
@@ -218,7 +228,7 @@
       const isM601 = cmdUpper === "M601";
 
       if (isM0 || isM1 || isM601) {
-        const msg = cmdPart.replace(/^M\d+\s*/i, "").trim() || "Stiskněte libovolnou klávesu pro pokračování";
+        const msg = cmdPart.replace(/^M\d+\s*/i, "").trim() || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování";
         segments.push({ code: current.join("\n"), msg });
         current = [];
       } else {
@@ -580,7 +590,7 @@
       // by natrvalo zablokoval waitForPause() promise.
       if (isStarting) return;
       setTimeout(() => {
-        showPause(event.payload || "Stiskněte pro pokračování");
+        showPause(event.payload || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování");
         pauseIsFromPrintQueue = true;
         pauseResolve = null;
       }, 50);
@@ -1140,19 +1150,19 @@
 {#if pauseMessage !== null}
   <div
     class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]"
-    on:click={dismissPause}
-    on:keydown={handleKeydown}
+    on:pointerdown={handleBackdropPointerDown}
+    on:click={handleBackdropClick}
     role="dialog"
     aria-modal="true"
   >
     <div
       class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600"
       role="presentation"
+      on:pointerdown|stopPropagation
       on:click|stopPropagation
-      on:keydown|stopPropagation
     >
       <p class="text-slate-100 font-semibold text-sm mb-3">{pauseMessage}</p>
-      <p class="text-slate-400 text-xs mb-4">Stiskněte libovolnou klávesu nebo klikněte pro pokračování</p>
+      <p class="text-slate-400 text-xs mb-4">Stiskněte Enter, Mezerník nebo klikněte pro pokračování</p>
       <button
         on:click={dismissPause}
         class="px-5 py-2 bg-labaccent hover:bg-blue-600 text-white rounded-lg font-bold text-sm transition-colors"
