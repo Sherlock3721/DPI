@@ -20,7 +20,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/qrcode": "^1.5.6",
     "@types/three": "^0.160.0",
-    "lucide-svelte": "^0.300.0",
+    "lucide-svelte": "^1.0.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
