@@ -48,7 +48,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --bundles nsis
+        run: npm run tauri build
 
       # ── Najdi artefakty ──────────────────────────────────────────────────────
       - name: Locate Windows artifacts
