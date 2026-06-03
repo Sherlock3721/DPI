@@ -8,12 +8,20 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag k sestavení (např. v1.7.2)'
+        required: true
+        type: string
 
 jobs:
   windows:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
     steps:
       - name: Checkout
@@ -69,7 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${TAG}"
           echo "Čekám na release $TAG..."
           for i in $(seq 1 60); do
             if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
@@ -92,7 +100,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${TAG}"
           ZIP_NAME="${{ steps.win.outputs.zip_name }}"
           WIN_SIG=$(cat "${{ steps.win.outputs.sig }}")
           WIN_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$ZIP_NAME"
@@ -132,7 +140,7 @@ PYEOF
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${TAG}"
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "${{ steps.win.outputs.zip }}" \
             "${{ steps.win.outputs.sig }}" \
