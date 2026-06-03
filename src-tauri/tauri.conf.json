@@ -1,10 +1,14 @@
 {
   "productName": "Droplet Printing Interface",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb", "appimage"],
+    "targets": [
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "icon": [
       "../icon.png"
     ]
