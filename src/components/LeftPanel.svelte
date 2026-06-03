@@ -11,6 +11,7 @@
     resume_print,
     stop_print,
     get_app_settings,
+    save_app_settings,
     send_manual_command,
     send_manual_blocking,
     resume_app_pause,
@@ -23,6 +24,7 @@
   import CustomSelect from "./CustomSelect.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
+  import { liquidLimits } from "../stores/liquidStore";
   import {
     Play,
     Pause,
@@ -36,10 +38,10 @@
     Save,
     FileSpreadsheet,
     AlignJustify,
-    Activity,
+    Route,
     Grip,
     Grid,
-    LayoutGrid,
+    Rows4,
   } from "lucide-svelte";
 
   const dispatch = createEventDispatcher();
@@ -52,21 +54,21 @@
     slide_w: 25.0,
     slide_h: 75.0,
     slide_z: 2.0,
-    z_offset: 0.2,
-    z_unit: "mm", // "mm" nebo "µm"
+    z_offset: 50,
+    z_unit: "µm", // "mm" nebo "µm"
     nozzle_height: 30.0,
     nozzle_hidden: 4.0,
     filament_diameter: 9.5,
     flow_multiplier: 1.0,
     bed_temp: 0.0,
-    extrusion_rate: 100.0,
+    extrusion_rate: 200.0,
     extrusion_unit: "nl/mm", // "µl/mm", "nl/mm", "kroky/mm"
     nozzle_diam: 0.4,
     infill_style: "Okraje + Výplň",
     infill_val: 1.0,
     infill_type: "mm", // "mm" nebo "%"
     infill_angle: 0,
-    print_speed: 1500.0,
+    print_speed: 600.0,
     bed_leveling: true,
     nozzle_type: "Modrá",
   };
@@ -120,7 +122,25 @@
   let bed_max_y = 200.0;
   let bed_max_temp = 100.0;
   let bed_min_temp = 30; // Min. teplota při zapnutí (konfigurovatelno v nastavení)
+
+  // ─── Limity aktivní kapaliny (null = bez limitu, použij globální) ─────────
+  $: liqZMin = $liquidLimits?.z_offset_min != null
+    ? (params.z_unit === "µm" ? $liquidLimits.z_offset_min * 1000 : $liquidLimits.z_offset_min)
+    : 0;
+  $: liqZMax = $liquidLimits?.z_offset_max != null
+    ? (params.z_unit === "µm" ? $liquidLimits.z_offset_max * 1000 : $liquidLimits.z_offset_max)
+    : (params.z_unit === "µm" ? 2000 : 2.0);
+  $: liqExtMin = $liquidLimits?.extrusion_min ?? 0;
+  $: liqExtMax = $liquidLimits?.extrusion_max ?? 1000;
+  $: liqSpeedMin = $liquidLimits?.print_speed_min ?? 50;
+  $: liqSpeedMax = $liquidLimits?.print_speed_max ?? 1500;
+  $: liqBedTempMax = $liquidLimits?.bed_temp_max ?? (bed_max_temp > 0 ? bed_max_temp : undefined);
+  $: filteredNozzlePresets = $liquidLimits?.forbidden_nozzles?.length
+    ? nozzlePresets.filter((n) => n === "Vlastní" || !$liquidLimits!.forbidden_nozzles.includes(n))
+    : nozzlePresets;
   let firstPrintCompleted = false;
+  let calibrationDone = false;
+  let calibrationShift = 0.0;
 
   // Kalibrace
   let showZCalibrationModal = false;
@@ -135,16 +155,28 @@
   let pauseResolve: (() => void) | null = null;
   // true = pauza pochází z tiskové fronty (fáze 2) → resume_app_pause(); false = fáze 1 → promise resolve
   let pauseIsFromPrintQueue = false;
+  // Timestamp kdy byl dialog zobrazen — chrání před okamžitým zavřením způsobeným
+  // "click-through" (mouseup z tlačítka dopadne na backdrop) nebo zbytkovými keydown eventy.
+  let pauseShownAt = 0;
+  const PAUSE_DISMISS_GUARD_MS = 300;
+
+  function showPause(message: string) {
+    pauseMessage = message || "Stiskněte libovolnou klávesu pro pokračování";
+    pauseShownAt = Date.now();
+  }
 
   function waitForPause(message: string): Promise<void> {
     return new Promise((resolve) => {
-      pauseMessage = message || "Stiskněte libovolnou klávesu pro pokračování";
-      pauseIsFromPrintQueue = false;
-      pauseResolve = resolve;
+      setTimeout(() => {
+        showPause(message);
+        pauseIsFromPrintQueue = false;
+        pauseResolve = resolve;
+      }, 50);
     });
   }
 
   async function dismissPause() {
+    if (Date.now() - pauseShownAt < PAUSE_DISMISS_GUARD_MS) return;
     pauseMessage = null;
     if (pauseIsFromPrintQueue) {
       pauseIsFromPrintQueue = false;
@@ -156,7 +188,19 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (pauseMessage !== null) dismissPause();
+    if (pauseMessage === null) return;
+    if (Date.now() - pauseShownAt < PAUSE_DISMISS_GUARD_MS) return;
+
+    const ignoredKeys = [
+      "Shift", "Control", "Alt", "Meta", "CapsLock",
+      "NumLock", "ScrollLock", "Unidentified", "Dead",
+      "Process", "WakeUp", "Sleep", "AltGraph"
+    ];
+
+    if (ignoredKeys.includes(e.key) || e.repeat) return;
+
+    e.preventDefault();
+    dismissPause();
   }
 
   // Rozdělí gcode na segmenty oddělené pausovacími příkazy (M0/M1/M601).
@@ -216,7 +260,7 @@
   $: if (!firstPrintCompleted) params.bed_leveling = true;
 
   // --- UNIT CONVERSIONS LOGIC (Strictly mirrored from Python LeftPanel) ---
-  let lastZUnit = "mm";
+  let lastZUnit = "µm";
   function handleZUnitChange() {
     if (params.z_unit === "µm" && lastZUnit === "mm") {
       params.z_offset = params.z_offset * 1000.0;
@@ -280,6 +324,14 @@
     }
   }
 
+  async function handlePrintSpeedChange() {
+    dispatch("paramsChanged", params);
+    if (settingsCache) {
+      settingsCache.print_speed = params.print_speed;
+      await save_app_settings(settingsCache);
+    }
+  }
+
   // Načtení portů a nastavení
   async function refreshPorts() {
     ports = await get_available_ports();
@@ -300,6 +352,7 @@
       bed_max_temp = settings.bed_max_temp ?? 0; // 0 = neomezeno
       bed_min_temp = settings.bed_min_temp ?? 30; // z nastavení
       lastBedTemp = params.bed_temp;
+      if (settings.print_speed) params.print_speed = settings.print_speed;
     } catch (e) {
       console.warn("Failed to load settings (Web Mode), using defaults.");
     }
@@ -326,6 +379,13 @@
           ? await auto_connect_printer(baudrate)
           : await connect_to_printer(selectedPort, baudrate);
       status = res;
+      if (res.is_connected) {
+        firstPrintCompleted = false;
+        calibrationDone = false;
+        calibrationShift = 0.0;
+        params.bed_leveling = true;
+        dispatch("paramsChanged", params);
+      }
     } catch (e) {
       alert(`Připojení selhalo: ${e}`);
     }
@@ -349,9 +409,11 @@
       : (bed_max_y / 2).toFixed(3);
 
     // Pokud je kalibračníZ záporné, Marlin odmítne pohyb — posuneme souřadnicový systém
-    // stejnou logikou jako z_shift v generátoru G-kódu (dpi-core/gcode.rs)
-    const zShift = glassZTheoretical < 0 ? Math.abs(glassZTheoretical) + 1.0 : 0.0;
-    const calibVirtualZ = glassZTheoretical + zShift;    // vždy >= 1
+    // stejnou logikou jako z_shift v generátoru G-kódu (dpi-core/gcode.rs).
+    // Buffer 20 mm (místo 1 mm) dává uživateli prostor sjet dolu i bez M211 S0.
+    const CALIB_BUFFER = 20.0;
+    const zShift = glassZTheoretical < 0 ? Math.abs(glassZTheoretical) + CALIB_BUFFER : 0.0;
+    const calibVirtualZ = glassZTheoretical + zShift;    // vždy >= CALIB_BUFFER nebo glassZTheoretical
     const approachVirtualZ = calibVirtualZ + 2.0;
 
     let initGcode = setts.start_gcode ?? "";
@@ -374,53 +436,90 @@
       }
 
       // 2. Bezpečná výška + případný G92 posun + přejezd nad první pozici
+      // M211 S0 zakáže soft endstopy před příjezdem do záporné machine-Z oblasti
       const shiftCmd = zShift > 0
-        ? `G0 Z${safeZ.toFixed(3)} F1000\nG92 Z${(safeZ + zShift).toFixed(3)}\n`
+        ? `M211 S0\nG0 Z${safeZ.toFixed(3)} F1000\nG92 Z${(safeZ + zShift).toFixed(3)}\n`
         : `G0 Z${safeZ.toFixed(3)} F1000\n`;
 
-      await send_manual_blocking(
-        shiftCmd +
-        `G0 X${targetX} Y${targetY} F3000\nM400\n` +
-        `G0 Z${approachVirtualZ.toFixed(3)} F1000\n` +
-        `G1 Z${calibVirtualZ.toFixed(3)} F300\nM400`
-      );
-
-      showZCalibrationModal = true;
+      if (calibrationDone) {
+        // Kalibrace již proběhla — přejed na XY v bezpečné výšce a rovnou tiskni.
+        // Ruční sjezd na printZ vynecháme: G-kód začne od safeZ, sjede sám.
+        const origOffset = params.z_offset;
+        const calibShiftInUnit = params.z_unit === "µm" ? calibrationShift * 1000.0 : calibrationShift;
+        params.z_offset = origOffset + calibShiftInUnit;
+        await send_manual_blocking(shiftCmd + `G0 X${targetX} Y${targetY} F3000\nM400`);
+        // G92 Z{safeZ} nastaví virtuální systém (≈ machine + z_shift_gen_prev).
+        // Generátorův G1 Z{safeZ}+G92 blok pak vystripujeme — tryska je tam zbytek
+        // safe-pohybu shiftCmd a G-kód by ji jinak poslal ještě jednou nahoru.
+        const z_offset_mm_calib = params.z_unit === "µm" ? params.z_offset / 1000.0 : params.z_offset;
+        const z_shift_gen_calib = (glassZTheoretical + z_offset_mm_calib) < 0
+          ? Math.abs(glassZTheoretical + z_offset_mm_calib) + 1.0
+          : 0.0;
+        const startOverride = `G92 Z${(safeZ + z_shift_gen_calib).toFixed(3)}\nG92 E0.0`;
+        try {
+          let res = generateGCodeSilently
+            ? await generateGCodeSilently(startOverride)
+            : { gcode: generatedGCode, dist: totalDist, time: totalTime };
+          if (z_shift_gen_calib > 0) {
+            res = {
+              ...res,
+              gcode: res.gcode.replace(
+                /; --- VIRTUALNI POSUN Z[^\n]*\nG1 Z[^\n]*\nG92 Z[^\n]*\n\n?/,
+                ''
+              ),
+            };
+          }
+          await start_print(res.gcode, res.dist, res.time);
+          dispatch("paramsChanged", params);
+        } finally {
+          params.z_offset = origOffset;
+          isStarting = false;
+        }
+      } else {
+        await send_manual_blocking(
+          shiftCmd +
+          `G0 X${targetX} Y${targetY} F3000\nM400\n` +
+          `G0 Z${approachVirtualZ.toFixed(3)} F1000\n` +
+          `G1 Z${calibVirtualZ.toFixed(3)} F300\nM400`
+        );
+        showZCalibrationModal = true;
+      }
     } catch (e) {
       alert(`Chyba při přípravě tisku: ${e}`);
       isStarting = false;
     }
   }
 
-  // Uložíme parametry kalibrace pro druhý krok (po odstranění kalibrátoru)
-  let pendingZOffset = 0;
-  let pendingOriginalZOffset = 0;
-  let showRemoveCalibratorModal = false;
-
   async function startPrintAfterCalibration(e: CustomEvent) {
     showZCalibrationModal = false;
-    pendingZOffset = params.z_offset + e.detail.shift;
-    pendingOriginalZOffset = params.z_offset;
+    calibrationShift = e.detail.shift;
+    const calibShiftInUnit = params.z_unit === "µm" ? calibrationShift * 1000.0 : calibrationShift;
+    const pendingZOffset = params.z_offset + calibShiftInUnit;
+    const pendingOriginalZOffset = params.z_offset;
     try {
-      await send_manual_blocking("G91\nG0 Z5 F1000\nG90");
-      showRemoveCalibratorModal = true;
-    } catch (err) {
-      alert(`Chyba při oddálení trysky: ${err}`);
-    }
-  }
-
-  async function confirmCalibratorRemoved() {
-    showRemoveCalibratorModal = false;
-    params.z_offset = pendingZOffset;
-    try {
-      // Plný start_gcode (PINDA, M201…) proběhl v handleStart (fáze 1).
-      // G28 mesh je v paměti tiskárny → stačí G28 W (obnova meshe, rychlý home,
-      // bez opakování PINDA sekvence a bez timeoutu OK_TIMEOUT_SECS).
-      const res = generateGCodeSilently
-        ? await generateGCodeSilently("G28 W\nG92 E0.0")
+      await send_manual_blocking("M211 S1\nG91\nG0 Z5 F1000\nG90");
+      params.z_offset = pendingZOffset;
+      const pendingZOffset_mm = params.z_unit === "µm" ? pendingZOffset / 1000.0 : pendingZOffset;
+      const z_shift_gen = (glassZTheoretical + pendingZOffset_mm) < 0
+        ? Math.abs(glassZTheoretical + pendingZOffset_mm) + 1.0
+        : 0.0;
+      const currentMachineZ = glassZTheoretical + calibrationShift + 5.0;
+      const startOverride = `G92 Z${(currentMachineZ + z_shift_gen).toFixed(3)}\nG92 E0.0`;
+      let res = generateGCodeSilently
+        ? await generateGCodeSilently(startOverride)
         : { gcode: generatedGCode, dist: totalDist, time: totalTime };
+      if (z_shift_gen > 0) {
+        res = {
+          ...res,
+          gcode: res.gcode.replace(
+            /; --- VIRTUALNI POSUN Z[^\n]*\nG1 Z[^\n]*\nG92 Z[^\n]*\n\n?/,
+            ''
+          ),
+        };
+      }
       await start_print(res.gcode, res.dist, res.time);
       firstPrintCompleted = true;
+      calibrationDone = true;
       params.bed_leveling = false;
       dispatch("paramsChanged", params);
     } catch (err) {
@@ -469,6 +568,8 @@
       // Po odpojení → při dalším připojení musí být bed leveling povinný
       if (wasConnected && !newStatus.is_connected) {
         firstPrintCompleted = false;
+        calibrationDone = false;
+        calibrationShift = 0.0;
         params.bed_leveling = true;
         dispatch("paramsChanged", params);
       }
@@ -478,9 +579,11 @@
       // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis pauseResolve = null
       // by natrvalo zablokoval waitForPause() promise.
       if (isStarting) return;
-      pauseMessage = event.payload || "Stiskněte pro pokračování";
-      pauseIsFromPrintQueue = true;
-      pauseResolve = null;
+      setTimeout(() => {
+        showPause(event.payload || "Stiskněte pro pokračování");
+        pauseIsFromPrintQueue = true;
+        pauseResolve = null;
+      }, 50);
     });
 
     return () => {
@@ -507,9 +610,9 @@
 
       <div
         class="grid grid-cols-3 items-center gap-2"
-        title="Typ laboratorního sklíčka nebo vlastní rozměr"
+        title="Typ substrátu nebo vlastní rozměr"
       >
-        <span class="col-span-1 text-slate-400">Sklíčko:</span>
+        <span class="col-span-1 text-slate-400">Substrát:</span>
         <div class="col-span-2">
           <CustomSelect
             bind:value={selectedGlass}
@@ -561,12 +664,12 @@
 
       <div
         class="grid grid-cols-3 items-center gap-2"
-        title="Počet sklíček, která budou vysázena vedle sebe"
+        title="Počet substrátů, které budou vysázeny vedle sebe"
       >
         <span class="col-span-1 text-slate-400">Počet vzorků:</span>
         <div class="col-span-2 h-8">
           <NumberInput
-            min={1}
+            min={0}
             max={maxSamples}
             step={1}
             bind:value={params.sample_count}
@@ -585,7 +688,7 @@
           <div class="flex-1 h-8">
             <NumberInput
               min={0}
-              max={bed_max_temp > 0 ? bed_max_temp : undefined}
+              max={liqBedTempMax}
               step={5}
               bind:value={params.bed_temp}
               on:input={handleBedTempChange}
@@ -622,7 +725,7 @@
 
       <div
         class="grid grid-cols-3 items-center gap-2"
-        title="Prvotní nanesení kapaliny na extra sklíčko pro vyčištění trysky"
+        title="Prvotní nanesení kapaliny na extra substrát pro vyčištění trysky"
       >
         <span class="col-span-1 text-slate-400">Příprava trysky:</span>
         <button
@@ -637,6 +740,26 @@
           Odpliv {params.prime_active ? "AKTIVNÍ" : "VYPNUTÝ"}
         </button>
       </div>
+
+      {#if firstPrintCompleted}
+        <div
+          class="grid grid-cols-3 items-center gap-2"
+          title="Zapíná/vypíná kalibrační dialog při příštím startu tisku"
+        >
+          <span class="col-span-1 text-slate-400">Kalibrace Z:</span>
+          <button
+            on:click={() => {
+              calibrationDone = calibrationDone ? false : true;
+              if (!calibrationDone) calibrationShift = 0.0;
+            }}
+            class="col-span-2 text-center py-1 rounded font-bold border transition-colors {!calibrationDone
+              ? 'bg-labaccent/20 border-labaccent/50 text-labaccent'
+              : 'bg-slate-900 border-slate-800 text-slate-400'}"
+          >
+            Kalibrace {!calibrationDone ? "AKTIVNÍ" : "VYPNUTÁ"}
+          </button>
+        </div>
+      {/if}
     </div>
 
     <!-- SEKCE: TISKOVÉ PARAMETRY -->
@@ -653,12 +776,13 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Výška hlavy nad podložkou při tisku (Z-offset)"
       >
-        <span class="col-span-1 text-slate-400">Tloušťka vrstvy:</span>
+        <span class="col-span-1 text-slate-400">Výška trysky:</span>
         <div class="col-span-2 grid grid-cols-3 gap-1">
           <div class="col-span-2 h-8">
             <NumberInput
-              min={0.001}
-              step={0.05}
+              min={liqZMin}
+              max={liqZMax}
+              step={params.z_unit === "µm" ? 50 : 0.05}
               bind:value={params.z_offset}
               on:input={() => dispatch("paramsChanged", params)}
               class="w-full h-full"
@@ -686,7 +810,8 @@
         <div class="col-span-2 grid grid-cols-3 gap-1">
           <div class="col-span-2 h-8">
             <NumberInput
-              min={0.001}
+              min={liqExtMin}
+              max={liqExtMax}
               step={0.1}
               bind:value={params.extrusion_rate}
               on:input={() => dispatch("paramsChanged", params)}
@@ -698,7 +823,6 @@
               bind:value={params.extrusion_unit}
               on:change={handleExtUnitChange}
               options={[
-                { value: "µl/mm", label: "µl/mm" },
                 { value: "nl/mm", label: "nl/mm" },
                 { value: "kroky/mm", label: "krok/mm" },
               ]}
@@ -717,7 +841,7 @@
           <CustomSelect
             bind:value={selectedNozzle}
             on:change={handleNozzleChange}
-            options={nozzlePresets.map((p) => ({
+            options={filteredNozzlePresets.map((p) => ({
               value: p,
               label: p,
               color: p !== "Vlastní" ? getNozzleColor(p) : undefined,
@@ -764,6 +888,28 @@
           <span class="text-[10px] text-slate-400 pt-3">mm</span>
         </div>
       {/if}
+
+      <div
+        class="grid grid-cols-3 items-center gap-2"
+        title="Globální rychlost pohybu tiskové hlavy (mm/min)"
+      >
+        <span class="col-span-1 text-slate-400">Rychlost tisku:</span>
+        <div class="col-span-2 grid grid-cols-3 gap-1">
+          <div class="col-span-2 h-8">
+            <NumberInput
+              min={liqSpeedMin}
+              max={liqSpeedMax}
+              step={100}
+              bind:value={params.print_speed}
+              on:input={handlePrintSpeedChange}
+              class="w-full h-full"
+            />
+          </div>
+          <div class="col-span-1 flex items-center pl-1">
+            <span class="text-xs text-slate-400">mm/min</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- SEKCE: VEKTOROVÉ VÝPLNĚ -->
@@ -786,11 +932,11 @@
             bind:value={params.infill_style}
             on:change={() => dispatch("paramsChanged", params)}
             options={[
-              { value: "Okraje + Výplň", label: "Okraje + Výplň", icon: Grid },
+              { value: "Okraje + Výplň", label: "Okraje + Výplň", icon: Rows4 },
               { value: "Výplň", label: "Výplň", icon: AlignJustify },
               { value: "Okraje", label: "Okraje", icon: Square },
-              { value: "Had", label: "Had", icon: Activity },
-              { value: "Mřížka", label: "Mřížka", icon: LayoutGrid },
+              { value: "Had", label: "Had", icon: Route },
+              { value: "Mřížka", label: "Mřížka", icon: Grid },
               { value: "Tečky", label: "Tečky", icon: Grip },
             ]}
           />
@@ -1001,6 +1147,7 @@
   >
     <div
       class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600"
+      role="presentation"
       on:click|stopPropagation
       on:keydown|stopPropagation
     >
@@ -1016,26 +1163,14 @@
   </div>
 {/if}
 
-{#if showRemoveCalibratorModal}
-  <div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]">
-    <div class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600">
-      <p class="text-slate-100 font-semibold text-sm mb-3">Odstraňte kalibrátor</p>
-      <p class="text-slate-400 text-xs mb-4">Po odstranění klikněte pro spuštění tisku</p>
-      <button
-        on:click={confirmCalibratorRemoved}
-        class="px-5 py-2 bg-labgreen hover:bg-green-600 text-white rounded-lg font-bold text-sm transition-colors"
-      >
-        Spustit tisk →
-      </button>
-    </div>
-  </div>
-{/if}
-
 {#if showZCalibrationModal}
   <ZCalibrationModal
     {glassZTheoretical}
-    blockHeight={settingsCache?.calibration_object_height ?? 0.1}
     on:confirm={startPrintAfterCalibration}
-    on:cancel={() => (showZCalibrationModal = false)}
+    on:cancel={async () => {
+      showZCalibrationModal = false;
+      isStarting = false;
+      try { await send_manual_blocking("M211 S1"); } catch (_) {}
+    }}
   />
 {/if}

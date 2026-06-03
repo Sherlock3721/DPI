@@ -4,7 +4,7 @@
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "deb", "appimage"],
     "icon": [
       "../icon.png"
     ]
