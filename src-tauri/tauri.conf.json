@@ -1,6 +1,6 @@
 {
   "productName": "Droplet Printing Interface",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,
@@ -11,7 +11,12 @@
     ],
     "icon": [
       "../icon.png"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
   },
   "app": {
     "windows": [
