@@ -70,8 +70,15 @@ jobs:
           ZIP_BASENAME="${EXE_BASENAME%.exe}.nsis.zip"
           ZIP_DIR=$(dirname "$EXE")
           ZIP="$ZIP_DIR/$ZIP_BASENAME"
-          # Vytvoř zip jako STORED (metoda 0) — nutné pro zip crate v4 bez deflate
-          (cd "$ZIP_DIR" && zip -0 -j "$ZIP_BASENAME" "$EXE_BASENAME")
+          # Vytvoř STORED zip přes Python (zip příkaz není na Windows CI dostupný)
+          python3 -c "
+import zipfile, sys, os
+exe = sys.argv[1]
+zp  = sys.argv[2]
+with zipfile.ZipFile(zp, 'w', zipfile.ZIP_STORED) as z:
+    z.write(exe, os.path.basename(exe))
+print('ZIP created (STORED):', zp)
+" "$EXE" "$ZIP"
           echo "✅ EXE: $EXE"
           echo "✅ ZIP: $ZIP (STORED)"
           # Podepis
