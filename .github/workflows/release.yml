@@ -71,14 +71,7 @@ jobs:
           ZIP_DIR=$(dirname "$EXE")
           ZIP="$ZIP_DIR/$ZIP_BASENAME"
           # Vytvoř STORED zip přes Python (zip příkaz není na Windows CI dostupný)
-          python3 -c "
-import zipfile, sys, os
-exe = sys.argv[1]
-zp  = sys.argv[2]
-with zipfile.ZipFile(zp, 'w', zipfile.ZIP_STORED) as z:
-    z.write(exe, os.path.basename(exe))
-print('ZIP created (STORED):', zp)
-" "$EXE" "$ZIP"
+          python3 -c "import zipfile,sys,os; z=zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_STORED); z.write(sys.argv[1],os.path.basename(sys.argv[1])); z.close(); print('STORED zip created:', sys.argv[2])" "$EXE" "$ZIP"
           echo "✅ EXE: $EXE"
           echo "✅ ZIP: $ZIP (STORED)"
           # Podepis
