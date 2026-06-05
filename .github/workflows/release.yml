@@ -50,26 +50,38 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      # ── Najdi artefakty ──────────────────────────────────────────────────────
-      - name: Locate Windows artifacts
+      # ── Najdi .exe a vytvoř STORED zip + podpis ─────────────────────────────
+      # Tauri CLI na Windows nevytváří .nsis.zip automaticky, proto ho tvoříme
+      # ručně jako STORED (metoda 0) — zip crate v4 je bez deflate feature.
+      - name: Create and sign NSIS zip
         id: win
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          ZIP=$(find target/release/bundle/nsis -name "*.nsis.zip" | head -1)
-          SIG=$(find target/release/bundle/nsis -name "*.nsis.zip.sig" | head -1)
           EXE=$(find target/release/bundle/nsis -name "*-setup.exe" | head -1)
-          if [ -z "$ZIP" ] || [ -z "$SIG" ] || [ -z "$EXE" ]; then
-            echo "❌ Nenalezeny NSIS artefakty:"
+          if [ -z "$EXE" ]; then
+            echo "❌ Nenalezeno .exe v target/release/bundle/nsis:"
             find target/release/bundle/ -type f | head -20
             exit 1
           fi
-          echo "zip=$ZIP"     >> $GITHUB_OUTPUT
-          echo "sig=$SIG"     >> $GITHUB_OUTPUT
-          echo "exe=$EXE"     >> $GITHUB_OUTPUT
-          echo "zip_name=$(basename "$ZIP")" >> $GITHUB_OUTPUT
-          echo "✅ ZIP: $ZIP"
-          echo "✅ SIG: $SIG"
+          EXE_BASENAME=$(basename "$EXE")
+          ZIP_BASENAME="${EXE_BASENAME%.exe}.nsis.zip"
+          ZIP_DIR=$(dirname "$EXE")
+          ZIP="$ZIP_DIR/$ZIP_BASENAME"
+          # Vytvoř zip jako STORED (metoda 0) — nutné pro zip crate v4 bez deflate
+          (cd "$ZIP_DIR" && zip -0 -j "$ZIP_BASENAME" "$EXE_BASENAME")
           echo "✅ EXE: $EXE"
+          echo "✅ ZIP: $ZIP (STORED)"
+          # Podepis
+          npx tauri signer sign -- "$ZIP"
+          SIG="${ZIP}.sig"
+          echo "✅ SIG: $SIG"
+          echo "zip=$ZIP"                   >> $GITHUB_OUTPUT
+          echo "sig=$SIG"                   >> $GITHUB_OUTPUT
+          echo "exe=$EXE"                   >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIP_BASENAME"     >> $GITHUB_OUTPUT
 
       # ── Počkej na GitHub release (vytváří ho release.sh) ─────────────────────
       - name: Wait for GitHub release
