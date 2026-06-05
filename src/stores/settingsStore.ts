@@ -13,7 +13,6 @@ const defaultSettings: AppSettings = {
   multi_spacing: 5.0,
   block_height: 34.0,
   hidden_nozzle_part: 4.0,
-  retraction: 0.0,
   print_speed: 1500,
   start_gcode: "",
   end_gcode: "",
@@ -27,7 +26,6 @@ const defaultSettings: AppSettings = {
   filament_diameter: 9.5,
   flow_multiplier: 1.0,
   calibration_factor: 0.323877,
-  calibration_object_height: 0.1,
   sklo_dims: {},
   nozzle_defs: {},
   leveling_circle_diameter: 8.0,
@@ -38,6 +36,7 @@ const defaultSettings: AppSettings = {
   path_fineness: 1.0,
   z_step: 0.0025,
   liquid_density: 1.0,
+  liquid_defs: {},
 };
 
 function createSettingsStore() {

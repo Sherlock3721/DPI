@@ -42,7 +42,6 @@
     ]
   },
   "print_speed": 1500,
-  "retraction": 0,
   "show_bed_axes": true,
   "show_slide_grid": true,
   "sklo_dims": {

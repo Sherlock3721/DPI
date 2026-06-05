@@ -10,6 +10,8 @@
   import DiagnosticsModal from "./components/DiagnosticsModal.svelte";
   import AboutModal from "./components/AboutModal.svelte";
   import ShortcutsModal from "./components/ShortcutsModal.svelte";
+  import UpdateModal from "./components/UpdateModal.svelte";
+  import SnowEffect from "./components/SnowEffect.svelte";
   import { getBoundingBoxOfPaths } from "./lib/path_processor";
   import { computeWorldAABB, getTransformIdx } from "./lib/geometry";
   import {
@@ -34,17 +36,26 @@
   } from "./lib/tauri";
   import { projectStore, addRecentFile } from "./stores/projectStore";
   import { settingsStore } from "./stores/settingsStore";
+  import { selectedLiquidName } from "./stores/liquidStore";
   import { printerStore } from "./stores/printerStore";
   import { Cpu, FileText, Keyboard, Save } from "lucide-svelte";
   import { save, ask, open } from "@tauri-apps/plugin-dialog";
   import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
   import { check } from "@tauri-apps/plugin-updater";
-  import { relaunch } from "@tauri-apps/plugin-process";
   import WelcomeModal from "./components/WelcomeModal.svelte";
 
   // --- STAV APLIKACE ---
   const isTauri = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
   let showWelcomeModal = isTauri;
+
+  // Sněžení aktivní mezi 15. 11. a 30. 1.
+  function isSnowSeason(): boolean {
+    const now = new Date();
+    const m = now.getMonth() + 1; // 1–12
+    const d = now.getDate();
+    return m === 12 || m === 1 || (m === 11 && d >= 15) || (m === 1 && d <= 30);
+  }
+  let showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
 
   let ws: WebSocket | null = null;
   let wsUpdateInProgress = false;
@@ -72,9 +83,12 @@
 
   // Modály
   let showSettingsModal = false;
+  let settingsModalRef: any;
   let showDiagnosticsModal = false;
   let showAboutModal = false;
   let showShortcutsModal = false;
+  let showUpdateModal = false;
+  let updateModalAutoCheck = false;
 
   let leftPanelRef: any;
 
@@ -118,7 +132,7 @@
       $projectStore.autoScaleFile = true;
       if (!silent) {
         alert(
-          `Upozornění: Objekt (${width.toFixed(1)} × ${height.toFixed(1)} mm) přesahuje tisknutelnou plochu sklíčka s ohledem na průměr trysky ${nozzleDiam} mm.\n` +
+          `Upozornění: Objekt (${width.toFixed(1)} × ${height.toFixed(1)} mm) přesahuje tisknutelnou plochu substrátu s ohledem na průměr trysky ${nozzleDiam} mm.\n` +
             `Dostupná plocha: ${usableW.toFixed(1)} × ${usableH.toFixed(1)} mm.\n\n` +
             `Objekt byl automaticky zmenšen.`
         );
@@ -183,7 +197,7 @@
     if (!anyOverflow) return;
 
     const confirmed = await ask(
-      `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj sklíčka\n` +
+      `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj substrátu\n` +
         `a tryska by se dotkla jeho stěny.\n\n` +
         `Chcete objekt automaticky zmenšit?`,
       { title: "Varování — průměr trysky", type: "warning" }
@@ -302,7 +316,6 @@
       const loopStartGcode = setts.loop_start_gcode ?? "";
       const loopEndGcode = setts.loop_end_gcode ?? "";
       const calFactor = setts.calibration_factor ?? 0.0141;
-      const retractSpeed = setts.retract_speed ?? 3000.0;
       const zHop = setts.default_z_hop ?? 2.0;
       const safeZ = (setts as any).safe_z ?? 20.0;
 
@@ -315,9 +328,14 @@
       const currentTransforms = $projectStore.transforms;
       const currentOverrides = $projectStore.overrides;
 
+      // Rust expects z_offset in mm — convert if the UI unit is µm
+      const paramsForRust = currentParams.z_unit === "µm"
+        ? { ...currentParams, z_offset: currentParams.z_offset / 1000.0 }
+        : currentParams;
+
       const res = await generate_gcode(
         currentPaths,
-        currentParams,
+        paramsForRust,
         currentTransforms,
         currentOverrides,
         startGcode,
@@ -331,8 +349,6 @@
         globalMultiSpacing,
         globalBlockHeight,
         calFactor,
-        currentParams.infill_style === "Tečky" ? 0.0 : 1.0, // Retraction
-        retractSpeed,
         setts.bed_min_x ?? 0.0,
         zHop,
         safeZ
@@ -558,6 +574,7 @@
     globalBlockHeight = setts.block_height || 34.0;
     await settingsStore.load();
     projectStore.triggerLayoutUpdate();
+    showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
   }
 
   // Globální klávesové zkratky
@@ -683,23 +700,15 @@
     };
   });
 
-  // Auto-updater logic
+  // Auto-updater: tiše zkontroluje na pozadí, ukáže modal jen pokud je update
   onMount(() => {
+    if (!isTauri) return;
     setTimeout(async () => {
       try {
         const update = await check();
         if (update) {
-          const yes = await ask(
-            `Byla nalezena nová verze aplikace (${update.version}).\n\nChcete ji nyní stáhnout a nainstalovat? Aplikace se poté restartuje.`,
-            {
-              title: "Dostupná aktualizace",
-              kind: "info",
-            }
-          );
-          if (yes) {
-            await update.downloadAndInstall();
-            await relaunch();
-          }
+          updateModalAutoCheck = true;
+          showUpdateModal = true;
         }
       } catch (err) {
         console.error("Chyba při kontrole aktualizací:", err);
@@ -723,11 +732,17 @@
     onSaveProjectAs={saveProjectAs}
     onExportCSVProtocol={exportCSVProtocol}
     onQuitApp={quitApp}
+    liquidNames={Object.keys($settingsStore.liquid_defs ?? {})}
+    activeLiquid={$selectedLiquidName}
+    activeLiquidColor={$settingsStore.liquid_defs?.[$selectedLiquidName ?? ""]?.color ?? null}
+    onSelectLiquid={(name) => selectedLiquidName.set(name)}
     onOpenSettings={() => (showSettingsModal = true)}
+    onOpenLiquidDefinition={() => { settingsModalRef?.openOnTab("liquids"); showSettingsModal = true; }}
     onOpenDiagnostics={() => (showDiagnosticsModal = true)}
     onOpenFeedback={() => (showFeedbackModal = true)}
     onOpenShortcuts={() => (showShortcutsModal = true)}
     onOpenAbout={() => (showAboutModal = true)}
+    onCheckForUpdates={() => { updateModalAutoCheck = false; showUpdateModal = true; }}
   />
 
   <!-- HLAVNÍ PROSTOR - TŘÍSLOUPOVÝ LAYOUT -->
@@ -765,6 +780,7 @@
         nozzleDiam={$projectStore.params ? $projectStore.params.nozzle_diam : 0.4}
         overrides={$projectStore.overrides}
         externalSelectedIndex={canvasExternalSelected}
+        totalPreviewTime={$projectStore.totalTime ?? 0}
         on:transformChanged={handleTransformChanged}
         on:pathCleared={handlePathCleared}
         on:saveState={() => projectStore.pushState()}
@@ -787,6 +803,7 @@
     <div class="col-span-3 overflow-hidden h-full">
       <RightPanel
         sampleCount={$projectStore.params ? $projectStore.params.sample_count : 1}
+        primeActive={$projectStore.params ? $projectStore.params.prime_active : false}
         bind:overrides={$projectStore.overrides}
         openSlideIdx={rightPanelOpenIdx}
         openTrigger={rightPanelTrigger}
@@ -798,7 +815,7 @@
   </div>
 
   <!-- ADVANCED SETTINGS MODAL -->
-  <SettingsModal bind:isOpen={showSettingsModal} on:save={handleSettingsSave} />
+  <SettingsModal bind:this={settingsModalRef} bind:isOpen={showSettingsModal} on:save={handleSettingsSave} />
 
   <!-- SHORTCUTS DIALOG -->
   {#if showShortcutsModal}
@@ -844,7 +861,7 @@
               >
               <tr
                 ><td class="py-1.5 font-bold text-slate-200">Shift + Tažení</td><td class="py-1.5"
-                  >Synchronizovaný pohyb všech sklíček</td
+                  >Synchronizovaný pohyb všech substrátů</td
                 ></tr
               >
             </tbody>
@@ -909,6 +926,13 @@
 
   <ShortcutsModal show={showShortcutsModal} on:close={() => (showShortcutsModal = false)} />
 
+  {#if showUpdateModal}
+    <UpdateModal
+      autoCheck={updateModalAutoCheck}
+      on:close={() => (showUpdateModal = false)}
+    />
+  {/if}
+
   <WelcomeModal
     show={showWelcomeModal}
     on:newProject={triggerLoadFileInput}
@@ -917,4 +941,8 @@
       await loadFileFromPath(e.detail);
     }}
   />
+
+  {#if showSnow}
+    <SnowEffect />
+  {/if}
 </main>

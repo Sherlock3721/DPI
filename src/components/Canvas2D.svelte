@@ -2,6 +2,7 @@
   import { onMount, createEventDispatcher } from "svelte";
   import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride } from "../lib/tauri";
   import { computeWorldAABB, clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
+  import { projectStore } from "../stores/projectStore";
 
   const dispatch = createEventDispatcher();
 
@@ -18,6 +19,7 @@
   export let showAxes = true;
   export let isMeasuring = false;
   export let measurePoints: { x: number; y: number }[] = [];
+  export let printProgress = 100;
 
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D | null = null;
@@ -69,6 +71,16 @@
     draw();
   }
 
+  export function centerOnSlide() {
+    if (selectedIndex < 0 || selectedIndex >= positions.length || width === 0 || height === 0) return;
+    const pos = positions[selectedIndex];
+    const margin = 30;
+    zoom = Math.min((width - margin * 2) / pos.width, (height - margin * 2) / pos.height);
+    panX = width / 2 - (pos.x + pos.width / 2) * zoom;
+    panY = height / 2 + (pos.y + pos.height / 2) * zoom;
+    draw();
+  }
+
   function screenToWorld(sx: number, sy: number) {
     return { x: (sx - panX) / zoom, y: (panY - sy) / zoom };
   }
@@ -84,6 +96,13 @@
     if (zoom > 7) return 2;
     if (zoom > 3) return 5;
     return 10;
+  }
+  function gridDrawStep(): { minor: number; major: number } {
+    const worldPerTarget = 55 / zoom;
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(worldPerTarget, 0.001))));
+    const norm = worldPerTarget / mag;
+    const minor = norm < 2 ? mag : norm < 5 ? 2 * mag : 5 * mag;
+    return { minor, major: minor * 5 };
   }
   function snapToGrid(v: number): number {
     const g = gridSnapSize();
@@ -158,6 +177,30 @@
     });
   }
 
+  function isInsidePath(wx: number, wy: number, posIdx: number): boolean {
+    if (posIdx < 0 || posIdx >= positions.length) return false;
+    const pos = positions[posIdx];
+    if (pos.is_prime) return false;
+    const tidx = getTransformIdx(posIdx, positions);
+    const t = transforms[tidx];
+    if (!t) return false;
+    const raw = getPathBboxRaw(posIdx);
+    if (!raw) return false;
+
+    // Inverze transformace tpt: world → path lokální souřadnice
+    const cx_w = t.gui_dx + t.cx;
+    const cy_w = t.gui_dy + t.cy;
+    const dx = wx - cx_w;
+    const dy = wy - cy_w;
+    const rot = (t.rotation * Math.PI) / 180;
+    const cos_r = Math.cos(rot), sin_r = Math.sin(rot);
+    const px = t.cx + (dx * cos_r - dy * sin_r) / t.scale;
+    const py = t.cy + (dx * sin_r + dy * cos_r) / t.scale;
+
+    const tol = nozzleDiam;
+    return px >= raw.mnX - tol && px <= raw.mxX + tol && py >= raw.mnY - tol && py <= raw.mxY + tol;
+  }
+
   function hitTestHandle(wx: number, wy: number): number {
     if (selectedIndex < 0) return -1;
     const handles = getPathHandles(selectedIndex);
@@ -191,27 +234,44 @@
   // ─── Measure snap ─────────────────────────────────────────────────────────
   function applyMeasureSnap(wx: number, wy: number): { x: number; y: number } {
     if (ctrlDown) return { x: snapToGrid(wx), y: snapToGrid(wy) };
-    if (altDown) {
-      let best = { x: wx, y: wy },
-        bestDist = 8 / zoom;
-      for (const pos of positions) {
-        for (const [cx, cy] of [
-          [pos.x, pos.y],
-          [pos.x + pos.width, pos.y],
-          [pos.x, pos.y + pos.height],
-          [pos.x + pos.width, pos.y + pos.height],
-          [pos.x + pos.width / 2, pos.y + pos.height / 2],
-        ] as [number, number][]) {
-          const d = Math.hypot(cx - wx, cy - wy);
-          if (d < bestDist) {
-            bestDist = d;
-            best = { x: cx, y: cy };
-          }
+    if (altDown) return { x: wx, y: wy }; // ALT = volný kurzor bez snapu
+
+    // Výchozí: snap na klíčové body sklíček + body tras
+    let best = { x: wx, y: wy }, bestDist = 8 / zoom;
+
+    for (const pos of positions) {
+      for (const [cx, cy] of [
+        [pos.x, pos.y],
+        [pos.x + pos.width, pos.y],
+        [pos.x, pos.y + pos.height],
+        [pos.x + pos.width, pos.y + pos.height],
+        [pos.x + pos.width / 2, pos.y + pos.height / 2],
+        [pos.x + pos.width / 2, pos.y],
+        [pos.x + pos.width / 2, pos.y + pos.height],
+        [pos.x, pos.y + pos.height / 2],
+        [pos.x + pos.width, pos.y + pos.height / 2],
+      ] as [number, number][]) {
+        const d = Math.hypot(cx - wx, cy - wy);
+        if (d < bestDist) { bestDist = d; best = { x: cx, y: cy }; }
+      }
+    }
+
+    for (let i = 0; i < positions.length; i++) {
+      if (positions[i].is_prime) continue;
+      const tidx = getTransformIdx(i, positions);
+      const t = transforms[tidx];
+      const pd = paths[tidx];
+      if (!t || !pd) continue;
+      for (const seg of pd.segments) {
+        for (const pt of seg.points) {
+          const [ptx, pty] = tpt(pt.x, pt.y, t.gui_dx, t.gui_dy, t.scale, t.rotation, t.cx, t.cy);
+          const d = Math.hypot(ptx - wx, pty - wy);
+          if (d < bestDist) { bestDist = d; best = { x: ptx, y: pty }; }
         }
       }
-      return best;
     }
-    return { x: wx, y: wy };
+
+    return best;
   }
 
   // ─── Key handlers ─────────────────────────────────────────────────────────
@@ -317,24 +377,22 @@
             draw();
             return;
           }
-          // Informovat pravý panel o opětovném výběru
           dispatch("slideSelected", hitIdx);
-          // Začít přesouvat trasu
+          // Přesun trasy jen pokud klik míří přímo na bbox trasy
           const tidx = getTransformIdx(hitIdx, positions);
-          if (transforms[tidx]) {
+          if (transforms[tidx] && isInsidePath(w.x, w.y, hitIdx)) {
             dispatch("saveState");
             dragOp = "move";
             dragSlideIdx = hitIdx;
             dragStartWorld = { ...w };
             dragStartTransform = { ...transforms[tidx] };
+            return;
           }
-          return;
+          // Klik na plochu skla mimo trasu → pan (propad níže)
         } else {
           // Vybrat sklíčko — drag se spustí až při kliknutí na již vybrané
           dispatch("slideSelected", hitIdx);
           transformMode = "scale";
-          lastClickTime = now;
-          lastClickIndex = hitIdx;
           return;
         }
       } else {
@@ -733,14 +791,16 @@
       const minY = (panY - height) / zoom,
         maxY = panY / zoom;
 
+      const { minor: gMinor, major: gMajor } = gridDrawStep();
+
       ctx.strokeStyle = "#243148";
       ctx.lineWidth = 0.5 / zoom;
       ctx.beginPath();
-      for (let x = Math.floor(minX / 10) * 10; x < maxX; x += 10) {
+      for (let x = Math.floor(minX / gMinor) * gMinor; x < maxX + gMinor; x += gMinor) {
         ctx.moveTo(x, minY);
         ctx.lineTo(x, maxY);
       }
-      for (let y = Math.floor(minY / 10) * 10; y < maxY; y += 10) {
+      for (let y = Math.floor(minY / gMinor) * gMinor; y < maxY + gMinor; y += gMinor) {
         ctx.moveTo(minX, y);
         ctx.lineTo(maxX, y);
       }
@@ -749,29 +809,15 @@
       ctx.strokeStyle = "#334155";
       ctx.lineWidth = 1 / zoom;
       ctx.beginPath();
-      for (let x = Math.floor(minX / 50) * 50; x < maxX; x += 50) {
+      for (let x = Math.floor(minX / gMajor) * gMajor; x < maxX + gMajor; x += gMajor) {
         ctx.moveTo(x, minY);
         ctx.lineTo(x, maxY);
       }
-      for (let y = Math.floor(minY / 50) * 50; y < maxY; y += 50) {
+      for (let y = Math.floor(minY / gMajor) * gMajor; y < maxY + gMajor; y += gMajor) {
         ctx.moveTo(minX, y);
         ctx.lineTo(maxX, y);
       }
       ctx.stroke();
-
-      ctx.save();
-      ctx.scale(1, -1);
-      ctx.fillStyle = "#475569";
-      ctx.font = `${9 / zoom}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      for (let x = Math.floor(minX / 50) * 50; x < maxX; x += 50)
-        if (x >= 0 && x <= bedMaxX) ctx.fillText(x.toString(), x, -4 / zoom);
-      ctx.textAlign = "right";
-      ctx.textBaseline = "middle";
-      for (let y = Math.floor(minY / 50) * 50; y < maxY; y += 50)
-        if (y >= 0 && y <= bedMaxY) ctx.fillText(y.toString(), -3 / zoom, -y);
-      ctx.restore();
     }
 
     // 3. Bed border
@@ -780,6 +826,31 @@
     ctx.strokeRect(0, 0, bedMaxX, bedMaxY);
 
     // 4. Sklíčka + trasy
+    // Preview cursor: mapuje printProgress (0-100%) na přesnou vzdálenostní pozici v trase
+    let cursor: { slideIdx: number; segIdx: number; ptIdx: number; fracT: number } | null = null;
+    if (printProgress < 100 && precomputedSegs.length > 0 && totalPreviewDist > 0) {
+      const targetDist = totalPreviewDist * (printProgress / 100);
+      for (let ci = 0; ci < precomputedSegs.length; ci++) {
+        const sd = precomputedSegs[ci];
+        if (targetDist <= sd.pathStartDist + sd.segDist || ci === precomputedSegs.length - 1) {
+          const distIntoSeg = Math.max(0, targetDist - sd.pathStartDist);
+          let ptIdx = sd.pointDists.length - 1;
+          for (let j = 1; j < sd.pointDists.length; j++) {
+            if (sd.pointDists[j] >= distIntoSeg) { ptIdx = j - 1; break; }
+          }
+          const d0 = sd.pointDists[ptIdx];
+          const d1 = ptIdx + 1 < sd.pointDists.length ? sd.pointDists[ptIdx + 1] : d0;
+          const interval = d1 - d0;
+          const fracT = interval > 1e-9 ? Math.min(1, (distIntoSeg - d0) / interval) : 0;
+          cursor = { slideIdx: sd.slideIdx, segIdx: sd.segIdx, ptIdx, fracT };
+          break;
+        }
+      }
+    }
+    // Pozice preview trysky ve world space (nastavuje se při kreslení kurzorového segmentu)
+    let previewNozzleWX = 0, previewNozzleWY = 0, hasPreviewNozzle = false;
+    let previewDone = false;
+
     for (let i = 0; i < positions.length; i++) {
       const pos = positions[i];
       const tidx = getTransformIdx(i, positions);
@@ -787,15 +858,22 @@
 
       const slideColor = pos.is_prime ? "#f97316" : isSelected ? "#3b82f6" : "#94a3b8";
 
+      let glassW = pos.width;
+      let glassH = pos.height;
+      if (pos.is_prime && overrides["-1"]?.glass_type === "vzorkové") {
+        glassW = $projectStore.params?.slide_w ?? glassW;
+        glassH = $projectStore.params?.slide_h ?? glassH;
+      }
+
       // ── SKLO (pevná pozice, bez transformace) ───────────────────────────
       ctx.fillStyle = slideColor;
       ctx.globalAlpha = isSelected ? 0.15 : 0.1;
-      ctx.fillRect(pos.x, pos.y, pos.width, pos.height);
+      ctx.fillRect(pos.x, pos.y, glassW, glassH);
       ctx.globalAlpha = 1.0;
 
       ctx.strokeStyle = slideColor;
       ctx.lineWidth = (isSelected ? 2.0 : 1.0) / zoom;
-      ctx.strokeRect(pos.x, pos.y, pos.width, pos.height);
+      ctx.strokeRect(pos.x, pos.y, glassW, glassH);
 
       // ── TRASA ────────────────────────────────────────────────────────────
       // Parametry transformace (výchozí = identity pro primepath)
@@ -824,7 +902,7 @@
         ctx.save();
         // Klip na hranici skla (world souřadnice — bariéra bez paddingu)
         ctx.beginPath();
-        ctx.rect(pos.x, pos.y, pos.width, pos.height);
+        ctx.rect(pos.x, pos.y, glassW, glassH);
         ctx.clip();
 
         ctx.strokeStyle = slideColor;
@@ -834,50 +912,69 @@
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
 
-        for (const seg of pathData.segments) {
+        for (let si = 0; si < pathData.segments.length; si++) {
+          const seg = pathData.segments[si];
           if (seg.points.length === 0) continue;
+
+          // Určení rozsahu kreslení dle cursor pozice
+          let toRender = seg.points.length;
+          let fracWX: number | null = null, fracWY: number | null = null;
+
+          if (cursor !== null) {
+            if (i > cursor.slideIdx || (i === cursor.slideIdx && si > cursor.segIdx)) {
+              // Po kurzoru — přeskočit vše
+              break;
+            } else if (i === cursor.slideIdx && si === cursor.segIdx) {
+              // Kurzorovací segment — kreslit jen do ptIdx, pak interpolovat
+              toRender = cursor.ptIdx + 1;
+              if (cursor.fracT > 0 && cursor.ptIdx + 1 < seg.points.length) {
+                const p0 = seg.points[cursor.ptIdx];
+                const p1 = seg.points[cursor.ptIdx + 1];
+                const lx = p0.x + (p1.x - p0.x) * cursor.fracT;
+                const ly = p0.y + (p1.y - p0.y) * cursor.fracT;
+                [fracWX, fracWY] = tpt(lx, ly, pX, pY, pScale, pRot, pCX, pCY);
+                previewNozzleWX = fracWX;
+                previewNozzleWY = fracWY;
+                hasPreviewNozzle = true;
+              } else if (toRender > 0) {
+                const lp = seg.points[cursor.ptIdx];
+                [previewNozzleWX, previewNozzleWY] = tpt(lp.x, lp.y, pX, pY, pScale, pRot, pCX, pCY);
+                hasPreviewNozzle = true;
+              }
+              previewDone = true;
+            }
+            // else: before cursor — draw all (toRender stays seg.points.length)
+          }
 
           const p0 = seg.points[0];
           const isDot =
-            seg.points.length <= 2 &&
-            (seg.points.length === 1 ||
-              (Math.abs(p0.x - seg.points[1].x) < 0.01 && Math.abs(p0.y - seg.points[1].y) < 0.01));
+            fracWX === null &&
+            toRender <= 2 &&
+            (toRender === 1 ||
+              (Math.abs(p0.x - seg.points[Math.min(1, toRender - 1)].x) < 0.01 &&
+               Math.abs(p0.y - seg.points[Math.min(1, toRender - 1)].y) < 0.01));
 
           if (isDot) {
             const [wx, wy] = tpt(p0.x, p0.y, pX, pY, pScale, pRot, pCX, pCY);
             ctx.beginPath();
             ctx.arc(wx, wy, nozzleDiam / 2, 0, Math.PI * 2);
             ctx.fill();
-          } else {
+          } else if (toRender > 0) {
             ctx.beginPath();
-            for (let j = 0; j < seg.points.length; j++) {
-              const [wx, wy] = tpt(
-                seg.points[j].x,
-                seg.points[j].y,
-                pX,
-                pY,
-                pScale,
-                pRot,
-                pCX,
-                pCY
-              );
+            for (let j = 0; j < toRender; j++) {
+              const [wx, wy] = tpt(seg.points[j].x, seg.points[j].y, pX, pY, pScale, pRot, pCX, pCY);
               if (j === 0) ctx.moveTo(wx, wy);
               else ctx.lineTo(wx, wy);
+            }
+            // Dokreslení interpolované části do kurzorové pozice
+            if (fracWX !== null && fracWY !== null) {
+              ctx.lineTo(fracWX, fracWY);
             }
             ctx.stroke();
 
             // Označení začátků segmentů pro vybranou trasu (orientace tisku)
             if (isSelected && !pos.is_prime) {
-              const [sx, sy] = tpt(
-                seg.points[0].x,
-                seg.points[0].y,
-                pX,
-                pY,
-                pScale,
-                pRot,
-                pCX,
-                pCY
-              );
+              const [sx, sy] = tpt(seg.points[0].x, seg.points[0].y, pX, pY, pScale, pRot, pCX, pCY);
               ctx.fillStyle = "#22d3ee";
               ctx.beginPath();
               ctx.arc(sx, sy, 1.5 / zoom, 0, Math.PI * 2);
@@ -885,6 +982,8 @@
               ctx.fillStyle = slideColor;
             }
           }
+
+          if (previewDone) break;
         }
         ctx.globalAlpha = 1.0;
         ctx.restore();
@@ -978,7 +1077,7 @@
     // 7. Měřidlo
     if (isMeasuring && measurePoints.length > 0) {
       const raw = screenToWorld(mouseX, mouseY);
-      const snapped = ctrlDown || altDown ? applyMeasureSnap(raw.x, raw.y) : raw;
+      const snapped = applyMeasureSnap(raw.x, raw.y);
       const allPts = [...measurePoints, snapped];
 
       ctx.strokeStyle = "#eab308";
@@ -999,8 +1098,9 @@
         ctx.fill();
       }
 
-      if (ctrlDown || altDown) {
-        ctx.strokeStyle = altDown ? "#a78bfa" : "#38bdf8";
+      const isSnapped = !altDown && (ctrlDown || Math.hypot(snapped.x - raw.x, snapped.y - raw.y) > 0.001);
+      if (isSnapped) {
+        ctx.strokeStyle = ctrlDown ? "#38bdf8" : "#a78bfa";
         ctx.lineWidth = 1 / zoom;
         const r2 = 5 / zoom;
         ctx.beginPath();
@@ -1039,7 +1139,7 @@
       measCount = allPts.length - 1;
     }
 
-    // 8. Tryska
+    // 8. Tryska (reálná — červená při tisku)
     if (currentNozzle) {
       ctx.fillStyle = "#ef4444";
       ctx.beginPath();
@@ -1047,7 +1147,78 @@
       ctx.fill();
     }
 
+    // 8b. Preview tryska (cyan — zobrazená při náhledu, ne při tisku)
+    if (hasPreviewNozzle && !currentNozzle) {
+      const r = nozzleDiam / 2 + 1.5 / zoom;
+      ctx.beginPath();
+      ctx.arc(previewNozzleWX, previewNozzleWY, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(34,211,238,0.25)";
+      ctx.fill();
+      ctx.strokeStyle = "#22d3ee";
+      ctx.lineWidth = 1.2 / zoom;
+      ctx.stroke();
+      // Kříž v centru trysky
+      ctx.beginPath();
+      ctx.moveTo(previewNozzleWX - r * 0.7, previewNozzleWY);
+      ctx.lineTo(previewNozzleWX + r * 0.7, previewNozzleWY);
+      ctx.moveTo(previewNozzleWX, previewNozzleWY - r * 0.7);
+      ctx.lineTo(previewNozzleWX, previewNozzleWY + r * 0.7);
+      ctx.stroke();
+    }
+
     ctx.restore();
+
+    // ── Osy — popisky v obrazovkových souřadnicích (vždy viditelné) ──────────
+    if (showAxes) {
+      const minX2 = -panX / zoom,
+        maxX2 = (width - panX) / zoom;
+      const minY2 = (panY - height) / zoom,
+        maxY2 = panY / zoom;
+      const { major: gMajor2 } = gridDrawStep();
+      const fmtVal = (v: number) => Number(v.toFixed(4)).toString();
+      const FS = 13;
+      ctx.font = `bold ${FS}px sans-serif`;
+
+      // X-osa: pokud je spodní okraj bedu viditelný, ukotvit popisky těsně pod něj
+      const bedBottomSY = panY; // world y=0 → screen y=panY
+      const xAnchored = bedBottomSY > 20 && bedBottomSY < height - 50;
+      const xAxisY = xAnchored ? bedBottomSY + 16 : height - 42;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      for (let wx = Math.floor(minX2 / gMajor2) * gMajor2; wx < maxX2 + gMajor2; wx += gMajor2) {
+        if (wx <= 0 || wx > bedMaxX) continue; // 0 se kreslí společně s Y osou
+        const sx = wx * zoom + panX;
+        if (sx < 30 || sx > width - 10) continue;
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText(fmtVal(wx), sx, xAxisY);
+      }
+
+      // Y-osa: pokud je levý okraj bedu viditelný, ukotvit popisky těsně vlevo od něj
+      const bedLeftSX = panX; // world x=0 → screen x=panX
+      const yAnchored = bedLeftSX > 30 && bedLeftSX < width - 10;
+      ctx.textBaseline = "middle";
+      ctx.textAlign = yAnchored ? "right" : "left";
+      for (let wy = Math.floor(minY2 / gMajor2) * gMajor2; wy < maxY2 + gMajor2; wy += gMajor2) {
+        if (wy <= 0 || wy > bedMaxY) continue; // 0 se kreslí jako společný roh
+        const sy = panY - wy * zoom;
+        if (sy < 10 || sy > height - 20) continue;
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText(fmtVal(wy), yAnchored ? bedLeftSX - 5 : 7, sy);
+      }
+
+      // Společná nula v rohu (0,0)
+      const sx0 = panX;
+      if (sx0 >= 30 && sx0 <= width - 10) {
+        ctx.textAlign = yAnchored ? "right" : "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText("0", yAnchored ? bedLeftSX - 5 : 7, xAxisY);
+      }
+
+      // Reset kontextu textu — důležité, overlaye níže ho neresetují
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
 
     // ── Obrazovkové overlaye ─────────────────────────────────────────────
     if (measTotal !== null) {
@@ -1108,7 +1279,7 @@
         const _bw = Math.max(..._lines.map((l) => ctx!.measureText(l).width)) + _pad * 2;
         const _bh = _lines.length * _lh + _pad;
         const _bx = width - _bw - 10,
-          _by = 10;
+          _by = 54;
 
         ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.fillRect(_bx, _by, _bw, _bh);
@@ -1144,6 +1315,48 @@
     }
   }
 
+  // ─── Preview: předpočítané vzdálenosti segmentů pro přesný náhled tisku ───────
+  interface PreviewSegData {
+    slideIdx: number;
+    segIdx: number;
+    pathStartDist: number;
+    pointDists: number[];
+    segDist: number;
+  }
+  let precomputedSegs: PreviewSegData[] = [];
+  let totalPreviewDist = 0;
+
+  function recomputePreviewDist() {
+    const segs: PreviewSegData[] = [];
+    let cumDist = 0;
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i];
+      const tidx = getTransformIdx(i, positions);
+      const pathData = pos.is_prime ? primePath : (paths[tidx] || null);
+      if (!pathData) continue;
+      const scale = pos.is_prime ? 1.0 : (transforms[tidx]?.scale ?? 1.0);
+      for (let si = 0; si < pathData.segments.length; si++) {
+        const pts = pathData.segments[si].points;
+        if (pts.length === 0) continue;
+        const pointDists: number[] = [0];
+        let segDist = 0;
+        for (let j = 1; j < pts.length; j++) {
+          segDist += Math.hypot((pts[j].x - pts[j - 1].x) * scale, (pts[j].y - pts[j - 1].y) * scale);
+          pointDists.push(segDist);
+        }
+        segs.push({ slideIdx: i, segIdx: si, pathStartDist: cumDist, pointDists, segDist });
+        cumDist += Math.max(segDist, 0.001);
+      }
+    }
+    precomputedSegs = segs;
+    totalPreviewDist = cumDist;
+  }
+
+  $: {
+    paths; primePath; positions; transforms;
+    recomputePreviewDist();
+  }
+
   // Při změně rozměrů podložky resetujeme kameru s odkladem 200 ms —
   // doUpdateLayout má debounce 150 ms, takže reset proběhne až po přepočtu pozic sklíček.
   let _prevBedMaxX = bedMaxX;
@@ -1168,7 +1381,8 @@
       showAxes !== undefined &&
       isMeasuring !== undefined &&
       selectedIndex !== undefined &&
-      currentNozzle !== undefined
+      currentNozzle !== undefined &&
+      printProgress !== undefined
     ) {
       draw();
     }

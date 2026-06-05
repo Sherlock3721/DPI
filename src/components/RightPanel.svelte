@@ -10,15 +10,17 @@
     Settings2,
     RotateCcw,
     AlignJustify,
-    Activity,
+    Rows4,
+    Route,
     Grip,
     Grid,
-    LayoutGrid,
     Square,
   } from "lucide-svelte";
-  import type { SlideOverride } from "../lib/tauri";
+  import { subscribe_printer_status, type SlideOverride, type PrinterStatus } from "../lib/tauri";
+  import { liquidLimits } from "../stores/liquidStore";
 
   export let sampleCount = 1;
+  export let primeActive = false;
   export let overrides: Record<string, SlideOverride> = {};
   // openSlideIdx + openTrigger: canvas → panel. Trigger se inkrementuje i při
   // opakovaném výběru stejného sklíčka, aby se reactive blok vždy spustil.
@@ -52,6 +54,12 @@
   let localSlides: LocalSlideData[] = [];
   let openSlides: boolean[] = [];
 
+  // ─── Limity aktivní kapaliny pro override vstupy ──────────────────────────
+  $: liqExtMin = $liquidLimits?.extrusion_min ?? 0;
+  $: liqExtMax = $liquidLimits?.extrusion_max ?? 1000;
+  $: liqSpeedMin = $liquidLimits?.print_speed_min ?? 50;
+  $: liqSpeedMax = $liquidLimits?.print_speed_max ?? 1500;
+
   // Udržuje openSlides v souladu s počtem sklíček
   $: if (openSlides.length !== sampleCount) {
     openSlides = Array(Math.max(sampleCount, 0)).fill(false);
@@ -77,13 +85,13 @@
     }
   }
 
-  // Konfigurace pro odpliv (prime slide)
   let primeSlide = {
     width: "15",
     infill_val: "1.5",
     infill_type: "mm" as "mm" | "%" | "počet",
     extrusion_rate: "",
     extrusion_unit: "nl/mm" as "µl/mm" | "nl/mm" | "kroky/mm",
+    glass_type: "laboratorní" as "laboratorní" | "vzorkové",
     modified: true,
   };
 
@@ -92,8 +100,27 @@
     updateParentOverrides();
   }
 
+  let isManualMovementOpen = false;
+  let lastCanControl = false;
+
   onMount(() => {
     updateParentOverrides();
+
+    const unsubscribe = subscribe_printer_status((status) => {
+      const canControl = status.is_connected && !status.is_printing;
+      if (canControl !== lastCanControl) {
+        lastCanControl = canControl;
+        if (canControl) {
+          isManualMovementOpen = true;
+        } else {
+          isManualMovementOpen = false;
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe.then(unsub => unsub());
+    };
   });
 
   function extUnitFromEvent(e: CustomEvent): "µl/mm" | "nl/mm" | "kroky/mm" {
@@ -134,7 +161,7 @@
           name: "",
           note: "",
           z_offset: "",
-          z_unit: "mm",
+          z_unit: "µm",
           extrusion_rate: "",
           extrusion_unit: "nl/mm",
           print_speed: "",
@@ -188,7 +215,7 @@
     slide.name = "";
     slide.note = "";
     slide.z_offset = "";
-    slide.z_unit = "mm";
+    slide.z_unit = "µm";
     slide.extrusion_rate = "";
     slide.extrusion_unit = "nl/mm";
     slide.print_speed = "";
@@ -351,6 +378,7 @@
         p_over.slide_w = pw;
         p_over.slide_h = ph;
       }
+      p_over.glass_type = primeSlide.glass_type;
 
       if (primeSlide.infill_val !== "") {
         let inf = parseFloat(primeSlide.infill_val);
@@ -393,8 +421,8 @@
   <!-- MANUAL MOVEMENT GRID (In a collapsible box) -->
   <CollapsibleBox
     title="RUČNÍ OVLÁDÁNÍ POSUVU"
-    isOpen={false}
-    headerClass="text-sm font-extrabold uppercase text-white tracking-wide"
+    bind:isOpen={isManualMovementOpen}
+    headerClass="text-sm font-extrabold uppercase text-slate-200 tracking-wide"
   >
     <ManualMovementWidget />
   </CollapsibleBox>
@@ -407,11 +435,12 @@
       class="flex items-center gap-1.5 text-sm font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-2 mb-1"
     >
       <Settings2 class="w-4 h-4 text-labaccent" />
-      <span>Variace sklíček</span>
+      <span>Lokální nastavení</span>
     </div>
 
     <div class="flex flex-col gap-2">
       <!-- ODPLIV KONFIGURACE -->
+      {#if primeActive}
       <div class="mb-4">
         <CollapsibleBox
           title="Odpliv (Prime)"
@@ -420,6 +449,22 @@
           containerClass="border-orange-500/50 bg-orange-500/5"
         >
           <div class="flex flex-col gap-3 p-3">
+            <!-- Typ skla -->
+            <div class="grid grid-cols-3 items-center gap-2">
+              <span class="text-orange-200/80">Typ substrátu:</span>
+              <div class="col-span-2 h-7">
+                <CustomSelect
+                  bind:value={primeSlide.glass_type}
+                  on:change={handlePrimeInput}
+                  options={[
+                    { value: "laboratorní", label: "Laboratorní" },
+                    { value: "vzorkové", label: "Vzorkové" },
+                  ]}
+                  cssStyle="height: 100%; font-size: 11px; background-color: rgba(67, 20, 7, 0.5); color: #ffedd5; border-color: rgba(249, 115, 22, 0.3);"
+                />
+              </div>
+            </div>
+
             <!-- Velikost -->
             <div class="grid grid-cols-3 items-center gap-2">
               <span class="text-orange-200/80">Velikost čtverce [mm]:</span>
@@ -479,7 +524,7 @@
               <div class="col-span-2 grid grid-cols-3 gap-1">
                 <div class="col-span-2 h-7">
                   <NumberInput
-                    min={0.001}
+                    min={0}
                     step={0.1}
                     bind:value={primeSlide.extrusion_rate}
                     on:input={handlePrimeInput}
@@ -497,7 +542,6 @@
                       primeSlide.extrusion_unit = newUnit;
                     }}
                     options={[
-                      { value: "µl/mm", label: "µl/mm" },
                       { value: "nl/mm", label: "nl/mm" },
                       { value: "kroky/mm", label: "krok" },
                     ]}
@@ -509,17 +553,21 @@
           </div>
         </CollapsibleBox>
       </div>
+      {/if}
 
       <!-- SKLÍČKA SMYČKA -->
       {#each Array(sampleCount) as _, idx}
+        {@const _zScale = localSlides[idx]?.z_unit === "µm" ? 1000 : 1}
+        {@const _liqZMin = $liquidLimits?.z_offset_min != null ? $liquidLimits.z_offset_min * _zScale : 0}
+        {@const _liqZMax = $liquidLimits?.z_offset_max != null ? $liquidLimits.z_offset_max * _zScale : 2.0 * _zScale}
         {#if localSlides[idx]}
           <CollapsibleBox
-            title={localSlides[idx].name ? localSlides[idx].name : `Sklíčko ${idx + 1}`}
+            title={localSlides[idx].name ? localSlides[idx].name : `Substrát ${idx + 1}`}
             bind:isOpen={openSlides[idx]}
             on:toggle={(e) => handleSlideToggle(idx, e.detail)}
             headerClass="text-sm font-extrabold tracking-wide transition-colors {openSlides[idx]
               ? 'text-labaccent'
-              : 'text-white'}"
+              : 'text-slate-200'}"
             containerClass="border bg-slate-950/20 transition-colors {openSlides[idx]
               ? 'border-labaccent/40 bg-labaccent/5'
               : 'border-slate-800'}"
@@ -538,14 +586,14 @@
               <!-- NÁZEV -->
               <div
                 class="grid grid-cols-3 items-center gap-2"
-                title="Jméno sklíčka pro lepší orientaci v protokolu"
+                title="Jméno substrátu pro lepší orientaci v protokolu"
               >
                 <span class="text-slate-400">Název:</span>
                 <input
                   type="text"
                   bind:value={localSlides[idx].name}
                   on:input={() => handleInput(idx, "name")}
-                  placeholder={`Sklíčko ${idx + 1}`}
+                  placeholder={`Substrát ${idx + 1}`}
                   class="col-span-2 input-premium py-0.5 text-[11px]"
                 />
               </div>
@@ -565,20 +613,21 @@
                 />
               </div>
 
-              <!-- TLOUŠŤKA VRSTVY (Z) -->
+              <!-- VÝŠKA TRYSKY (Z) -->
               <div
                 class="grid grid-cols-3 items-center gap-2"
-                title="Lokální override výšky hlavy (Z-offset) nad podložkou pro toto konkrétní sklíčko"
+                title="Lokální override výšky hlavy (Z-offset) nad podložkou pro tento konkrétní substrát"
               >
                 <span
                   class="text-slate-400 {localSlides[idx].z_modified
                     ? 'text-orange-400 font-semibold'
-                    : ''}">Tloušťka vrstvy:</span
+                    : ''}">Výška trysky:</span
                 >
                 <div class="col-span-2 grid grid-cols-3 gap-1">
                   <div class="col-span-2 h-7">
                     <NumberInput
-                      min={0.001}
+                      min={_liqZMin}
+                      max={_liqZMax}
                       step={localSlides[idx].z_unit === "mm" ? 0.05 : 50}
                       bind:value={localSlides[idx].z_offset}
                       on:input={() => handleInput(idx, "z_offset")}
@@ -608,7 +657,7 @@
               <!-- EXTRUZE -->
               <div
                 class="grid grid-cols-3 items-center gap-2"
-                title="Lokální override dávkování kapaliny pro toto sklíčko"
+                title="Lokální override dávkování kapaliny pro tento substrát"
               >
                 <span
                   class="text-slate-400 {localSlides[idx].ext_modified
@@ -618,7 +667,8 @@
                 <div class="col-span-2 grid grid-cols-3 gap-1">
                   <div class="col-span-2 h-7">
                     <NumberInput
-                      min={0.001}
+                      min={liqExtMin}
+                      max={liqExtMax}
                       step={0.1}
                       bind:value={localSlides[idx].extrusion_rate}
                       on:input={() => handleInput(idx, "extrusion_rate")}
@@ -637,7 +687,6 @@
                         localSlides = localSlides;
                       }}
                       options={[
-                        { value: "µl/mm", label: "µl/mm" },
                         { value: "nl/mm", label: "nl/mm" },
                         { value: "kroky/mm", label: "krok/mm" },
                       ]}
@@ -659,6 +708,8 @@
                 >
                 <div class="col-span-2 h-7">
                   <NumberInput
+                    min={liqSpeedMin}
+                    max={liqSpeedMax}
                     step={100}
                     bind:value={localSlides[idx].print_speed}
                     on:input={() => handleInput(idx, "print_speed")}
@@ -732,11 +783,11 @@
                     on:change={() => handleInput(idx, "infill_style")}
                     options={[
                       { value: "", label: "Globální styl" },
-                      { value: "Okraje + Výplň", label: "Okraje + Výplň", icon: Grid },
+                      { value: "Okraje + Výplň", label: "Okraje + Výplň", icon: Rows4 },
                       { value: "Výplň", label: "Výplň", icon: AlignJustify },
                       { value: "Okraje", label: "Okraje", icon: Square },
-                      { value: "Had", label: "Had", icon: Activity },
-                      { value: "Mřížka", label: "Mřížka", icon: LayoutGrid },
+                      { value: "Had", label: "Had", icon: Route },
+                      { value: "Mřížka", label: "Mřížka", icon: Grid },
                       { value: "Tečky", label: "Tečky", icon: Grip },
                     ]}
                   />
@@ -746,7 +797,7 @@
               <!-- VÝŠKA TRYSKY -->
               <div
                 class="grid grid-cols-3 items-center gap-2"
-                title="Lokální override fyzické délky jehly/trysky (pokud má toto sklíčko jinou zkumavku)"
+                title="Lokální override fyzické délky jehly/trysky (pokud má tento substrát jinou zkumavku)"
               >
                 <span
                   class="text-slate-400 {localSlides[idx].nozzle_modified

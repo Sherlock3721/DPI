@@ -108,6 +108,17 @@ select.input-premium option {
   color: #0f172a;
 }
 
+/* Potlačení nativního play/pause overlaye na video elementech */
+video::-webkit-media-controls {
+  display: none !important;
+}
+video::-webkit-media-controls-overlay-play-button {
+  display: none !important;
+}
+video::-webkit-media-controls-start-playback-button {
+  display: none !important;
+}
+
 /* Pozadí aplikace */
 [data-theme="light"] main {
   background-color: var(--bg-app) !important;
@@ -157,3 +168,10 @@ select.input-premium option {
 [data-theme="light"] ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-bg);
 }
+
+/* text-slate-100 (téměř bílá v tmavém motivu) → tmavá ve světlém */
+[data-theme="light"] .text-slate-100              { color: var(--text-primary) !important; }
+[data-theme="light"] .hover\:text-slate-100:hover { color: var(--text-muted) !important; }
+
+/* hover:text-white na nebarevných pozadích (close tlačítka, menu položky) */
+[data-theme="light"] .hover\:text-white:hover     { color: var(--text-primary) !important; }

@@ -33,8 +33,17 @@ pub fn generate_prime_preview(
         params.nozzle_diam
     };
 
-    let cx = pos.width / 2.0;
-    let cy = pos.height / 2.0;
+    let glass_w = match prime_override.and_then(|o| o.glass_type.as_deref()) {
+        Some("vzorkové") => params.slide_w,
+        _ => pos.width,
+    };
+    let glass_h = match prime_override.and_then(|o| o.glass_type.as_deref()) {
+        Some("vzorkové") => params.slide_h,
+        _ => pos.height,
+    };
+
+    let cx = glass_w / 2.0;
+    let cy = glass_h / 2.0;
     let x1 = cx - prime_w / 2.0;
     let x2 = cx + prime_w / 2.0;
     let y1 = cy - prime_h / 2.0;
@@ -122,26 +131,73 @@ fn extract_gcode_coord(line: &str, axis: char) -> Option<f64> {
 /// Pomocná funkce pro transformaci bodu z lokálních souřadnic sklíčka
 /// do absolutních souřadnic tiskové plochy.
 fn transform_pt(x_orig: f64, y_orig: f64, t: &Transform, _bed_max_y: f64) -> Point2D {
-    // Vektor vůči středu transformace (cx, cy)
     let dx = x_orig - t.cx;
-    let dy = t.cy - y_orig; // Invertováno pro shodu s GUI (Y+ je dozadu)
+    let dy = y_orig - t.cy;
 
-    // Aplikace měřítka
     let dx_scaled = dx * t.scale;
     let dy_scaled = dy * t.scale;
 
-    // Aplikace rotace ve stupních
-    let rad = t.rotation.to_radians();
+    // Záporná rotace — shodné s tpt() v Canvas2D.svelte (rad = -pRot)
+    let rad = (-t.rotation).to_radians();
     let cos_r = rad.cos();
     let sin_r = rad.sin();
     let rx = dx_scaled * cos_r - dy_scaled * sin_r;
     let ry = dx_scaled * sin_r + dy_scaled * cos_r;
 
-    // Absolutní pozice v GUI souřadnicích
     let gui_x = t.gui_dx + t.cx + rx;
     let gui_y = t.gui_dy + t.cy + ry;
 
     Point2D::new(gui_x, gui_y)
+}
+
+/// Z-hop úměrný délce přejezdu — krátké přejezdy dostávají nižší hop.
+fn proportional_z_hop(travel_dist: f64, max_hop: f64) -> f64 {
+    const NO_HOP_MM: f64 = 0.5;   // pod touto délkou přejezdu hop = 0
+    const FULL_HOP_MM: f64 = 5.0; // nad touto délkou přejezdu plný hop
+    if travel_dist <= NO_HOP_MM {
+        0.0
+    } else if travel_dist >= FULL_HOP_MM {
+        max_hop
+    } else {
+        max_hop * (travel_dist - NO_HOP_MM) / (FULL_HOP_MM - NO_HOP_MM)
+    }
+}
+
+/// Pro uzavřený polygon rotuje body tak, aby první vrchol byl nejblíže aktuální pozici trysky.
+/// Otevřené cesty vrací beze změny.
+fn rotate_closed_path_to_nearest(
+    points: &[Point2D],
+    t: &Transform,
+    bed_max_y: f64,
+    cur_x: f64,
+    cur_y: f64,
+) -> Vec<Point2D> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let first = points[0];
+    let last = *points.last().unwrap();
+    if (first.x - last.x).powi(2) + (first.y - last.y).powi(2) > 1e-2 {
+        return points.to_vec(); // otevřená cesta
+    }
+    let n = points.len() - 1; // počet unikátních vrcholů
+    let best = (0..n)
+        .min_by(|&i, &j| {
+            let ai = transform_pt(points[i].x, points[i].y, t, bed_max_y);
+            let aj = transform_pt(points[j].x, points[j].y, t, bed_max_y);
+            let di = (ai.x - cur_x).hypot(ai.y - cur_y);
+            let dj = (aj.x - cur_x).hypot(aj.y - cur_y);
+            di.partial_cmp(&dj).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0);
+    if best == 0 {
+        return points.to_vec();
+    }
+    let mut rotated = Vec::with_capacity(points.len());
+    rotated.extend_from_slice(&points[best..n]);
+    rotated.extend_from_slice(&points[0..best]);
+    rotated.push(points[best]);
+    rotated
 }
 
 /// Připojí G-kód blok do výstupního bufferu a zajistí ukončení novým řádkem.
@@ -230,12 +286,14 @@ pub fn generate_gcode(
     }
 
     // Získání rozložení sklíček na podložce
+    let prime_glass_type = slide_overrides.get("-1").and_then(|o| o.glass_type.as_deref());
     let positions = get_layout_positions(
         params.sample_count,
         params.slide_w,
         params.slide_h,
         machine.multi_spacing,
         params.prime_active,
+        prime_glass_type,
         &machine.bed,
     );
 
@@ -381,66 +439,77 @@ pub fn generate_gcode(
                     }
                 };
 
-                let mut is_retracted = false;
-
                 for segment in &paths.segments {
                     if segment.is_empty() {
                         continue;
                     }
 
-                    let p0 = segment.points[0];
+                    // Opt 1: pro uzavřené polygony rotuj počáteční bod k trysce
+                    let effective_pts = rotate_closed_path_to_nearest(
+                        &segment.points,
+                        &transform,
+                        machine.bed.max_y,
+                        last_abs_x,
+                        last_abs_y,
+                    );
+
+                    let p0 = effective_pts[0];
                     let abs_p0 = transform_pt(p0.x, p0.y, &transform, machine.bed.max_y);
 
-                    // Přejezd k začátku dráhy
                     let travel_dist =
                         ((abs_p0.x - last_abs_x).powi(2) + (abs_p0.y - last_abs_y).powi(2)).sqrt();
                     total_time_sec += (travel_dist / 3000.0) * 60.0;
                     last_abs_x = abs_p0.x;
                     last_abs_y = abs_p0.y;
 
+                    // Opt 2: Z-hop úměrný délce přejezdu
+                    let hop = proportional_z_hop(travel_dist, machine.z_hop);
+
                     // Tečkování (Dot Dispensing)
                     if loc_infill_style == "Tečky"
-                        && segment.points.len() == 2
-                        && segment.points[0] == segment.points[1]
+                        && effective_pts.len() == 2
+                        && effective_pts[0] == effective_pts[1]
                     {
                         let dot_e = ext_calc.calculate_dot_extrusion(loc_ext, loc_ext_unit);
+                        if hop > 0.0 {
+                            result.push_str(&format!(
+                                "G1 Z{:.3} F1000 ; Z-hop nad bod\n\
+                                 G0 X{:.3} Y{:.3} F3000\n\
+                                 G1 Z{:.3} F1000 ; Klesnuti k povrchu\n",
+                                print_z + hop, abs_p0.x, abs_p0.y, print_z
+                            ));
+                        } else {
+                            result.push_str(&format!(
+                                "G0 X{:.3} Y{:.3} F3000\n",
+                                abs_p0.x, abs_p0.y
+                            ));
+                        }
                         result.push_str(&format!(
-                            "G1 Z{:.3} F1000 ; Z-hop nad bod\n\
-                             G0 X{:.3} Y{:.3} F3000\n\
-                             G1 Z{:.3} F1000 ; Klesnuti k povrchu\n\
-                             G1 E{:.5} F300 ; Davkovani kapky\n\
+                            "G1 E{:.5} F300 ; Davkovani kapky\n\
                              G1 Z{:.3} F1000 ; Z-hop po davkovani\n",
-                            print_z + machine.z_hop,
-                            abs_p0.x,
-                            abs_p0.y,
-                            print_z,
                             dot_e,
                             print_z + machine.z_hop
                         ));
-                        total_time_sec += 2.0; // Odhadovaný čas na jednu kapku
+                        total_time_sec += 2.0;
                         continue;
                     }
 
                     // Normální čáry (vektory)
-                    result.push_str(&format!(
-                        "G1 Z{:.3} F1000 ; Z-hop pro prejezd\n\
-                         G0 X{:.3} Y{:.3} F3000\n\
-                         G1 Z{:.3} F1000 ; Sjezd k povrchu\n",
-                        print_z + machine.z_hop,
-                        abs_p0.x,
-                        abs_p0.y,
-                        print_z
-                    ));
-
-                    if is_retracted && machine.retraction > 0.0 {
+                    if hop > 0.0 {
                         result.push_str(&format!(
-                            "G1 E{:.5} F{:.0} ; Deretrakce\n",
-                            machine.retraction, machine.retract_speed
+                            "G1 Z{:.3} F1000 ; Z-hop pro prejezd\n\
+                             G0 X{:.3} Y{:.3} F3000\n\
+                             G1 Z{:.3} F1000 ; Sjezd k povrchu\n",
+                            print_z + hop, abs_p0.x, abs_p0.y, print_z
                         ));
-                        is_retracted = false;
+                    } else {
+                        result.push_str(&format!(
+                            "G0 X{:.3} Y{:.3} F3000 ; Kratky prejezd bez Z-hopu\n",
+                            abs_p0.x, abs_p0.y
+                        ));
                     }
 
-                    for window in segment.points.windows(2) {
+                    for window in effective_pts.windows(2) {
                         let pa =
                             transform_pt(window[0].x, window[0].y, &transform, machine.bed.max_y);
                         let pb =
@@ -449,23 +518,12 @@ pub fn generate_gcode(
 
                         result.push_str(&format!(
                             "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
-                            pb.x,
-                            pb.y,
-                            dist * e_per_mm,
-                            loc_spd
+                            pb.x, pb.y, dist * e_per_mm, loc_spd
                         ));
                         total_dist += dist;
                         total_time_sec += (dist / loc_spd) * 60.0;
                         last_abs_x = pb.x;
                         last_abs_y = pb.y;
-                    }
-
-                    if machine.retraction > 0.0 {
-                        result.push_str(&format!(
-                            "G1 E{:.5} F{:.0} ; Retrakce\n",
-                            -machine.retraction, machine.retract_speed
-                        ));
-                        is_retracted = true;
                     }
                 }
 

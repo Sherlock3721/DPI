@@ -14,7 +14,6 @@
 
   let currentStep = 10.0;
   let customGCode = "";
-  let isMotorsOn = true;
 
   let status: PrinterStatus = {
     is_connected: false,
@@ -54,16 +53,6 @@
   async function homeZ() {
     if (!canControl) return;
     await sendGCode("G28 Z");
-  }
-
-  async function toggleMotors() {
-    if (!canControl) return;
-    isMotorsOn = !isMotorsOn;
-    if (isMotorsOn) {
-      await sendGCode("M17");
-    } else {
-      await sendGCode("M84");
-    }
   }
 
   async function runCalibration() {
@@ -257,15 +246,25 @@
     >
       KALIBRACE (G80)
     </button>
-    <button
-      type="button"
-      on:click={toggleMotors}
-      disabled={!canControl}
-      class="py-1.5 rounded font-bold text-center border transition-all {isMotorsOn && canControl
-        ? 'bg-orange-500/20 border-orange-500/40 text-orange-500 hover:bg-orange-500/30'
-        : 'bg-slate-850 border-slate-800 text-slate-400 disabled:opacity-40'}"
-    >
-      {isMotorsOn ? "MOTORY ZAPNUTY" : "MOTORY VYPNUTY"}
-    </button>
+    <div class="grid grid-cols-2 gap-1">
+      <button
+        type="button"
+        on:click={() => { sendGCode("M17"); }}
+        disabled={!canControl}
+        title="Zapnout motory (M17)"
+        class="py-1.5 rounded font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+      >
+        M17 ZAP
+      </button>
+      <button
+        type="button"
+        on:click={() => { sendGCode("M84"); }}
+        disabled={!canControl}
+        title="Vypnout motory (M84)"
+        class="py-1.5 rounded font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+      >
+        M84 VYP
+      </button>
+    </div>
   </div>
 </div>

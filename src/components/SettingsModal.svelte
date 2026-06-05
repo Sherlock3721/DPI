@@ -2,17 +2,52 @@
   import { onMount } from "svelte";
   import { get_app_settings, save_app_settings, send_manual_command, auto_connect_printer } from "../lib/tauri";
   import { printerStore } from "../stores/printerStore";
-  import { X, Plus, Trash2, Save, GripVertical, Sun, Moon, Monitor, Target } from "lucide-svelte";
+  import { X, Plus, Trash2, Save, GripVertical, Sun, Moon, Monitor, Target, ShieldAlert, Cog } from "lucide-svelte";
   import { createEventDispatcher } from "svelte";
 
   export let isOpen = false;
 
   const dispatch = createEventDispatcher();
-  let activeTab: "nozzles" | "glass" | "limits" | "leveling" | "gcode" | "program" = "nozzles";
+  let activeTab: "nozzles" | "glass" | "liquids" | "limits" | "leveling" | "gcode" | "program" = "nozzles";
 
   let settings: any = null;
   let nozzleList: { name: string; h: number; d: number; s: number; c: string }[] = [];
   let glassList: { name: string; w: number; h: number; z: number }[] = [];
+  let liquidList: {
+    name: string; color: string; category: string;
+    z_offset: number; z_offset_min: number | null; z_offset_max: number | null;
+    extrusion: number; extrusion_min: number | null; extrusion_max: number | null;
+    forbidden_nozzles: string[];
+    print_speed: number; print_speed_min: number | null; print_speed_max: number | null;
+    bed_temp: number; bed_temp_min: number | null; bed_temp_max: number | null;
+  }[] = [];
+  let expandedLiquidOrigIdx: number | null = null;
+  let liquidSortBy: "id" | "name" = "id";
+  $: displayLiquidIndices = liquidSortBy === "name"
+    ? [...Array(liquidList.length).keys()].sort((a, b) =>
+        liquidList[a].name.localeCompare(liquidList[b].name, "cs"))
+    : [...Array(liquidList.length).keys()];
+  $: liquidCategories = [...new Set(
+    liquidList.map(l => l.category?.trim() || "").filter(c => c !== "")
+  )].sort((a, b) => a.localeCompare(b, "cs"));
+  $: liquidsHaveCategories = liquidList.some(l => (l.category?.trim() || "") !== "");
+  $: liquidGroups = (() => {
+    const catMap = new Map<string, number[]>();
+    const uncat: number[] = [];
+    for (const origIdx of displayLiquidIndices) {
+      const cat = liquidList[origIdx]?.category?.trim() || "";
+      if (cat === "") { uncat.push(origIdx); }
+      else { if (!catMap.has(cat)) catMap.set(cat, []); catMap.get(cat)!.push(origIdx); }
+    }
+    const groups: { category: string; items: { origIdx: number; displayIdx: number }[] }[] = [];
+    let flatIdx = 0;
+    const catNames = [...catMap.keys()].sort((a, b) => a.localeCompare(b, "cs"));
+    for (const cat of catNames) {
+      groups.push({ category: cat, items: (catMap.get(cat) || []).map(origIdx => ({ origIdx, displayIdx: flatIdx++ })) });
+    }
+    if (uncat.length > 0) groups.push({ category: "", items: uncat.map(origIdx => ({ origIdx, displayIdx: flatIdx++ })) });
+    return groups;
+  })();
   let levelingPoints: { name: string; x: number; y: number }[] = [];
 
   const DEFAULT_LEVELING_POINTS = [
@@ -29,6 +64,24 @@
   let loading = false;
   let errorMsg = "";
 
+  // ─── Expert mode (session-only, never persisted) ──────────────────────────
+  let expertModeActive = false;
+  let showExpertWarning = false;
+
+  function requestExpertMode() {
+    if (!expertModeActive) showExpertWarning = true;
+  }
+
+  function confirmExpertMode() {
+    expertModeActive = true;
+    showExpertWarning = false;
+  }
+
+  function disableExpertMode() {
+    expertModeActive = false;
+    if (activeTab === "gcode") activeTab = "program";
+  }
+
   // ─── Theme ────────────────────────────────────────────────────────────────
   type Theme = "dark" | "light";
   let currentTheme: Theme = "dark";
@@ -39,17 +92,28 @@
     localStorage.setItem("app-theme", t);
   }
 
+  // ─── Sněžení ──────────────────────────────────────────────────────────────
+  function isSnowSeason(): boolean {
+    const now = new Date();
+    const m = now.getMonth() + 1;
+    const d = now.getDate();
+    return m === 12 || (m === 11 && d >= 15) || (m === 1 && d <= 30);
+  }
+  const snowSeason = isSnowSeason();
+  let snowDisabled = false;
+
   onMount(() => {
     const stored = localStorage.getItem("app-theme") as Theme | null;
     applyTheme(stored ?? "dark");
+    snowDisabled = localStorage.getItem("disable-snow") === "1";
   });
 
   // ─── Drag & Drop helper ───────────────────────────────────────────────────
   let dragSrcIndex: number | null = null;
   let dragOverIndex: number | null = null;
-  let dragList: "nozzles" | "glass" | null = null;
+  let dragList: "nozzles" | "glass" | "liquids" | null = null;
 
-  function onDragStart(e: DragEvent, list: "nozzles" | "glass", i: number) {
+  function onDragStart(e: DragEvent, list: "nozzles" | "glass" | "liquids", i: number) {
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", i.toString()); // Povinné pro Firefox
@@ -63,7 +127,7 @@
     dragOverIndex = i;
   }
 
-  function onDrop(list: "nozzles" | "glass", i: number) {
+  function onDrop(list: "nozzles" | "glass" | "liquids", i: number) {
     if (dragSrcIndex === null || dragList !== list || dragSrcIndex === i) {
       dragSrcIndex = dragOverIndex = null;
       return;
@@ -73,11 +137,17 @@
       const [item] = arr.splice(dragSrcIndex, 1);
       arr.splice(i, 0, item);
       nozzleList = arr;
-    } else {
+    } else if (list === "glass") {
       const arr = [...glassList];
       const [item] = arr.splice(dragSrcIndex, 1);
       arr.splice(i, 0, item);
       glassList = arr;
+    } else if (list === "liquids") {
+      const arr = [...liquidList];
+      const [item] = arr.splice(dragSrcIndex, 1);
+      arr.splice(i, 0, item);
+      liquidList = arr;
+      expandedLiquidOrigIdx = null;
     }
     dragSrcIndex = dragOverIndex = null;
   }
@@ -108,6 +178,18 @@
         w: val[0] ?? 25.0,
         h: val[1] ?? 75.0,
         z: val[2] ?? 1.0,
+      }));
+
+      // Liquids
+      liquidList = Object.entries(settings.liquid_defs || {}).map(([name, val]: [string, any]) => ({
+        name,
+        color: val.color ?? "#3b82f6",
+        category: val.category ?? "",
+        z_offset: val.z_offset ?? 0.2, z_offset_min: val.z_offset_min ?? null, z_offset_max: val.z_offset_max ?? null,
+        extrusion: val.extrusion ?? 5.0, extrusion_min: val.extrusion_min ?? null, extrusion_max: val.extrusion_max ?? null,
+        forbidden_nozzles: Array.isArray(val.forbidden_nozzles) ? val.forbidden_nozzles : [],
+        print_speed: val.print_speed ?? 1500, print_speed_min: val.print_speed_min ?? null, print_speed_max: val.print_speed_max ?? null,
+        bed_temp: val.bed_temp ?? 0, bed_temp_min: val.bed_temp_min ?? null, bed_temp_max: val.bed_temp_max ?? null,
       }));
 
       // Leveling points
@@ -144,6 +226,82 @@
   }
   function deleteGlass(i: number) {
     glassList = glassList.filter((_, idx) => idx !== i);
+  }
+
+  function addLiquid() {
+    liquidList = [...liquidList, {
+      name: "Nová kapalina", color: "#3b82f6", category: "",
+      z_offset: 0.2, z_offset_min: null, z_offset_max: null,
+      extrusion: 5.0, extrusion_min: null, extrusion_max: null,
+      forbidden_nozzles: [],
+      print_speed: 1500, print_speed_min: null, print_speed_max: null,
+      bed_temp: 0, bed_temp_min: null, bed_temp_max: null,
+    }];
+  }
+  function deleteLiquid(origIdx: number) {
+    if (expandedLiquidOrigIdx === origIdx) expandedLiquidOrigIdx = null;
+    else if (expandedLiquidOrigIdx !== null && expandedLiquidOrigIdx > origIdx) expandedLiquidOrigIdx--;
+    liquidList = liquidList.filter((_, idx) => idx !== origIdx);
+  }
+  function toggleLiquidExpand(origIdx: number) {
+    expandedLiquidOrigIdx = expandedLiquidOrigIdx === origIdx ? null : origIdx;
+  }
+
+  // ─── Nozzle drag-and-drop mezi povolen./zakázanými ────────────────────────
+  let nozzleDragSrcList: "allowed" | "forbidden" | null = null;
+  let nozzleDragSrcName = "";
+
+  function onNozzleDragStart(e: DragEvent, srcList: "allowed" | "forbidden", name: string) {
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    nozzleDragSrcList = srcList;
+    nozzleDragSrcName = name;
+  }
+
+  function onNozzleDragOver(e: DragEvent) {
+    e.preventDefault();
+  }
+
+  function onNozzleDrop(e: DragEvent, origIdx: number, targetList: "allowed" | "forbidden") {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!nozzleDragSrcList || nozzleDragSrcList === targetList) {
+      nozzleDragSrcList = null;
+      return;
+    }
+    moveLiquidNozzle(origIdx, nozzleDragSrcName, nozzleDragSrcList);
+    nozzleDragSrcList = null;
+  }
+
+  function onNozzleDragEnd() {
+    nozzleDragSrcList = null;
+    nozzleDragSrcName = "";
+  }
+
+  function moveLiquidNozzle(origIdx: number, nozzleName: string, fromList: "allowed" | "forbidden") {
+    if (fromList === "allowed") {
+      if (!liquidList[origIdx].forbidden_nozzles.includes(nozzleName)) {
+        liquidList[origIdx].forbidden_nozzles = [...liquidList[origIdx].forbidden_nozzles, nozzleName];
+        liquidList = liquidList;
+      }
+    } else {
+      liquidList[origIdx].forbidden_nozzles = liquidList[origIdx].forbidden_nozzles.filter((n) => n !== nozzleName);
+      liquidList = liquidList;
+    }
+  }
+
+  function allowedNozzlesFor(origIdx: number) {
+    const forbidden = liquidList[origIdx]?.forbidden_nozzles ?? [];
+    return nozzleList.filter((n) => !forbidden.includes(n.name));
+  }
+
+  function forbiddenNozzlesFor(origIdx: number) {
+    const forbidden = liquidList[origIdx]?.forbidden_nozzles ?? [];
+    return nozzleList.filter((n) => forbidden.includes(n.name));
+  }
+
+  export function openOnTab(tab: typeof activeTab) {
+    activeTab = tab;
   }
 
   function addLevelingPoint() {
@@ -288,11 +446,26 @@
         if (g.name.trim()) sklo_dims[g.name.trim()] = [g.w, g.h, g.z];
       });
 
+      const liquid_defs: Record<string, any> = {};
+      liquidList.forEach((l) => {
+        if (l.name.trim()) liquid_defs[l.name.trim()] = {
+          color: l.color,
+          category: l.category?.trim() || "",
+          z_offset: l.z_offset, z_offset_min: l.z_offset_min, z_offset_max: l.z_offset_max,
+          extrusion: l.extrusion, extrusion_min: l.extrusion_min, extrusion_max: l.extrusion_max,
+          forbidden_nozzles: l.forbidden_nozzles,
+          print_speed: l.print_speed, print_speed_min: l.print_speed_min, print_speed_max: l.print_speed_max,
+          bed_temp: l.bed_temp, bed_temp_min: l.bed_temp_min, bed_temp_max: l.bed_temp_max,
+        };
+      });
+
       settings.nozzle_defs = nozzle_defs;
       settings.sklo_dims = sklo_dims;
+      settings.liquid_defs = liquid_defs;
       settings.leveling_points = levelingPoints.map((p) => ({ name: p.name, x: p.x, y: p.y }));
 
       await save_app_settings(settings);
+      localStorage.setItem("disable-snow", snowDisabled ? "1" : "0");
       dispatch("save");
       isOpen = false;
     } catch (e) {
@@ -410,16 +583,10 @@
     svgDragTarget = null;
   }
 
-  function tabClass(tab: string) {
-    return activeTab === tab
-      ? "px-3 py-2 rounded text-left text-xs font-bold transition-colors bg-labaccent text-white shadow-md shadow-labaccent/20"
-      : "px-3 py-2 rounded text-left text-xs font-bold transition-colors text-slate-400 hover:bg-slate-900/40 hover:text-slate-200";
-  }
-
   async function restoreDefaults() {
     const confirmed = await import("@tauri-apps/plugin-dialog").then((m) =>
       m.ask(
-        "Opravdu chcete obnovit výchozí nastavení?\n\nPřepíšou se limitace tiskárny a inicializační G-kódy. Definice trysek a sklíček zůstanou zachovány.",
+        "Opravdu chcete obnovit výchozí nastavení?\n\nPřepíšou se limitace tiskárny a inicializační G-kódy. Definice trysek a substrátů zůstanou zachovány.",
         { title: "DPI", type: "warning" }
       )
     );
@@ -442,12 +609,50 @@
     settings.print_speed = 1500;
     settings.bed_min_temp = 30;
     settings.calibration_factor = 0.323877;
-    settings.calibration_object_height = 0.1;
     settings.leveling_circle_diameter = 8.0;
     settings.leveling_points = DEFAULT_LEVELING_POINTS;
     levelingPoints = DEFAULT_LEVELING_POINTS.map((p) => ({ ...p }));
   }
 </script>
+
+{#if showExpertWarning}
+  <div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+    <div class="glass-panel w-full max-w-sm rounded-xl border border-labred/40 shadow-2xl shadow-labred/10 p-6 flex flex-col gap-5">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-full bg-labred/20 border border-labred/40 flex items-center justify-center shrink-0">
+          <ShieldAlert class="w-5 h-5 text-labred" />
+        </div>
+        <div>
+          <h3 class="text-sm font-bold text-slate-200">Aktivovat expertní režim?</h3>
+          <p class="text-[10px] text-slate-500 mt-0.5">Tato akce zpřístupní nebezpečná nastavení</p>
+        </div>
+      </div>
+      <div class="flex flex-col gap-2 bg-labred/8 border border-labred/25 rounded-lg p-3">
+        <p class="text-[11px] text-labred/90 font-semibold">Upozornění — čtěte pozorně:</p>
+        <ul class="text-[11px] text-slate-400 flex flex-col gap-1 list-disc list-inside">
+          <li>Úprava G-kódů může způsobit kolizi nebo poškození tiskárny</li>
+          <li>Chybné příkazy mohou způsobit nekontrolovaný pohyb os</li>
+          <li>Změny provádějte pouze pokud víte, co děláte</li>
+          <li>Expertní režim se automaticky deaktivuje po zavření aplikace</li>
+        </ul>
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button
+          on:click={() => (showExpertWarning = false)}
+          class="px-4 py-2 text-xs font-bold rounded-lg border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
+        >
+          Zrušit
+        </button>
+        <button
+          on:click={confirmExpertMode}
+          class="px-4 py-2 text-xs font-bold rounded-lg bg-labred/80 hover:bg-labred text-white transition-colors flex items-center gap-1.5"
+        >
+          <ShieldAlert class="w-3.5 h-3.5" /> Rozumím, aktivovat
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if isOpen}
   <div
@@ -515,24 +720,37 @@
         <div class="flex-1 flex overflow-hidden">
           <!-- SIDEBAR -->
           <div
-            class="w-48 bg-slate-950/20 border-r border-slate-800 flex flex-col p-2 gap-1 relative"
+            class="w-36 bg-slate-950/20 border-r border-slate-800 flex flex-col p-2 gap-1 relative"
           >
             <div class="flex-1 flex flex-col gap-1">
-              <button on:click={() => (activeTab = "nozzles")} class={tabClass("nozzles")}
-                >Definice trysek</button
-              >
-              <button on:click={() => (activeTab = "glass")} class={tabClass("glass")}
-                >Rozměry sklíček</button
-              >
-              <button on:click={() => (activeTab = "limits")} class={tabClass("limits")}
-                >Limitace tiskárny</button
-              >
-              <button on:click={() => (activeTab = "gcode")} class={tabClass("gcode")}
-                >Inicializační G-kódy</button
-              >
-              <button on:click={() => (activeTab = "program")} class={tabClass("program")}
-                >Program</button
-              >
+              <button
+                on:click={() => (activeTab = "nozzles")}
+                class="px-3 py-2 rounded text-left text-xs font-bold transition-colors {activeTab === 'nozzles' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Tryska</button>
+              <button
+                on:click={() => (activeTab = "glass")}
+                class="px-3 py-2 rounded text-left text-xs font-bold transition-colors {activeTab === 'glass' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Skla</button>
+              <button
+                on:click={() => (activeTab = "liquids")}
+                class="px-3 py-2 rounded text-left text-xs font-bold transition-colors {activeTab === 'liquids' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Kapaliny</button>
+              <button
+                on:click={() => (activeTab = "limits")}
+                class="px-3 py-2 rounded text-left text-xs font-bold transition-colors {activeTab === 'limits' || activeTab === 'leveling' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Tiskárna</button>
+              {#if expertModeActive}
+                <button
+                  on:click={() => (activeTab = "gcode")}
+                  class="px-3 py-2 rounded text-left text-xs font-bold transition-colors flex items-center gap-1.5 {activeTab === 'gcode' ? 'bg-labred/80 text-white' : 'text-labred/70 hover:bg-labred/20 hover:text-labred'}"
+                >
+                  <ShieldAlert class="w-3 h-3 shrink-0" />G-kódy
+                </button>
+              {/if}
+              <button
+                on:click={() => (activeTab = "program")}
+                class="px-3 py-2 rounded text-left text-xs font-bold transition-colors {activeTab === 'program' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Program</button>
             </div>
             <button
               on:click={restoreDefaults}
@@ -664,7 +882,7 @@
                     class="grid grid-cols-12 bg-slate-950/50 p-2 font-bold text-[10px] text-slate-400 text-center border-b border-slate-800"
                   >
                     <span class="col-span-1"></span>
-                    <span class="col-span-4 text-left pl-1">Název sklíčka</span>
+                    <span class="col-span-4 text-left pl-1">Název substrátu</span>
                     <span class="col-span-2">Šířka X [mm]</span>
                     <span class="col-span-2">Výška Y [mm]</span>
                     <span class="col-span-2">Tloušťka Z [mm]</span>
@@ -734,7 +952,315 @@
               </div>
             {/if}
 
-            <!-- ═══ 3. LIMITY ═══ -->
+            <!-- ═══ 3. KAPALINY ═══ -->
+            {#if activeTab === "liquids"}
+              <div class="flex flex-col gap-3">
+                <!-- Header: název + sort + přidat -->
+                <div class="flex justify-between items-center pb-2 border-b border-slate-800">
+                  <div class="flex items-center gap-3">
+                    <span class="font-bold text-xs text-slate-300">Presety kapalin</span>
+                    <div class="flex items-center gap-0.5 bg-slate-900/60 border border-slate-800 rounded p-0.5">
+                      <button
+                        on:click={() => (liquidSortBy = "id")}
+                        class="px-2 py-0.5 text-[9px] font-bold rounded transition-colors {liquidSortBy === 'id' ? 'bg-labaccent text-white' : 'text-slate-400 hover:text-slate-200'}"
+                      >ID</button>
+                      <button
+                        on:click={() => (liquidSortBy = "name")}
+                        class="px-2 py-0.5 text-[9px] font-bold rounded transition-colors {liquidSortBy === 'name' ? 'bg-labaccent text-white' : 'text-slate-400 hover:text-slate-200'}"
+                      >A–Z</button>
+                    </div>
+                  </div>
+                  <button
+                    on:click={addLiquid}
+                    class="bg-labaccent hover:bg-blue-600 text-white text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1 transition-colors"
+                  >
+                    <Plus class="w-3 h-3" /> Přidat kapalinu
+                  </button>
+                </div>
+
+                <!-- Tabulka kapalin -->
+                <div class="flex flex-col border border-slate-800 rounded-lg overflow-hidden bg-slate-900/20">
+                  <!-- hlavička tabulky -->
+                  <div class="grid grid-cols-12 bg-slate-950/50 p-2 font-bold text-[10px] text-slate-400 text-center border-b border-slate-800">
+                    <span class="col-span-1"></span>
+                    <span class="col-span-1">Barva</span>
+                    <span class="col-span-5 text-left pl-1">Název kapaliny</span>
+                    <span class="col-span-4">Parametry</span>
+                    <span class="col-span-1">Akce</span>
+                  </div>
+
+                  <!-- datalist pro autocomplete kategorií -->
+                  <datalist id="liquid-categories-list">
+                    {#each liquidCategories as cat}
+                      <option value={cat} />
+                    {/each}
+                  </datalist>
+
+                  <div class="flex flex-col">
+                    {#if liquidGroups.length === 0}
+                      <div class="p-6 text-center text-slate-500 text-xs">
+                        Žádné kapaliny nejsou definovány.
+                      </div>
+                    {:else}
+                      {#each liquidGroups as group}
+                        <!-- kategorie hlavička -->
+                        {#if liquidsHaveCategories}
+                          <div class="flex items-center gap-2 px-3 py-1.5 bg-slate-900/70 border-b border-slate-700/80 border-t border-t-slate-700/40">
+                            <span class="w-1.5 h-1.5 rounded-full bg-labaccent flex-shrink-0"></span>
+                            <span class="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                              {group.category || "Bez kategorie"}
+                            </span>
+                            <span class="ml-auto text-[9px] text-slate-600">{group.items.length}</span>
+                          </div>
+                        {/if}
+                        <div class="flex flex-col divide-y divide-slate-800">
+                        {#each group.items as { origIdx, displayIdx }}
+                          {@const liquid = liquidList[origIdx]}
+                          {@const isExpanded = expandedLiquidOrigIdx === origIdx}
+                          <!-- svelte-ignore a11y-no-static-element-interactions -->
+                          <div class="flex flex-col">
+                            <!-- hlavní řádek -->
+                            <div
+                              class="grid grid-cols-12 p-2 items-center text-center gap-1 text-xs transition-colors
+                                     {dragOverIndex === displayIdx && dragList === 'liquids' && liquidSortBy === 'id' && !liquidsHaveCategories
+                                       ? 'bg-labaccent/10 border-t-2 border-labaccent'
+                                       : 'hover:bg-slate-900/30'}"
+                              draggable={liquidSortBy === "id" && !liquidsHaveCategories}
+                              on:dragstart={(e) => liquidSortBy === "id" && !liquidsHaveCategories && onDragStart(e, "liquids", displayIdx)}
+                              on:dragover={(e) => onDragOver(e, displayIdx)}
+                              on:drop={() => onDrop("liquids", displayIdx)}
+                              on:dragend={onDragEnd}
+                            >
+                              <!-- drag handle -->
+                              <div class="col-span-1 flex justify-center {liquidSortBy === 'id' && !liquidsHaveCategories ? 'text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing' : 'text-slate-800 cursor-default'}">
+                                <GripVertical class="w-3.5 h-3.5" />
+                              </div>
+                              <!-- barevný kroužek -->
+                              <div class="col-span-1 flex justify-center items-center">
+                                <label class="relative w-5 h-5 cursor-pointer block">
+                                  <span
+                                    class="block w-5 h-5 rounded-full border-2 border-slate-600 shadow-inner"
+                                    style="background-color: {liquid.color}"
+                                  ></span>
+                                  <input
+                                    type="color"
+                                    bind:value={liquidList[origIdx].color}
+                                    class="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                                  />
+                                </label>
+                              </div>
+                              <!-- název -->
+                              <input
+                                type="text"
+                                bind:value={liquidList[origIdx].name}
+                                class="col-span-5 input-premium py-0.5 text-left text-[11px]"
+                              />
+                              <!-- parametry tlačítko (ozubené kolečko) -->
+                              <button
+                                on:click={() => toggleLiquidExpand(origIdx)}
+                                title="Zobrazit / skrýt parametry kapaliny"
+                                class="col-span-4 flex items-center justify-center gap-1 py-0.5 rounded transition-colors
+                                       {isExpanded
+                                         ? 'text-labaccent bg-labaccent/10 border border-labaccent/30'
+                                         : 'text-slate-500 hover:text-slate-300 border border-transparent hover:border-slate-700'}"
+                              >
+                                <Cog class="w-3.5 h-3.5" />
+                              </button>
+                              <!-- smazat -->
+                              <button
+                                on:click={() => deleteLiquid(origIdx)}
+                                class="col-span-1 p-1 text-slate-500 hover:text-labred hover:bg-labred/10 rounded flex items-center justify-center transition-colors"
+                              >
+                                <Trash2 class="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <!-- rozbalené parametry kapaliny -->
+                            {#if isExpanded}
+                              <div class="bg-slate-950/50 border-t border-labaccent/20 px-4 py-2.5 text-[11px]">
+                                <!-- hlavička tabulky parametrů -->
+                                <div class="grid grid-cols-[1fr_5rem_5rem_5rem] gap-x-2 text-[9px] font-bold text-slate-500 uppercase tracking-wide pb-1.5 mb-1 border-b border-slate-800">
+                                  <span>Parametr</span>
+                                  <span class="text-center">Hodnota</span>
+                                  <span class="text-center">Min.</span>
+                                  <span class="text-center">Max.</span>
+                                </div>
+
+                                <!-- Kategorie -->
+                                <div class="grid grid-cols-[1fr_auto] gap-x-2 items-center py-1 border-b border-slate-900/70">
+                                  <span class="text-slate-400">Kategorie</span>
+                                  <input
+                                    type="text"
+                                    list="liquid-categories-list"
+                                    placeholder="Bez kategorie"
+                                    value={liquid.category ?? ""}
+                                    on:change={(e) => { liquidList[origIdx].category = e.currentTarget.value; liquidList = liquidList; }}
+                                    class="input-premium py-0.5 text-left w-40 placeholder-slate-700"
+                                  />
+                                </div>
+
+                            <!-- Výška trysky -->
+                            <div class="grid grid-cols-[1fr_5rem_5rem_5rem] gap-x-2 items-center py-1 border-b border-slate-900/70">
+                              <span class="text-slate-400">Výška trysky <span class="text-slate-600 text-[10px]">mm</span></span>
+                              <input type="number" step="0.05"
+                                value={liquid.z_offset}
+                                on:change={(e) => { liquidList[origIdx].z_offset = +e.currentTarget.value; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center" />
+                              <input type="number" step="0.05" placeholder="—"
+                                value={liquid.z_offset_min ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].z_offset_min = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                              <input type="number" step="0.05" placeholder="—"
+                                value={liquid.z_offset_max ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].z_offset_max = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                            </div>
+
+                            <!-- Extruze -->
+                            <div class="grid grid-cols-[1fr_5rem_5rem_5rem] gap-x-2 items-center py-1 border-b border-slate-900/70">
+                              <span class="text-slate-400">Extruze <span class="text-slate-600 text-[10px]">nl/mm</span></span>
+                              <input type="number" step="0.1" min="0"
+                                value={liquid.extrusion}
+                                on:change={(e) => { liquidList[origIdx].extrusion = +e.currentTarget.value; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center" />
+                              <input type="number" step="0.1" placeholder="—"
+                                value={liquid.extrusion_min ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].extrusion_min = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                              <input type="number" step="0.1" placeholder="—"
+                                value={liquid.extrusion_max ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].extrusion_max = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                            </div>
+
+                            <!-- Povolené trysky — dual DnD list -->
+                            <div class="py-2 border-b border-slate-900/70">
+                              <span class="text-slate-400 text-[10px] font-semibold block mb-1.5">Povolené trysky</span>
+                              <div class="flex gap-2">
+
+                                <!-- ── POVOLENÉ ── -->
+                                <!-- svelte-ignore a11y-no-static-element-interactions -->
+                                <div
+                                  class="flex-1 min-h-[40px] rounded border p-1 flex flex-col gap-0.5 transition-colors
+                                         {nozzleDragSrcList === 'forbidden' ? 'border-labaccent/60 bg-labaccent/5' : 'border-slate-700/50 bg-slate-900/30'}"
+                                  on:dragover={onNozzleDragOver}
+                                  on:drop={(e) => onNozzleDrop(e, origIdx, "allowed")}
+                                >
+                                  <div class="text-[8px] font-bold text-slate-500 uppercase tracking-wide px-0.5 pb-0.5 border-b border-slate-800 mb-0.5 shrink-0">
+                                    Povolené
+                                  </div>
+                                  {#each allowedNozzlesFor(origIdx) as n (n.name)}
+                                    <!-- svelte-ignore a11y-no-static-element-interactions -->
+                                    <div
+                                      draggable="true"
+                                      title="Přetáhněte nebo dvakrát klikněte pro přesun"
+                                      on:dragstart={(e) => onNozzleDragStart(e, "allowed", n.name)}
+                                      on:dragend={onNozzleDragEnd}
+                                      on:dragover={(e) => e.preventDefault()}
+                                      on:drop={(e) => { e.stopPropagation(); onNozzleDrop(e, origIdx, "allowed"); }}
+                                      on:dblclick={() => moveLiquidNozzle(origIdx, n.name, "allowed")}
+                                      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] text-slate-300 cursor-grab select-none
+                                             hover:bg-slate-800/60 active:opacity-60 transition-colors
+                                             {nozzleDragSrcList === 'allowed' && nozzleDragSrcName === n.name ? 'opacity-30' : ''}"
+                                    >
+                                      <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-slate-600" style="background-color: {n.c}"></span>
+                                      <span class="truncate flex-1">{n.name}</span>
+                                    </div>
+                                  {:else}
+                                    <div class="text-[10px] text-slate-700 px-1 py-0.5 italic">Žádné</div>
+                                  {/each}
+                                </div>
+
+                                <!-- separator -->
+                                <div class="flex items-center text-slate-600 text-sm select-none shrink-0">⇄</div>
+
+                                <!-- ── ZAKÁZANÉ ── -->
+                                <!-- svelte-ignore a11y-no-static-element-interactions -->
+                                <div
+                                  class="flex-1 min-h-[40px] rounded border p-1 flex flex-col gap-0.5 transition-colors
+                                         {nozzleDragSrcList === 'allowed' ? 'border-labred/40 bg-labred/5' : 'border-slate-700/50 bg-slate-900/30'}"
+                                  on:dragover={onNozzleDragOver}
+                                  on:drop={(e) => onNozzleDrop(e, origIdx, "forbidden")}
+                                >
+                                  <div class="text-[8px] font-bold text-slate-500 uppercase tracking-wide px-0.5 pb-0.5 border-b border-slate-800 mb-0.5 shrink-0">
+                                    Zakázané
+                                  </div>
+                                  {#each forbiddenNozzlesFor(origIdx) as n (n.name)}
+                                    <!-- svelte-ignore a11y-no-static-element-interactions -->
+                                    <div
+                                      draggable="true"
+                                      title="Přetáhněte nebo dvakrát klikněte pro přesun"
+                                      on:dragstart={(e) => onNozzleDragStart(e, "forbidden", n.name)}
+                                      on:dragend={onNozzleDragEnd}
+                                      on:dragover={(e) => e.preventDefault()}
+                                      on:drop={(e) => { e.stopPropagation(); onNozzleDrop(e, origIdx, "forbidden"); }}
+                                      on:dblclick={() => moveLiquidNozzle(origIdx, n.name, "forbidden")}
+                                      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] text-slate-400 cursor-grab select-none
+                                             hover:bg-slate-800/60 active:opacity-60 transition-colors
+                                             {nozzleDragSrcList === 'forbidden' && nozzleDragSrcName === n.name ? 'opacity-30' : ''}"
+                                    >
+                                      <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-slate-600 opacity-50" style="background-color: {n.c}"></span>
+                                      <span class="truncate flex-1 line-through opacity-60">{n.name}</span>
+                                    </div>
+                                  {:else}
+                                    <div class="text-[10px] text-slate-700 px-1 py-0.5 italic">Žádné</div>
+                                  {/each}
+                                </div>
+
+                              </div>
+                              <p class="text-[9px] text-slate-600 mt-1.5">Přetáhněte trysku nebo <strong class="text-slate-500">dvakrát klikněte</strong> pro přesun. Zakázané trysky se nezobrazí v nabídce.</p>
+                            </div>
+
+                            <!-- Rychlost tisku -->
+                            <div class="grid grid-cols-[1fr_5rem_5rem_5rem] gap-x-2 items-center py-1 border-b border-slate-900/70">
+                              <span class="text-slate-400">Rychlost tisku <span class="text-slate-600 text-[10px]">mm/min</span></span>
+                              <input type="number" step="50" min="0"
+                                value={liquid.print_speed}
+                                on:change={(e) => { liquidList[origIdx].print_speed = +e.currentTarget.value; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center" />
+                              <input type="number" step="50" placeholder="—"
+                                value={liquid.print_speed_min ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].print_speed_min = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                              <input type="number" step="50" placeholder="—"
+                                value={liquid.print_speed_max ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].print_speed_max = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                            </div>
+
+                            <!-- Výhřev podložky -->
+                            <div class="grid grid-cols-[1fr_5rem_5rem_5rem] gap-x-2 items-center py-1">
+                              <span class="text-slate-400">Výhřev podložky <span class="text-slate-600 text-[10px]">°C</span></span>
+                              <input type="number" step="5" min="0"
+                                value={liquid.bed_temp}
+                                on:change={(e) => { liquidList[origIdx].bed_temp = +e.currentTarget.value; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center" />
+                              <input type="number" step="5" placeholder="—"
+                                value={liquid.bed_temp_min ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].bed_temp_min = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                              <input type="number" step="5" placeholder="—"
+                                value={liquid.bed_temp_max ?? ""}
+                                on:change={(e) => { const v = e.currentTarget.value; liquidList[origIdx].bed_temp_max = v === "" ? null : +v; liquidList = liquidList; }}
+                                class="input-premium py-0.5 text-center placeholder-slate-700" />
+                            </div>
+                          </div>
+                        {/if}
+                          </div>
+                        {/each}
+                        </div>
+                      {/each}
+                    {/if}
+                  </div>
+                </div>
+
+                <p class="text-[10px] text-slate-500 flex items-center gap-1">
+                  <GripVertical class="w-3 h-3" /> {liquidsHaveCategories ? "Kapaliny jsou seskupeny dle kategorie." : "Přetáhněte řádky pro změnu pořadí (ID)."} Kliknutím na <Cog class="w-3 h-3 inline" /> zobrazíte parametry kapaliny — Min./Max. hodnoty jsou nadřazené globálním limitům.
+                </p>
+              </div>
+            {/if}
+
+            <!-- ═══ 4. TISKÁRNA ═══ -->
             {#if activeTab === "limits"}
               <div class="flex flex-col gap-5">
                 <span class="font-bold text-xs text-slate-300 pb-1 border-b border-slate-800"
@@ -752,8 +1278,8 @@
                     >
                   </div>
                   <p class="text-[10px] text-slate-500 pl-4">
-                    Pravá strana tisku je fixovaná. Oblast roste doleva — sklíčka se přidávají ve
-                    sloupcích od pravé strany.
+                    Levá strana tisku je výchozí. Oblast roste doprava — sklíčka se přidávají ve
+                    sloupcích od levé strany.
                   </p>
                   <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
                     <div class="grid grid-cols-5 items-center gap-3">
@@ -914,9 +1440,9 @@
                     </div>
                     <div class="grid grid-cols-5 items-center gap-3">
                       <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Mezera mezi sklíčky</div>
+                        <div class="text-slate-300 font-medium">Mezera mezi substráty</div>
                         <div class="text-[10px] text-slate-500 mt-0.5">
-                          Vzdálenost mezi sklíčky při multiplexním tisku
+                          Vzdálenost mezi substráty při multiplexním tisku
                         </div>
                       </div>
                       <div class="col-span-2 flex items-center gap-1.5">
@@ -964,24 +1490,6 @@
                           class="flex-1 input-premium py-1 text-center text-xs"
                         />
                         <span class="text-slate-500 text-[10px] w-12">krok/µl</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Výška kalibračního objektu</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Výška měrky / papíru použitého při kalibraci Z. Předvyplní se v
-                          kalibračním dialogu před tiskem
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="0.01"
-                          bind:value={settings.calibration_object_height}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
                       </div>
                     </div>
                   </div>
@@ -1411,6 +1919,41 @@
                   >Nastavení aplikace</span
                 >
 
+                <!-- EXPERTNÍ REŽIM -->
+                <div class="flex flex-col gap-3">
+                  <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Expertní režim</span>
+                  <div class="rounded-xl border-2 p-4 flex flex-col gap-3 transition-all
+                               {expertModeActive ? 'border-labred/50 bg-labred/5' : 'border-slate-700 bg-slate-900/40'}">
+                    <div class="flex items-center justify-between gap-4">
+                      <div class="flex items-center gap-2.5">
+                        <ShieldAlert class="w-4 h-4 shrink-0 {expertModeActive ? 'text-labred' : 'text-slate-500'}" />
+                        <div>
+                          <p class="text-xs font-bold {expertModeActive ? 'text-labred' : 'text-slate-300'}">Aktivovat expertní režim</p>
+                          <p class="text-[10px] text-slate-500 mt-0.5">Zpřístupní úpravu inicializačních G-kódů tiskárny. Platí jen pro toto spuštění.</p>
+                        </div>
+                      </div>
+                      <button
+                        on:click={expertModeActive ? disableExpertMode : requestExpertMode}
+                        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
+                               {expertModeActive ? 'border-labred bg-labred/80' : 'border-slate-600 bg-slate-700'}"
+                      >
+                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
+                                     {expertModeActive ? 'translate-x-4' : 'translate-x-0.5'}"></span>
+                      </button>
+                    </div>
+                    {#if expertModeActive}
+                      <div class="flex items-start gap-2 rounded-lg bg-labred/10 border border-labred/30 px-3 py-2">
+                        <ShieldAlert class="w-3.5 h-3.5 text-labred shrink-0 mt-0.5" />
+                        <p class="text-[10px] text-labred/90 leading-relaxed">
+                          Expertní režim je aktivní. Nesprávná úprava G-kódů může poškodit tiskárnu nebo způsobit nebezpečné pohyby. Režim se deaktivuje po zavření aplikace.
+                        </p>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="border-b border-slate-800/60"></div>
+
                 <!-- THEME -->
                 <div class="flex flex-col gap-3">
                   <span class="text-xs font-bold text-slate-400 uppercase tracking-wider"
@@ -1493,6 +2036,33 @@
                     Motiv se projeví okamžitě a zapamatuje si pro příští spuštění.
                   </p>
                 </div>
+
+                {#if snowSeason}
+                  <div class="border-b border-slate-800/60"></div>
+
+                  <!-- SNĚŽENÍ -->
+                  <div class="flex flex-col gap-3">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Sezónní efekty</span>
+                    <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
+                      <div class="flex items-center gap-2.5">
+                        <span class="text-lg leading-none select-none">❄️</span>
+                        <div>
+                          <p class="text-xs font-bold text-slate-300">Vypnout sněžení</p>
+                          <p class="text-[10px] text-slate-500 mt-0.5">Efekt padajícího sněhu (aktivní 15. 11. – 30. 1.)</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        on:click={() => (snowDisabled = !snowDisabled)}
+                        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
+                               {snowDisabled ? 'border-slate-600 bg-slate-700' : 'border-labaccent bg-labaccent/80'}"
+                      >
+                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
+                                     {snowDisabled ? 'translate-x-0.5' : 'translate-x-4'}"></span>
+                      </button>
+                    </div>
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>

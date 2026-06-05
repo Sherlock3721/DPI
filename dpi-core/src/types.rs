@@ -21,6 +21,8 @@ pub struct PathSegment {
     pub points: Vec<Point2D>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_filled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_stroke: Option<bool>,
 }
 
 impl PathSegment {
@@ -28,6 +30,7 @@ impl PathSegment {
         Self {
             points,
             is_filled: None,
+            has_stroke: None,
         }
     }
 
@@ -125,8 +128,6 @@ pub struct MachineConfig {
     pub multi_spacing: f64,
     pub block_height: f64,
     pub calibration_factor: f64,
-    pub retraction: f64,
-    pub retract_speed: f64,
     /// Výška Z-hopu nad povrchem sklíčka při přejezdech (mm).
     pub z_hop: f64,
     /// Bezpečná Z-výška pro virtuální posun nuly (mm).
@@ -169,4 +170,5 @@ pub struct SlideOverride {
     pub infill_style: Option<String>,
     pub slide_w: Option<f64>,
     pub slide_h: Option<f64>,
+    pub glass_type: Option<String>,
 }

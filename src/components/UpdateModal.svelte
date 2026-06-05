@@ -2,6 +2,7 @@
   import { createEventDispatcher } from "svelte";
   import { check, type Update } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import { getVersion } from "@tauri-apps/api/app";
   import { Download, RefreshCw, CheckCircle, XCircle, X } from "lucide-svelte";
 
   export let autoCheck = false;
@@ -21,6 +22,8 @@
   let errorMsg = "";
   let downloaded = 0;
   let total = 0;
+  let currentVersion = "";
+  getVersion().then((v) => (currentVersion = v));
 
   $: progress = total > 0 ? Math.round((downloaded / total) * 100) : 0;
 
@@ -111,7 +114,7 @@
       {:else if phase === "up-to-date"}
         <CheckCircle class="w-8 h-8 text-labgreen" />
         <p class="text-slate-200 text-sm font-semibold">Máte nejnovější verzi</p>
-        <p class="text-slate-400 text-xs">Žádná aktualizace není k dispozici.</p>
+        <p class="text-slate-400 text-xs">Žádná aktualizace není k dispozici.{currentVersion ? ` (verze ${currentVersion})` : ""}</p>
 
       {:else if phase === "available"}
         <Download class="w-8 h-8 text-labaccent" />

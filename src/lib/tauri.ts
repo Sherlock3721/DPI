@@ -62,6 +62,7 @@ export interface SlideOverride {
   infill_style?: string | null;
   slide_w?: number | null;
   slide_h?: number | null;
+  glass_type?: string | null;
 }
 
 export interface LayoutPosition {
@@ -125,7 +126,6 @@ export interface AppSettings {
   // Mechanika tiskárny
   block_height: number;
   hidden_nozzle_part: number;
-  retraction: number;
   print_speed: number;
   // G-kód makra
   start_gcode: string;
@@ -142,7 +142,6 @@ export interface AppSettings {
   filament_diameter: number;
   flow_multiplier: number;
   calibration_factor: number;
-  calibration_object_height: number;
   // Definice sklíček a trysek
   sklo_dims: Record<string, [number, number, number]>;
   nozzle_defs: Record<string, [number, number, number, string]>;
@@ -158,6 +157,15 @@ export interface AppSettings {
   path_fineness: number;
   z_step: number;
   liquid_density: number;
+  liquid_defs?: Record<string, {
+    color?: string;
+    category?: string;
+    z_offset?: number; z_offset_min?: number | null; z_offset_max?: number | null;
+    extrusion?: number; extrusion_min?: number | null; extrusion_max?: number | null;
+    forbidden_nozzles?: string[];
+    print_speed?: number; print_speed_min?: number | null; print_speed_max?: number | null;
+    bed_temp?: number; bed_temp_min?: number | null; bed_temp_max?: number | null;
+  }>;
   // Neznámá rozšíření z JSON souboru
   [key: string]: unknown;
 }
@@ -200,7 +208,8 @@ export async function calculate_slide_layout(
   startOffsetX: number,
   startOffsetY: number,
   primeActive: boolean,
-  bedMinX: number = 0.0
+  bedMinX: number = 0.0,
+  primeGlassType: string | null = null
 ): Promise<LayoutPosition[]> {
   return await invoke<LayoutPosition[]>("calculate_layout", {
     count,
@@ -213,6 +222,7 @@ export async function calculate_slide_layout(
     startOffsetY,
     primeActive,
     bedMinX,
+    primeGlassType,
   });
 }
 
@@ -237,7 +247,8 @@ export async function recalculate_layout(
   oldPositions: LayoutPosition[],
   currentTransforms: Transform[],
   currentPaths: SubstratePaths[],
-  nozzleDiam: number
+  nozzleDiam: number,
+  primeGlassType: string | null = null
 ): Promise<LayoutWithTransforms> {
   return await invoke<LayoutWithTransforms>("recalculate_layout", {
     sampleCount,
@@ -254,6 +265,7 @@ export async function recalculate_layout(
     currentTransforms,
     currentPaths,
     nozzleDiam,
+    primeGlassType,
   });
 }
 
@@ -273,8 +285,6 @@ export async function generate_gcode(
   multiSpacing: number,
   blockHeight: number,
   calibrationFactor: number,
-  retraction: number,
-  retractSpeed: number,
   bedMinX: number = 0.0,
   zHop: number = 2.0,
   safeZ: number = 20.0
@@ -295,8 +305,6 @@ export async function generate_gcode(
     multiSpacing,
     blockHeight,
     calibrationFactor,
-    retraction,
-    retractSpeed,
     bedMinX,
     zHop,
     safeZ,
