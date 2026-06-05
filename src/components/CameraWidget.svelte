@@ -14,6 +14,7 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { writeFile } from "@tauri-apps/plugin-fs";
   import CustomSelect from "./CustomSelect.svelte";
+  import { cameraStream } from "../stores/cameraStore";
 
   let videoElementInline: HTMLVideoElement;
   let videoElementPopup: HTMLVideoElement;
@@ -128,6 +129,7 @@
       mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       if (videoElementInline) videoElementInline.srcObject = mediaStream;
       if (videoElementPopup) videoElementPopup.srcObject = mediaStream;
+      cameraStream.set(mediaStream);
       isActive = true;
     } catch (e: any) {
       console.error("Nelze spustit kameru s HD rozlišením, zkouším fallback:", e);
@@ -139,6 +141,7 @@
         mediaStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
         if (videoElementInline) videoElementInline.srcObject = mediaStream;
         if (videoElementPopup) videoElementPopup.srcObject = mediaStream;
+        cameraStream.set(mediaStream);
         isActive = true;
       } catch (err2) {
         console.error("Nelze spustit kameru ani s fallbackem:", err2);
@@ -155,6 +158,7 @@
     if (mediaStream) {
       mediaStream.getTracks().forEach((track) => track.stop());
       mediaStream = null;
+      cameraStream.set(null);
     }
     if (videoElementInline) videoElementInline.srcObject = null;
     if (videoElementPopup) videoElementPopup.srcObject = null;
@@ -500,7 +504,7 @@
   </div>
 
   <!-- VIEWFINDER AREA -->
-  {#if !isMaximized}
+  {#if !isMaximized && (isActive || errorMessage)}
     <div
       class="relative w-full aspect-video bg-black overflow-hidden flex items-center justify-center"
     >

@@ -103,7 +103,7 @@ jobs:
           TAG="${TAG}"
           ZIP_NAME="${{ steps.win.outputs.zip_name }}"
           WIN_SIG=$(cat "${{ steps.win.outputs.sig }}")
-          WIN_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$ZIP_NAME"
+          WIN_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${ZIP_NAME// /.}"
           VERSION=$(node -e "const c=require('./src-tauri/tauri.conf.json'); console.log(c.version)")
 
           # Stáhni existující latest.json (z Linux buildu)

@@ -9,17 +9,46 @@
     dispatch("close");
   }
 
-  const shortcuts = [
-    { keys: ["Ctrl", "O"], desc: "Otevřít projekt / Načíst soubor" },
-    { keys: ["Ctrl", "S"], desc: "Uložit projekt / Generovat G-Code" },
-    { keys: ["Ctrl", "Z"], desc: "Zpět (Undo)" },
+  type ShortcutGroup = { group: string };
+  type ShortcutItem = { keys: string[]; desc: string };
+  type ShortcutEntry = ShortcutGroup | ShortcutItem;
+
+  function isGroup(e: ShortcutEntry): e is ShortcutGroup {
+    return "group" in e;
+  }
+
+  const shortcuts: ShortcutEntry[] = [
+    { group: "Globální" },
+    { keys: ["Ctrl", "O"],       desc: "Načíst soubor (G-Code / SVG / DXF)" },
+    { keys: ["Ctrl", "S"],       desc: "Vygenerovat G-kód" },
+    { keys: ["Ctrl", "Z"],       desc: "Zpět (Undo)" },
     { keys: ["Ctrl", "Shift", "Z"], desc: "Znovu (Redo)" },
-    { keys: ["Ctrl", "Q"], desc: "Ukončit aplikaci" },
-    { keys: ["Z"], desc: "Přepnout nástroj Zoom" },
-    { keys: ["H"], desc: "Přepnout nástroj Ručička (Pan)" },
-    { keys: ["Mezerník"], desc: "Držením dočasně aktivovat Ručičku (Pan)" },
-    { keys: ["Kolečko myši"], desc: "Přiblížit / Oddálit (Zoom)" },
-    { keys: ["Delete"], desc: "Smazat vybraný vzorek na ploše" },
+    { keys: ["Ctrl", "Q"],       desc: "Ukončit aplikaci" },
+
+    { group: "Pohled a výběr" },
+    { keys: ["Kolečko myši"],    desc: "Přiblížit / Oddálit" },
+    { keys: ["LMB tažení"],      desc: "Panoramování pohledu (na prázdné ploše)" },
+    { keys: ["LMB"],             desc: "Vybrat substrát" },
+    { keys: ["LMB tažení"],      desc: "Přesunout trasu (na vybraném sklíčku)" },
+    { keys: ["Dvojklik"],        desc: "Přepnout Scale ↔ Rotate mód" },
+    { keys: ["RMB"],             desc: "Kontextové menu sklíčka" },
+
+    { group: "Modifikátory při tažení" },
+    { keys: ["Ctrl"],            desc: "Přichytit k mřížce (Snap to Grid)" },
+    { keys: ["Alt"],             desc: "Synchronizovaný pohyb všech substrátů" },
+    { keys: ["Shift"],           desc: "Anchor na středu při škálování" },
+    { keys: ["Ctrl"],            desc: "Zaokrouhlit měřítko na 0.1 / rotaci na 15°" },
+
+    { group: "Vybraný substrát" },
+    { keys: ["Delete"],          desc: "Smazat dráhu sklíčka" },
+    { keys: ["↑ ↓ ← →"],        desc: "Posunout trasu o 1 mm" },
+    { keys: ["Shift", "↑ ↓ ← →"], desc: "Posunout trasu o 0.1 mm" },
+
+    { group: "Měřidlo" },
+    { keys: ["LMB"],             desc: "Přidat bod měření" },
+    { keys: ["RMB"],             desc: "Smazat poslední bod měření" },
+    { keys: ["Ctrl / Alt"],      desc: "Přichytit k mřížce nebo rohům sklíček" },
+    { keys: ["Escape"],          desc: "Zrušit měření / Reset transformačního módu" },
   ];
 </script>
 
@@ -36,7 +65,7 @@
     >
       <!-- Hlavička -->
       <div class="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-950/50">
-        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+        <h2 class="text-lg font-bold text-slate-200 flex items-center gap-2">
           <Keyboard class="w-5 h-5 text-labaccent" />
           Klávesové zkratky
         </h2>
@@ -46,26 +75,34 @@
       </div>
 
       <!-- Obsah -->
-      <div class="p-6 overflow-y-auto max-h-[60vh] custom-scrollbar">
-        <div class="space-y-3">
-          {#each shortcuts as sc}
-            <div
-              class="flex items-center justify-between p-2 hover:bg-slate-800/50 rounded-lg transition-colors border border-transparent hover:border-slate-700"
-            >
-              <span class="text-slate-300 text-sm">{sc.desc}</span>
-              <div class="flex items-center gap-1.5">
-                {#each sc.keys as k}
-                  <kbd
-                    class="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs text-slate-200 font-mono shadow-sm"
-                  >
-                    {k}
-                  </kbd>
-                  {#if k !== sc.keys[sc.keys.length - 1]}
-                    <span class="text-slate-500 text-xs">+</span>
-                  {/if}
-                {/each}
+      <div class="px-4 py-4 overflow-y-auto max-h-[65vh] custom-scrollbar">
+        <div class="space-y-0.5">
+          {#each shortcuts as entry}
+            {#if isGroup(entry)}
+              <div class="pt-3 pb-1 first:pt-0">
+                <span class="text-[10px] font-bold uppercase tracking-widest text-labaccent/80">
+                  {entry.group}
+                </span>
               </div>
-            </div>
+            {:else}
+              <div
+                class="flex items-center justify-between px-2 py-1.5 hover:bg-slate-800/50 rounded-lg transition-colors"
+              >
+                <span class="text-slate-300 text-sm">{entry.desc}</span>
+                <div class="flex items-center gap-1 shrink-0 ml-3">
+                  {#each entry.keys as k, i}
+                    <kbd
+                      class="px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-xs text-slate-200 font-mono shadow-sm whitespace-nowrap"
+                    >
+                      {k}
+                    </kbd>
+                    {#if i < entry.keys.length - 1}
+                      <span class="text-slate-500 text-xs">+</span>
+                    {/if}
+                  {/each}
+                </div>
+              </div>
+            {/if}
           {/each}
         </div>
       </div>

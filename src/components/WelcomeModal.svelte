@@ -1,11 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
-  import { FolderOpen, FileText, Github, Clock, ChevronRight } from "lucide-svelte";
+  import { FolderOpen, FileText, Code, Clock, ChevronRight } from "lucide-svelte";
   import { recentFilesStore, type RecentFile } from "../stores/projectStore";
   import { open } from "@tauri-apps/plugin-shell";
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import QRCode from "qrcode";
-  import iconImg from "../assets/icon.png";
+  import iconImg from "../assets/icon.avif";
 
   export let show: boolean = false;
 
@@ -13,6 +14,7 @@
 
   let networkUrl = "";
   let qrCodeDataUrl = "";
+  let appVersion = "";
 
   function handleNewProject() {
     dispatch("newProject");
@@ -31,6 +33,7 @@
   }
 
   onMount(async () => {
+    appVersion = await getVersion().catch(() => "");
     try {
       const ip: string = await invoke("get_local_ip");
       networkUrl = `http://${ip}:5173`;
@@ -62,11 +65,11 @@
         <div class="bg-labaccent/20 p-2 rounded-2xl mb-4 shadow-lg shadow-labaccent/10">
           <img src={iconImg} alt="DPI Icon" class="w-16 h-16 object-contain" />
         </div>
-        <h1 class="text-2xl font-bold text-white tracking-wide">Droplet Printing Interface</h1>
+        <h1 class="text-2xl font-bold text-slate-200 tracking-wide">Droplet Printing Interface</h1>
         <div
           class="text-slate-400 text-sm mt-1 font-mono bg-slate-950 px-3 py-1 rounded-full border border-slate-800"
         >
-          Verze 1.5.0
+          Verze {appVersion}
         </div>
       </div>
 
@@ -155,9 +158,9 @@
         </div>
         <button
           on:click={openGithub}
-          class="flex items-center gap-1.5 hover:text-white transition-colors"
+          class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
         >
-          <Github class="w-3.5 h-3.5" />
+          <Code class="w-3.5 h-3.5" />
           <span>github.com/Sherlock3721/DPI</span>
         </button>
       </div>

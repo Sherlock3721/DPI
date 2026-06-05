@@ -113,24 +113,21 @@ pub fn parse_temperatures(line: &str) -> Option<(f64, f64)> {
 /// Pomocný parser souřadnic trysky z G0/G1 příkazů.
 /// Vrací trojici (Option<f64>, Option<f64>, Option<f64>) reprezentující X, Y, Z.
 pub fn parse_gcode_pos(line: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
-    let mut x = None;
-    let mut y = None;
-    let mut z = None;
-    let line_up = line.to_uppercase();
-
-    if line_up.starts_with("G0") || line_up.starts_with("G1") {
-        x = parse_axis(&line_up, 'X');
-        y = parse_axis(&line_up, 'Y');
-        z = parse_axis(&line_up, 'Z');
+    // Rychlá kontrola bez alokace paměti
+    if !(line.starts_with("G0") || line.starts_with("G1") || line.starts_with("g0") || line.starts_with("g1")) {
+        return (None, None, None);
     }
+    let x = parse_axis(line, 'X', 'x');
+    let y = parse_axis(line, 'Y', 'y');
+    let z = parse_axis(line, 'Z', 'z');
     (x, y, z)
 }
 
-/// Pomocná funkce pro parsování jedné osy ze G-kódu.
+/// Pomocná funkce pro parsování jedné osy ze G-kódu bez alokace paměti.
 #[inline]
-fn parse_axis(line_up: &str, axis: char) -> Option<f64> {
-    let idx = line_up.find(axis)?;
-    let sub = &line_up[idx + 1..];
+fn parse_axis(line: &str, axis_upper: char, axis_lower: char) -> Option<f64> {
+    let idx = line.find(|c: char| c == axis_upper || c == axis_lower)?;
+    let sub = &line[idx + 1..];
     let end = sub
         .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
         .unwrap_or(sub.len());
@@ -343,7 +340,10 @@ pub fn spawn_comms_loop(
     thread::spawn(move || {
         let mut serial_port = port;
         let mut gcode_queue: Vec<String> = Vec::new();
+        let mut dist_per_line: Vec<f64> = Vec::new();
         let mut queue_idx: usize = 0;
+        let mut print_total_dist = 0.0_f64;
+        let mut dist_sent = 0.0_f64;
         let mut print_total_time = 0.0_f64;
         let mut print_start_time = Instant::now();
         let mut paused_duration = Duration::ZERO;
@@ -391,7 +391,33 @@ pub fn spawn_comms_loop(
                             }
                         }
 
+                        // Pre-výpočet vzdálenosti extruze pro každý řádek fronty.
+                        // Slouží k výpočtu progress% podle ujeté vzdálenosti tisku (ne počtu řádků).
+                        dist_per_line.clear();
+                        dist_per_line.reserve(gcode_queue.len());
+                        {
+                            let mut cur_x = 0.0_f64;
+                            let mut cur_y = 0.0_f64;
+                            for line in &gcode_queue {
+                                let (ox, oy, _) = parse_gcode_pos(line);
+                                let new_x = ox.unwrap_or(cur_x);
+                                let new_y = oy.unwrap_or(cur_y);
+                                let is_extrusion = parse_axis(line, 'E', 'e').is_some()
+                                    && (line.starts_with("G1") || line.starts_with("g1"));
+                                let d = if is_extrusion {
+                                    ((new_x - cur_x).powi(2) + (new_y - cur_y).powi(2)).sqrt()
+                                } else {
+                                    0.0
+                                };
+                                dist_per_line.push(d);
+                                if ox.is_some() { cur_x = new_x; }
+                                if oy.is_some() { cur_y = new_y; }
+                            }
+                        }
+
                         queue_idx = 0;
+                        print_total_dist = total_dist;
+                        dist_sent = 0.0;
                         print_total_time = total_time;
                         print_start_time = Instant::now();
                         paused_duration = Duration::ZERO;
@@ -518,27 +544,39 @@ pub fn spawn_comms_loop(
                                 Instant::now() + Duration::from_secs(BLOCKING_OK_TIMEOUT_SECS);
                             let mut got_ok = false;
                             while Instant::now() < deadline {
-                                while let Ok(msg) = reader_rx.try_recv() {
-                                    match msg {
-                                        ReaderMessage::Ok => {
-                                            got_ok = true;
+                                match reader_rx.recv_timeout(Duration::from_millis(5)) {
+                                    Ok(msg) => {
+                                        match msg {
+                                            ReaderMessage::Ok => got_ok = true,
+                                            ReaderMessage::Temperatures(te, tb) => {
+                                                let mut status = status_arc2
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                status.temp_extruder = te;
+                                                status.temp_bed = tb;
+                                                let _ = app_handle.emit("printer-status-changed", status.clone());
+                                            }
                                         }
-                                        ReaderMessage::Temperatures(te, tb) => {
-                                            let mut status = status_arc2
-                                                .lock()
-                                                .unwrap_or_else(|e| e.into_inner());
-                                            status.temp_extruder = te;
-                                            status.temp_bed = tb;
-                                            app_handle
-                                                .emit("printer-status-changed", status.clone())
-                                                .ok();
+                                        while let Ok(msg2) = reader_rx.try_recv() {
+                                            match msg2 {
+                                                ReaderMessage::Ok => got_ok = true,
+                                                ReaderMessage::Temperatures(te, tb) => {
+                                                    let mut status = status_arc2
+                                                        .lock()
+                                                        .unwrap_or_else(|e| e.into_inner());
+                                                    status.temp_extruder = te;
+                                                    status.temp_bed = tb;
+                                                    let _ = app_handle.emit("printer-status-changed", status.clone());
+                                                }
+                                            }
                                         }
                                     }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                                 }
                                 if got_ok {
                                     break;
                                 }
-                                thread::sleep(Duration::from_millis(5));
                             }
 
                             if !got_ok {
@@ -566,7 +604,9 @@ pub fn spawn_comms_loop(
 
                     PrinterCommand::Stop => {
                         gcode_queue.clear();
+                        dist_per_line.clear();
                         queue_idx = 0;
+                        dist_sent = 0.0;
                         pause_start = None;
 
                         // Nouzový stop a bezpečný odjezd trysky (stejně jako Python)
@@ -678,32 +718,49 @@ pub fn spawn_comms_loop(
                         let mut stop_requested = false;
 
                         'wait_ok: while ping_start.elapsed() < Duration::from_secs(OK_TIMEOUT_SECS) {
-                            // Nejdříve zkusíme zprávy ze čtecího vlákna
-                            while let Ok(msg) = reader_rx.try_recv() {
-                                match msg {
-                                    ReaderMessage::Ok => {
-                                        ok_received = true;
-                                        break 'wait_ok;
+                            // Čteme zprávy z tiskárny s timeoutem (odstraní stuttering způsobený thread::sleep)
+                            match reader_rx.recv_timeout(Duration::from_millis(5)) {
+                                Ok(msg) => {
+                                    match msg {
+                                        ReaderMessage::Ok => { ok_received = true; }
+                                        ReaderMessage::Temperatures(te, tb) => {
+                                            let mut status =
+                                                status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                                            status.temp_extruder = te;
+                                            status.temp_bed = tb;
+                                            let _ = app_handle.emit("printer-status-changed", status.clone());
+                                        }
                                     }
-                                    ReaderMessage::Temperatures(te, tb) => {
-                                        let mut status =
-                                            status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                                        status.temp_extruder = te;
-                                        status.temp_bed = tb;
-                                        app_handle
-                                            .emit("printer-status-changed", status.clone())
-                                            .ok();
+                                    while let Ok(msg2) = reader_rx.try_recv() {
+                                        match msg2 {
+                                            ReaderMessage::Ok => { ok_received = true; }
+                                            ReaderMessage::Temperatures(te, tb) => {
+                                                let mut status =
+                                                    status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                                                status.temp_extruder = te;
+                                                status.temp_bed = tb;
+                                                let _ = app_handle.emit("printer-status-changed", status.clone());
+                                            }
+                                        }
                                     }
                                 }
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'wait_ok,
+                            }
+
+                            if ok_received {
+                                break 'wait_ok;
                             }
 
                             // Zpracujeme příkazy z Tauri během čekání na "ok"
                             // OPRAVA: zpracujeme ALL příkazy, nejen Stop
-                            if let Ok(cmd) = cmd_rx.try_recv() {
+                            while let Ok(cmd) = cmd_rx.try_recv() {
                                 match cmd {
                                     PrinterCommand::Stop => {
                                         gcode_queue.clear();
+                                        dist_per_line.clear();
                                         queue_idx = 0;
+                                        dist_sent = 0.0;
                                         pause_start = None;
                                         let _ = serial_port.clear(serialport::ClearBuffer::Output);
                                         let _ = serial_port.clear(serialport::ClearBuffer::Input);
@@ -782,8 +839,6 @@ pub fn spawn_comms_loop(
                                     }
                                 }
                             }
-
-                            thread::sleep(Duration::from_millis(5));
                         }
 
                         if stop_requested {
@@ -791,12 +846,17 @@ pub fn spawn_comms_loop(
                         }
 
                         if ok_received {
+                            // Přičteme vzdálenost právě dokončeného řádku
+                            dist_sent += dist_per_line.get(queue_idx).copied().unwrap_or(0.0);
                             queue_idx += 1;
 
                             // Aktualizace postupu tisku a odhadovaného zbývajícího času
                             let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                            let progress =
-                                ((queue_idx as f64 / gcode_queue.len() as f64) * 100.0) as usize;
+                            let progress = if print_total_dist > 0.0 {
+                                ((dist_sent / print_total_dist) * 100.0).min(100.0) as usize
+                            } else {
+                                ((queue_idx as f64 / gcode_queue.len().max(1) as f64) * 100.0) as usize
+                            };
                             status.progress = progress;
 
                             // Odečteme akumulovanou dobu pauzy (jako Python: start_time += pause_duration)
@@ -819,6 +879,13 @@ pub fn spawn_comms_loop(
                                 .emit("printer-status-changed", status.clone())
                                 .ok();
                         }
+                    } else {
+                        // Chyba zápisu na sériový port — tisk přerušíme
+                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                        status.is_printing = false;
+                        app_handle
+                            .emit("printer-status-changed", status.clone())
+                            .ok();
                     }
                 } else {
                     // Konec fronty — tisk úspěšně dokončen

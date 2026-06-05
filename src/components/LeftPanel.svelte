@@ -199,20 +199,6 @@
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (pauseMessage === null) return;
-    // 100 ms guard: filtruje pouze keydown eventy, které byly ve frontě
-    // ještě před zobrazením dialogu (fyzické stisknutí tlačítka, které dialog spustilo).
-    // Windows auto-repeat nastupuje až po ~500 ms, takže záměrné stisky tím nejsou blokovány.
-    if (Date.now() - pauseShownAt < 100) return;
-
-    if (e.key !== "Enter" && e.key !== " " && e.key !== "Escape") return;
-    if (e.repeat) return;
-
-    e.preventDefault();
-    dismissPause();
-  }
-
   // Rozdělí gcode na segmenty oddělené pausovacími příkazy (M0/M1/M601).
   // Vrací pole [{code, msg}] kde msg je text z M1 příkazu nebo null pro poslední segment.
   function splitGcodeByPauses(gcode: string): Array<{ code: string; msg: string | null }> {
@@ -606,6 +592,11 @@
 <div
   class="glass-panel rounded-lg p-2 flex flex-col gap-2 overflow-hidden h-full text-xs select-text"
 >
+  <!-- NADPIS PANELU -->
+  <div class="flex items-center gap-1.5 text-sm font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-2 shrink-0">
+    <span>Globální nastavení</span>
+  </div>
+
   <!-- HLAVNÍ FORMULÁŘ -->
   <div class="flex flex-col gap-1.5 flex-1 overflow-y-auto min-h-0">
     <!-- SEKCE: PODLOŽKA -->
@@ -1145,7 +1136,6 @@
   </button>
 </div>
 
-<svelte:window on:keydown={handleKeydown} />
 
 {#if pauseMessage !== null}
   <div

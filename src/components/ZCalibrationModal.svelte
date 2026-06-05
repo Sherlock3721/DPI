@@ -1,22 +1,22 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { send_manual_command } from "../lib/tauri";
   import { ArrowUp, ArrowDown, Check, CameraOff, Info } from "lucide-svelte";
+  import { cameraStream } from "../stores/cameraStore";
 
   export let glassZTheoretical: number;
-  export let blockHeight: number = 34.0;
 
   const dispatch = createEventDispatcher();
   let calibrationShift = 0.0;
   let isMoving = false;
   let selectedStep = 0.1;
-  let localBlockHeight = blockHeight;
 
   const steps = [0.5, 0.1, 0.05, 0.01];
 
   // Camera
   let videoElement: HTMLVideoElement;
-  let mediaStream: MediaStream | null = null;
+  let ownStream: MediaStream | null = null;  // pouze pokud jsme stream vytvořili sami
   let cameraError = false;
 
   const rotation = parseInt(localStorage.getItem("preferredCameraRotation") || "0");
@@ -37,33 +37,61 @@
   }
 
   async function startCamera() {
+    if (!videoElement) return;
+    // Preferujeme sdílený stream z CameraWidget — bez prodlevy, kamera již běží
+    const shared = get(cameraStream);
+    if (shared) {
+      videoElement.srcObject = shared;
+      videoElement.play().catch(() => {});
+      return;
+    }
+    // Fallback: vlastní stream (CameraWidget není aktivní)
     try {
       const savedDeviceId = localStorage.getItem("preferredCameraId") || "";
       const constraints = { video: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true };
-      mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (videoElement) videoElement.srcObject = mediaStream;
+      ownStream = await navigator.mediaDevices.getUserMedia(constraints);
+      videoElement.srcObject = ownStream;
+      videoElement.play().catch(() => {});
     } catch (e) {
       cameraError = true;
     }
   }
 
   function stopCamera() {
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((t) => t.stop());
-      mediaStream = null;
+    // Sdílený stream nezastavujeme — vlastní ano
+    if (ownStream) {
+      ownStream.getTracks().forEach((t) => t.stop());
+      ownStream = null;
     }
+    if (videoElement) videoElement.srcObject = null;
   }
 
   function confirm() {
-    dispatch("confirm", { shift: calibrationShift, blockHeight: localBlockHeight });
+    dispatch("confirm", { shift: calibrationShift });
   }
 
   function cancel() {
     dispatch("cancel");
   }
 
-  onMount(() => startCamera());
-  onDestroy(() => stopCamera());
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveZ(1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveZ(-1);
+    }
+  }
+
+  onMount(() => {
+    startCamera();
+    window.addEventListener("keydown", handleKeydown);
+  });
+  onDestroy(() => {
+    stopCamera();
+    window.removeEventListener("keydown", handleKeydown);
+  });
 </script>
 
 <div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -91,25 +119,10 @@
       </p>
     </div>
 
-    <!-- CONTROLS BAR: výška kalibrátoru vlevo, krok vpravo -->
+    <!-- CONTROLS BAR: krok -->
     <div
-      class="flex items-center justify-between gap-4 px-5 py-2.5 border-b border-slate-700 bg-slate-900/40"
+      class="flex items-center justify-end gap-4 px-5 py-2.5 border-b border-slate-700 bg-slate-900/40"
     >
-      <!-- Calibrator height -->
-      <div class="flex items-center gap-2 shrink-0">
-        <span class="text-xs text-slate-400">Tloušťka papíru/plastu:</span>
-        <div class="flex items-center gap-1">
-          <input
-            type="number"
-            bind:value={localBlockHeight}
-            min="0"
-            step="0.1"
-            class="w-20 bg-slate-800 border border-slate-600 text-slate-200 text-xs font-mono rounded px-2 py-1 text-right focus:outline-none focus:border-labaccent"
-          />
-          <span class="text-xs text-slate-400">mm</span>
-        </div>
-      </div>
-
       <!-- Step selector -->
       <div class="flex items-center gap-2">
         <span class="text-xs text-slate-400 shrink-0">Krok:</span>

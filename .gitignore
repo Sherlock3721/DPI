@@ -35,3 +35,23 @@ Thumbs.db
 # Lokální skripty
 # =========================
 release.sh
+
+# =========================
+# Bezpečnost a citlivá data (Security & Credentials)
+# =========================
+# Soukromé klíče a certifikáty
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+src-tauri/*.key
+
+# Lokální konfigurace, zpětná vazba a tajné soubory
+feedback_log.json
+*feedback*.json
+*secret*
+*credentials*
+local_settings.json
+config.private.json

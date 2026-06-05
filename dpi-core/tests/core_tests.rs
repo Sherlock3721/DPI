@@ -47,20 +47,17 @@ fn test_layout_calculation_basic() {
         offset_x: start_offset_x,
         offset_y: start_offset_y,
     };
-    let positions = get_layout_positions(2, slide_w, slide_h, spacing, false, &bed);
+    let positions = get_layout_positions(2, slide_w, slide_h, spacing, false, None, &bed);
 
     assert_eq!(positions.len(), 2);
 
-    // First slide should be placed at the right-front column
-    // base_right = 250 - 18 = 232
-    // sample_x = 232 - 25 = 207
-    assert_eq!(positions[0].x, 207.0);
+    // First slide: curr_x = min_x + offset_x = 0 + 18 = 18
+    assert_eq!(positions[0].x, 18.0);
     assert_eq!(positions[0].y, 11.0);
     assert_eq!(positions[0].is_prime, false);
 
-    // Second slide should be placed in the same column, shifted in Y
-    // y2 = 11.0 + 75.0 + 5.0 = 91.0
-    assert_eq!(positions[1].x, 207.0);
+    // Second slide: same column, y2 = 11.0 + 75.0 + 5.0 = 91.0
+    assert_eq!(positions[1].x, 18.0);
     assert_eq!(positions[1].y, 91.0);
 }
 
@@ -78,7 +75,7 @@ fn test_layout_multiplex_column_overflow() {
     // Slide 1 Y: 11 -> 86
     // Slide 2 Y: 91 -> 166
     // Slide 3 would overflow (166 + 5 + 75 = 246 > 210)
-    // So Slide 3 must jump to a new column on the left!
+    // So Slide 3 must jump to a new column on the right!
     let bed = BedConfig {
         max_x: bed_max_x,
         max_y: bed_max_y,
@@ -86,15 +83,13 @@ fn test_layout_multiplex_column_overflow() {
         offset_x: start_offset_x,
         offset_y: start_offset_y,
     };
-    let positions = get_layout_positions(3, slide_w, slide_h, spacing, false, &bed);
+    let positions = get_layout_positions(3, slide_w, slide_h, spacing, false, None, &bed);
 
     assert_eq!(positions.len(), 3);
 
     // Slide 3 X location:
-    // Prev column left = base_right - col_w = 232 - 25 = 207
-    // New column right = 207 - 5 = 202
-    // Slide 3 X = 202 - 25 = 177
-    assert_eq!(positions[2].x, 177.0);
+    // curr_x after overflow = 18 + 25 + 5 = 48
+    assert_eq!(positions[2].x, 48.0);
     assert_eq!(positions[2].y, 11.0);
 }
 
@@ -108,25 +103,25 @@ fn test_layout_small_bed() {
         offset_x: 18.0,
         offset_y: 11.0,
     };
-    let positions = get_layout_positions(2, 76.0, 26.0, 5.0, true, &bed);
+    let positions = get_layout_positions(2, 76.0, 26.0, 5.0, true, None, &bed);
 
     // Prime + 2 samples
     assert_eq!(positions.len(), 3, "prime + 2 vzorky");
 
-    // Prime: base_right = 92, p_x = 92-76 = 16, šířka 76
+    // Prime: curr_x = min_x + offset_x = 0 + 18 = 18
     let prime = &positions[0];
     assert!(prime.is_prime);
-    assert_eq!(prime.x, 16.0);
+    assert_eq!(prime.x, 18.0);
     assert_eq!(prime.y, 11.0);
     assert!(
         prime.x >= 0.0 && prime.x + prime.width <= 110.0,
         "prime mimo podložku"
     );
 
-    // Sample 1: curr_y = 11+26+5 = 42, sample_x = 16
+    // Sample 1: curr_y = 11+26+5 = 42, x = 18
     let s1 = &positions[1];
     assert!(!s1.is_prime);
-    assert_eq!(s1.x, 16.0);
+    assert_eq!(s1.x, 18.0);
     assert_eq!(s1.y, 42.0);
     assert!(
         s1.x >= 0.0 && s1.x + s1.width <= 110.0,
@@ -139,7 +134,7 @@ fn test_layout_small_bed() {
 
     // Sample 2: curr_y = 42+26+5 = 73
     let s2 = &positions[2];
-    assert_eq!(s2.x, 16.0);
+    assert_eq!(s2.x, 18.0);
     assert_eq!(s2.y, 73.0);
     assert!(
         s2.x >= 0.0 && s2.x + s2.width <= 110.0,
@@ -226,8 +221,6 @@ fn test_gcode_generation_z_shift() {
         multi_spacing: 5.0,
         block_height: 34.0,
         calibration_factor: 0.0141,
-        retraction: 0.0,
-        retract_speed: 3000.0,
         z_hop: 2.0,
         safe_z: 20.0,
     };
@@ -304,6 +297,7 @@ fn test_gcode_generation_with_overrides() {
             infill_style: None,
             slide_w: None,
             slide_h: None,
+            glass_type: None,
         },
     );
 
@@ -322,8 +316,6 @@ fn test_gcode_generation_with_overrides() {
         multi_spacing: 5.0,
         block_height: 34.0,
         calibration_factor: 0.0141,
-        retraction: 0.0,
-        retract_speed: 3000.0,
         z_hop: 2.0,
         safe_z: 20.0,
     };
@@ -525,6 +517,7 @@ fn test_metadata_overrides_round_trip() {
             infill_style: Some("Okraje".to_string()),
             slide_w: None,
             slide_h: None,
+            glass_type: None,
         },
     );
     // Sklíčko 2: pouze rychlost
@@ -609,4 +602,251 @@ fn test_metadata_overrides_round_trip() {
     assert_eq!(restored.source_file_name, "vzorky.dxf");
     assert_eq!(restored.source_file_ext, "dxf");
     assert!(!restored.auto_scale);
+}
+
+/// Pomocná funkce: ověří monotónnost a boustrofedon pořadí infill segmentů.
+fn assert_boustrophedon(segs: &[&PathSegment], label: &str) {
+    let infill: Vec<&&PathSegment> = segs
+        .iter()
+        .filter(|s| {
+            s.points.len() == 2
+                && ((s.points[0].x - s.points[1].x).abs() > 1e-6
+                    || (s.points[0].y - s.points[1].y).abs() > 1e-6)
+        })
+        .collect();
+
+    assert!(!infill.is_empty(), "{}: žádné infill segmenty", label);
+
+    let ys: Vec<f64> = infill.iter().map(|s| s.points[0].y).collect();
+    let ascending = ys.windows(2).all(|w| w[1] >= w[0] - 1e-6);
+    let descending = ys.windows(2).all(|w| w[1] <= w[0] + 1e-6);
+    assert!(
+        ascending || descending,
+        "{}: Y-pořadí není monotónní (skok!): {:?}",
+        label,
+        ys
+    );
+
+    for (i, seg) in infill.iter().enumerate() {
+        if i % 2 == 0 {
+            assert!(
+                seg.points[0].x <= seg.points[1].x + 1e-6,
+                "{}: řada {} musí jít vlevo→vpravo (x0={:.3} x1={:.3})",
+                label, i, seg.points[0].x, seg.points[1].x
+            );
+        } else {
+            assert!(
+                seg.points[0].x >= seg.points[1].x - 1e-6,
+                "{}: řada {} musí jít vpravo→vlevo (x0={:.3} x1={:.3})",
+                label, i, seg.points[0].x, seg.points[1].x
+            );
+        }
+    }
+}
+
+/// Ověří že infill scanlines jsou v boustrofedon pořadí (Y monotónní, střídání směru).
+/// Simuluje obdélník 20×10 mm s výplní 2 mm — očekáváme ~5 řad bez skoků.
+#[test]
+fn test_infill_boustrophedon_order() {
+    // Jednoduchý obdélník 20×10 mm, pouze výplň (bez okraje)
+    let rect = vec![
+        Point2D::new(0.0, 0.0),
+        Point2D::new(20.0, 0.0),
+        Point2D::new(20.0, 10.0),
+        Point2D::new(0.0, 10.0),
+        Point2D::new(0.0, 0.0),
+    ];
+    let raw = SubstratePaths::new(vec![PathSegment {
+        points: rect,
+        is_filled: Some(true),
+        has_stroke: Some(false),
+    }]);
+
+    let params = SliceParams {
+        slide_w: 30.0,
+        slide_h: 20.0,
+        margin: 1.0,
+        auto_scale: false,
+        infill_style: "Okraje + Výplň".to_string(),
+        infill_val: 2.0,
+        infill_type: "mm".to_string(),
+        infill_angle: 0.0,
+        nozzle_diam: 0.4,
+        user_scale: 1.0,
+    };
+
+    let result = process_substrate_paths(&raw, &params);
+
+    // Vyfiltruj pouze 2-bodové infill segmenty (ne tečky — ty mají start==end)
+    let infill: Vec<&PathSegment> = result
+        .segments
+        .iter()
+        .filter(|s| {
+            s.points.len() == 2
+                && ((s.points[0].x - s.points[1].x).abs() > 1e-6
+                    || (s.points[0].y - s.points[1].y).abs() > 1e-6)
+        })
+        .collect();
+
+    assert!(!infill.is_empty(), "Žádné infill segmenty nenalezeny");
+
+    let infill: Vec<&PathSegment> = result
+        .segments
+        .iter()
+        .filter(|s| {
+            s.points.len() == 2
+                && ((s.points[0].x - s.points[1].x).abs() > 1e-6
+                    || (s.points[0].y - s.points[1].y).abs() > 1e-6)
+        })
+        .collect();
+
+    assert_boustrophedon(&infill, "jednoduchý obdélník");
+}
+
+/// Ověří že celé objekty jsou renderovány zleva doprava.
+/// Tři obdélníky jsou zadány v OPAČNÉM pořadí (pravý, střední, levý) —
+/// výstup musí mít segmenty seřazeny: levý → střední → pravý.
+#[test]
+fn test_object_rendering_order_left_to_right() {
+    let make_rect = |x0: f64, x1: f64, y0: f64, y1: f64| -> PathSegment {
+        PathSegment {
+            points: vec![
+                Point2D::new(x0, y0),
+                Point2D::new(x1, y0),
+                Point2D::new(x1, y1),
+                Point2D::new(x0, y1),
+                Point2D::new(x0, y0),
+            ],
+            is_filled: Some(true),
+            has_stroke: Some(false),
+        }
+    };
+
+    // Záměrně v opačném pořadí: pravý (X=21-29), střední (X=11-19), levý (X=1-9)
+    let raw = SubstratePaths::new(vec![
+        make_rect(21.0, 29.0, 1.0, 8.0),
+        make_rect(11.0, 19.0, 1.0, 8.0),
+        make_rect(1.0,  9.0,  1.0, 8.0),
+    ]);
+
+    let params = SliceParams {
+        slide_w: 50.0,
+        slide_h: 20.0,
+        margin: 0.5,
+        auto_scale: false,
+        infill_style: "Okraje + Výplň".to_string(),
+        infill_val: 2.0,
+        infill_type: "mm".to_string(),
+        infill_angle: 0.0,
+        nozzle_diam: 0.4,
+        user_scale: 1.0,
+    };
+
+    let result = process_substrate_paths(&raw, &params);
+
+    // Filtruj pouze infill segmenty (2 body, horizontální)
+    let segs: Vec<&PathSegment> = result
+        .segments
+        .iter()
+        .filter(|s| {
+            s.points.len() == 2
+                && (s.points[0].x - s.points[1].x).abs() > 1e-6
+                && (s.points[0].y - s.points[1].y).abs() < 1e-6
+        })
+        .collect();
+
+    assert!(!segs.is_empty(), "Žádné infill segmenty nenalezeny");
+
+    // Každý segment přiřaď k objektu podle X midpointu
+    // Po normalizaci a centrování:
+    //   bbox: x=1..29, y=1..8, span=28
+    //   off_x = (50 - 28) / 2 = 11
+    //   levý obj:    X = 11+0 .. 11+8  = 11..19
+    //   střední obj: X = 11+10.. 11+18 = 21..29
+    //   pravý obj:   X = 11+20.. 11+28 = 31..39
+    let group = |x_mid: f64| -> u8 {
+        if x_mid < 20.0 { 0 } // levý
+        else if x_mid < 30.0 { 1 } // střední
+        else { 2 } // pravý
+    };
+
+    let groups: Vec<u8> = segs
+        .iter()
+        .map(|s| group((s.points[0].x + s.points[1].x) / 2.0))
+        .collect();
+
+    // Skupiny nesmí nikdy klesat: 0…0, 1…1, 2…2 (žádný přechod zpět)
+    for i in 1..groups.len() {
+        assert!(
+            groups[i] >= groups[i - 1],
+            "Objekty nejsou renderovány zleva doprava: přechod z grupy {} na {} u segmentu {}",
+            groups[i - 1], groups[i], i
+        );
+    }
+
+    // A pořadí skupin musí být 0 → 1 → 2
+    let seen_groups: Vec<u8> = {
+        let mut v: Vec<u8> = groups.clone();
+        v.dedup();
+        v
+    };
+    assert_eq!(
+        seen_groups,
+        vec![0, 1, 2],
+        "Pořadí objektů není 0(levý)→1(střední)→2(pravý): {:?}",
+        seen_groups
+    );
+}
+
+/// Polygon s dírou (vnější rect + vnitřní elipsa) — přesný případ z asdf.gcode (rect2).
+/// NN dříve způsoboval skoky Y=17→14→13→15→16 kvůli proměnlivé šířce bbox.
+#[test]
+fn test_infill_boustrophedon_with_hole() {
+    // Vnější obdélník 20×12 mm
+    let outer = vec![
+        Point2D::new(0.0, 0.0),
+        Point2D::new(20.0, 0.0),
+        Point2D::new(20.0, 12.0),
+        Point2D::new(0.0, 12.0),
+        Point2D::new(0.0, 0.0),
+    ];
+    // Vnitřní elipsa jako díra (8 bodů)
+    let hole: Vec<Point2D> = (0..=8)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 8.0;
+            Point2D::new(10.0 + 4.0 * a.cos(), 6.0 + 2.5 * a.sin())
+        })
+        .collect();
+
+    let raw = SubstratePaths::new(vec![
+        PathSegment { points: outer, is_filled: Some(true), has_stroke: Some(false) },
+        PathSegment { points: hole,  is_filled: Some(true), has_stroke: Some(false) },
+    ]);
+
+    let params = SliceParams {
+        slide_w: 30.0,
+        slide_h: 20.0,
+        margin: 1.0,
+        auto_scale: false,
+        infill_style: "Okraje + Výplň".to_string(),
+        infill_val: 1.0,
+        infill_type: "mm".to_string(),
+        infill_angle: 0.0,
+        nozzle_diam: 0.4,
+        user_scale: 1.0,
+    };
+
+    let result = process_substrate_paths(&raw, &params);
+
+    let infill: Vec<&PathSegment> = result
+        .segments
+        .iter()
+        .filter(|s| {
+            s.points.len() == 2
+                && ((s.points[0].x - s.points[1].x).abs() > 1e-6
+                    || (s.points[0].y - s.points[1].y).abs() > 1e-6)
+        })
+        .collect();
+
+    assert_boustrophedon(&infill, "polygon s dírou");
 }

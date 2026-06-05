@@ -39,6 +39,7 @@ fn calculate_layout(
     start_offset_y: f64,
     prime_active: bool,
     bed_min_x: f64,
+    prime_glass_type: Option<String>,
 ) -> Vec<dpi_core::LayoutPosition> {
     let bed = dpi_core::BedConfig {
         max_x: bed_max_x,
@@ -47,7 +48,7 @@ fn calculate_layout(
         offset_x: start_offset_x,
         offset_y: start_offset_y,
     };
-    dpi_core::get_layout_positions(count, slide_w, slide_h, spacing, prime_active, &bed)
+    dpi_core::get_layout_positions(count, slide_w, slide_h, spacing, prime_active, prime_glass_type.as_deref(), &bed)
 }
 
 #[tauri::command]
@@ -68,8 +69,6 @@ fn generate_gcode_job(
     multi_spacing: f64,
     block_height: f64,
     calibration_factor: f64,
-    retraction: f64,
-    retract_speed: f64,
     bed_min_x: f64,
     z_hop: f64,
     safe_z: f64,
@@ -89,8 +88,6 @@ fn generate_gcode_job(
         multi_spacing,
         block_height,
         calibration_factor,
-        retraction,
-        retract_speed,
         z_hop,
         safe_z,
     };
@@ -260,6 +257,7 @@ fn recalculate_layout(
     current_transforms: Vec<dpi_core::Transform>,
     current_paths: Vec<dpi_core::SubstratePaths>,
     nozzle_diam: f64,
+    prime_glass_type: Option<String>,
 ) -> dpi_core::LayoutWithTransforms {
     let bed = dpi_core::BedConfig {
         max_x: bed_max_x,
@@ -269,7 +267,7 @@ fn recalculate_layout(
         offset_y: start_offset_y,
     };
     let positions =
-        dpi_core::get_layout_positions(sample_count, slide_w, slide_h, multi_spacing, prime_active, &bed);
+        dpi_core::get_layout_positions(sample_count, slide_w, slide_h, multi_spacing, prime_active, prime_glass_type.as_deref(), &bed);
     let old_non_prime: Vec<dpi_core::LayoutPosition> =
         old_positions.into_iter().filter(|p| !p.is_prime).collect();
     let transforms = dpi_core::fit_transforms_to_layout(
@@ -361,7 +359,6 @@ const DEFAULT_SETTINGS_JSON: &str = r##"{
     "block_height": 34.0,
     "hidden_nozzle_part": 4.0,
     "print_speed": 1500,
-    "retraction": 0.0,
     "bed_min_temp": 30,
     "start_gcode": ";FLAVOR:Marlin\n; --- INICIALIZACE TISKÁRNY PRO KAPALINY ---\nM201 X1000 Y1000 Z200 E5000\nM203 X200 Y200 Z12 E120\nM204 S1250 T1250\nM205 X8.00 Y8.00 Z0.40 E4.50\nM205 S0 T0\n\nG90 ; use absolute coordinates\nM83 ; extruder RELATIVE mode\nM302 P1 ; disable cold extrusion checking\nM302 S0 ; always allow extrusion\nM900 K0 ; disable Linear Advance for liquids\n\nG28\nG92 E0.0\n",
     "loop_start_gcode": "",

@@ -54,8 +54,15 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
     let block = &gcode[meta_start..meta_end];
     let json_text: String = block
         .lines()
-        .filter(|l| l.starts_with("; "))
-        .map(|l| &l[2..])
+        .filter(|l| l.starts_with(';'))
+        .map(|l| {
+            let s = l.trim_start_matches(';');
+            if s.starts_with(' ') {
+                &s[1..]
+            } else {
+                s
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

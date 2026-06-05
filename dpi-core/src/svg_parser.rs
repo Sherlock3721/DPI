@@ -66,10 +66,11 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 let y1 = attr_f64(&node, "y1");
                 let x2 = attr_f64(&node, "x2");
                 let y2 = attr_f64(&node, "y2");
-                segments.push(PathSegment::new(vec![
-                    Point2D::new(x1, y1),
-                    Point2D::new(x2, y2),
-                ]));
+                segments.push(PathSegment {
+                    points: vec![Point2D::new(x1, y1), Point2D::new(x2, y2)],
+                    is_filled: Some(false),
+                    has_stroke: Some(has_stroke(&node)),
+                });
             }
             "rect" => {
                 let x = attr_f64(&node, "x");
@@ -87,6 +88,7 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 rx = rx.min(w / 2.0);
                 ry = ry.min(h / 2.0);
 
+                let stroke = has_stroke(&node);
                 if rx <= 0.0 || ry <= 0.0 {
                     let pts = vec![
                         Point2D::new(x, y),
@@ -98,6 +100,7 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                     segments.push(PathSegment {
                         points: pts,
                         is_filled: Some(filled),
+                        has_stroke: Some(stroke),
                     });
                 } else {
                     let steps = (8.0 * fineness).round().max(3.0) as usize;
@@ -136,6 +139,7 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                     segments.push(PathSegment {
                         points: pts,
                         is_filled: Some(filled),
+                        has_stroke: Some(stroke),
                     });
                 }
             }
@@ -156,6 +160,7 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 segments.push(PathSegment {
                     points: pts,
                     is_filled: Some(has_fill(&node)),
+                    has_stroke: Some(has_stroke(&node)),
                 });
             }
             "ellipse" => {
@@ -176,6 +181,7 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 segments.push(PathSegment {
                     points: pts,
                     is_filled: Some(has_fill(&node)),
+                    has_stroke: Some(has_stroke(&node)),
                 });
             }
             "polyline" | "polygon" => {
@@ -199,26 +205,23 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                         pts.push(first);
                     }
                 }
-                let filled = if is_polygon {
-                    Some(has_fill(&node))
-                } else {
-                    Some(false)
-                };
+                let filled = if is_polygon { Some(has_fill(&node)) } else { Some(false) };
+                let stroke = Some(has_stroke(&node));
                 segments.push(PathSegment {
                     points: pts,
                     is_filled: filled,
+                    has_stroke: stroke,
                 });
             }
             "path" => {
                 let elem_filled = has_fill(&node);
+                let elem_stroke = has_stroke(&node);
                 let d = node.attribute("d").unwrap_or("");
                 let mut path_segs = parse_path_d(d, fineness);
                 for seg in &mut path_segs {
-                    if !is_path_closed(&seg.points) {
-                        seg.is_filled = Some(false);
-                    } else {
-                        seg.is_filled = Some(elem_filled);
-                    }
+                    let closed = is_path_closed(&seg.points);
+                    seg.is_filled = Some(if closed { elem_filled } else { false });
+                    seg.has_stroke = Some(elem_stroke);
                 }
                 segments.extend(path_segs);
             }
@@ -300,7 +303,28 @@ fn has_fill(node: &roxmltree::Node) -> bool {
     if let Some(fill) = node.attribute("fill") {
         return fill.to_lowercase() != "none";
     }
-    true
+    true // SVG výchozí výplň je černá
+}
+
+fn has_stroke(node: &roxmltree::Node) -> bool {
+    if let Some(style) = node.attribute("style") {
+        for part in style.split(';') {
+            let part = part.trim().to_lowercase();
+            // Jen "stroke:" — ne "stroke-width:", "stroke-dasharray:" apod.
+            if part.starts_with("stroke:") || part.starts_with("stroke :") {
+                if let Some(val) = part.splitn(2, ':').nth(1) {
+                    let val = val.trim();
+                    if !val.is_empty() {
+                        return val != "none";
+                    }
+                }
+            }
+        }
+    }
+    if let Some(stroke) = node.attribute("stroke") {
+        return stroke.to_lowercase() != "none";
+    }
+    false // SVG výchozí tah je none
 }
 
 fn is_path_closed(pts: &[Point2D]) -> bool {

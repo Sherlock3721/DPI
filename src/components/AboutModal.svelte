@@ -1,10 +1,16 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { X, FlaskConical, Github } from "lucide-svelte";
+  import { createEventDispatcher, onMount } from "svelte";
+  import { X, FlaskConical, Code } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-shell";
+  import { getVersion } from "@tauri-apps/api/app";
 
   export let show: boolean = false;
   const dispatch = createEventDispatcher();
+
+  let appVersion = "";
+  onMount(async () => {
+    appVersion = await getVersion();
+  });
 
   function close() {
     dispatch("close");
@@ -28,7 +34,7 @@
     >
       <!-- Hlavička -->
       <div class="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-950/50">
-        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+        <h2 class="text-lg font-bold text-slate-200 flex items-center gap-2">
           <FlaskConical class="w-5 h-5 text-labaccent" />
           O programu
         </h2>
@@ -44,7 +50,7 @@
         </div>
 
         <div>
-          <h1 class="text-2xl font-bold text-white tracking-wide">Droplet Printing Interface</h1>
+          <h1 class="text-2xl font-bold text-slate-200 tracking-wide">Droplet Printing Interface</h1>
           <p class="text-slate-400 text-sm mt-1">
             Pokročilý nástroj pro generování a správu G-code
           </p>
@@ -53,7 +59,7 @@
         <div class="bg-slate-950 px-4 py-2 rounded-lg border border-slate-800 w-full">
           <div class="grid grid-cols-2 gap-2 text-sm text-left">
             <span class="text-slate-500">Verze:</span>
-            <span class="text-slate-200 font-mono text-right">1.5.0</span>
+            <span class="text-slate-200 font-mono text-right">{appVersion}</span>
             <span class="text-slate-500">Autor:</span>
             <span class="text-slate-200 text-right">Cyril Veverka</span>
             <span class="text-slate-500">Sestavení:</span>
@@ -74,7 +80,7 @@
           on:click={openGithub}
           class="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
         >
-          <Github class="w-4 h-4" />
+          <Code class="w-4 h-4" />
           Zdrojové kódy
         </button>
         <button

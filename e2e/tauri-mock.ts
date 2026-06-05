@@ -13,7 +13,7 @@ export const TAURI_MOCK_SCRIPT = `
     start_offset_x: 18, start_offset_y: 11,
     multi_spacing: 5, block_height: 34,
     hidden_nozzle_part: 4, print_speed: 1500,
-    retraction: 0, bed_min_temp: 30,
+    bed_min_temp: 30,
     default_z_offset: 0.2, default_z_hop: 2.0, safe_z: 20.0,
     default_speed: 1500, default_infill: 1.0, default_density: 0.05,
     filament_diameter: 9.5, flow_multiplier: 1.0,

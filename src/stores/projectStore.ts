@@ -81,21 +81,21 @@ const defaultProjectState: ProjectState = {
     slide_w: 25.0,
     slide_h: 75.0,
     slide_z: 2.0,
-    z_offset: 0.2,
-    z_unit: "mm",
+    z_offset: 50,
+    z_unit: "µm",
     nozzle_height: 30.0,
     nozzle_hidden: 4.0,
     filament_diameter: 9.5,
     flow_multiplier: 1.0,
     bed_temp: 0,
-    extrusion_rate: 1.0,
+    extrusion_rate: 200.0,
     extrusion_unit: "nl/mm",
     nozzle_diam: 0.4,
     infill_style: "Okraje + Výplň",
     infill_val: 1.0,
     infill_type: "mm",
     infill_angle: 0,
-    print_speed: 1500.0,
+    print_speed: 600.0,
     nozzle_type: "Červená",
   },
   overrides: {},
@@ -488,7 +488,8 @@ function createProjectStore() {
           state.positions,
           state.transforms,
           newPaths,
-          params.nozzle_diam || 0.4
+          params.nozzle_diam || 0.4,
+          overrides["-1"]?.glass_type ?? null
         );
 
       const primePos = calculatedPositions.find((p) => p.is_prime);
