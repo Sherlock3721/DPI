@@ -1,6 +1,6 @@
 {
   "productName": "Droplet Printing Interface",
-  "version": "1.8.5",
+  "version": "1.8.6",
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,
@@ -25,7 +25,8 @@
         "width": 1200,
         "height": 800,
         "resizable": true,
-        "fullscreen": true,
+        "fullscreen": false,
+        "maximized": true,
         "visible": false
       }
     ],
