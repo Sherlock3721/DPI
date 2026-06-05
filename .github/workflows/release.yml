@@ -1,8 +1,8 @@
 name: Windows Release
 
 # Spustí se po pushnutí tagu vX.Y.Z (release.sh to dělá automaticky).
-# Linux build a upload probíhá lokálně přes release.sh.
-# Tento workflow přidá Windows NSIS bundle a aktualizuje latest.json.
+# release.sh lokálně vytváří a podepisuje STORED zip + latest.json.
+# Tento workflow přidá Windows .exe jako přímý download pro uživatele.
 
 on:
   push:
@@ -50,15 +50,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      # ── Najdi .exe a vytvoř STORED zip + podpis ─────────────────────────────
-      # Tauri CLI na Windows nevytváří .nsis.zip automaticky, proto ho tvoříme
-      # ručně jako STORED (metoda 0) — zip crate v4 je bez deflate feature.
-      - name: Create and sign NSIS zip
+      # ── Najdi .exe ────────────────────────────────────────────────────────────
+      - name: Locate Windows exe
         id: win
         shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           EXE=$(find target/release/bundle/nsis -name "*-setup.exe" | head -1)
           if [ -z "$EXE" ]; then
@@ -66,22 +61,8 @@ jobs:
             find target/release/bundle/ -type f | head -20
             exit 1
           fi
-          EXE_BASENAME=$(basename "$EXE")
-          ZIP_BASENAME="${EXE_BASENAME%.exe}.nsis.zip"
-          ZIP_DIR=$(dirname "$EXE")
-          ZIP="$ZIP_DIR/$ZIP_BASENAME"
-          # Vytvoř STORED zip přes Python (zip příkaz není na Windows CI dostupný)
-          python3 -c "import zipfile,sys,os; z=zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_STORED); z.write(sys.argv[1],os.path.basename(sys.argv[1])); z.close(); print('STORED zip created:', sys.argv[2])" "$EXE" "$ZIP"
+          echo "exe=$EXE" >> $GITHUB_OUTPUT
           echo "✅ EXE: $EXE"
-          echo "✅ ZIP: $ZIP (STORED)"
-          # Podepis
-          npx tauri signer sign -- "$ZIP"
-          SIG="${ZIP}.sig"
-          echo "✅ SIG: $SIG"
-          echo "zip=$ZIP"                   >> $GITHUB_OUTPUT
-          echo "sig=$SIG"                   >> $GITHUB_OUTPUT
-          echo "exe=$EXE"                   >> $GITHUB_OUTPUT
-          echo "zip_name=$ZIP_BASENAME"     >> $GITHUB_OUTPUT
 
       # ── Počkej na GitHub release (vytváří ho release.sh) ─────────────────────
       - name: Wait for GitHub release
@@ -106,50 +87,14 @@ jobs:
             sleep 10
           done
 
-      # ── Stáhni latest.json, přidej windows-x86_64, nahraj zpět ──────────────
-      - name: Merge Windows platform into latest.json
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${TAG}"
-          ZIP_NAME="${{ steps.win.outputs.zip_name }}"
-          WIN_SIG=$(cat "${{ steps.win.outputs.sig }}")
-          WIN_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${ZIP_NAME// /.}"
-          VERSION=$(node -e "const c=require('./src-tauri/tauri.conf.json'); console.log(c.version)")
-
-          # Stáhni existující latest.json (z Linux buildu)
-          gh release download "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "latest.json" \
-            --dir /tmp/ \
-            --clobber 2>/dev/null || true
-
-          # Vytvoř latest.json pokud neexistuje (Linux build ho nevytvořil)
-          if [ ! -f /tmp/latest.json ]; then
-            PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            printf '{"version":"%s","notes":"Verze %s","pub_date":"%s","platforms":{}}' \
-              "$VERSION" "$VERSION" "$PUB_DATE" > /tmp/latest.json
-          fi
-
-          # Přidej windows-x86_64 platformu pomocí jq
-          jq --arg sig "$WIN_SIG" --arg url "$WIN_URL" \
-            '.platforms["windows-x86_64"] = {"signature": $sig, "url": $url}' \
-            /tmp/latest.json > /tmp/latest_new.json
-          mv /tmp/latest_new.json /tmp/latest.json
-          cat /tmp/latest.json
-
-      # ── Nahraj vše do GitHub release ─────────────────────────────────────────
-      - name: Upload Windows artifacts
+      # ── Nahraj .exe do GitHub release ────────────────────────────────────────
+      - name: Upload Windows exe
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${TAG}"
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "${{ steps.win.outputs.zip }}" \
-            "${{ steps.win.outputs.sig }}" \
-            "${{ steps.win.outputs.exe }}" \
-            /tmp/latest.json
-          echo "✅ Windows artefakty nahrány do release $TAG."
+            "${{ steps.win.outputs.exe }}"
+          echo "✅ Windows .exe nahrán do release $TAG."
           echo "   https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
