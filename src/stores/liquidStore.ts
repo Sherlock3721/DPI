@@ -20,7 +20,7 @@ export const liquidLimits = derived(
   [selectedLiquidName, settingsStore],
   ([$name, $settings]) => {
     if (!$name) return null;
-    const def = ($settings.liquid_defs ?? ({} as Record<string, any>))[$name];
+    const def = $settings.liquid_defs?.[$name];
     if (!def) return null;
     return {
       color: def.color ?? "#3b82f6",

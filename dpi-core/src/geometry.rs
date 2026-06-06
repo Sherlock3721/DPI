@@ -1,4 +1,4 @@
-use crate::types::{LayoutPosition, SubstratePaths, Transform};
+use crate::types::{LayoutPosition, PreviewDistResult, PreviewSegData, SubstratePaths, Transform};
 
 // ─── World-space AABB ─────────────────────────────────────────────────────────
 
@@ -194,6 +194,96 @@ pub fn fit_transforms_to_layout(
     }
 
     result
+}
+
+// ─── Předpočítání vzdáleností pro náhled tisku ───────────────────────────────
+
+/// Předpočítá kumulativní vzdálenosti segmentů pro náhled průběhu tisku.
+///
+/// Odpovídá funkci `recomputePreviewDist` v `Canvas2D.svelte`.
+/// Výsledek se používá v JS k nalezení přesné pozice náhledové trysky podle `printProgress`.
+pub fn compute_preview_segments(
+    positions: &[LayoutPosition],
+    paths: &[SubstratePaths],
+    transforms: &[Transform],
+    prime_path: Option<&SubstratePaths>,
+) -> PreviewDistResult {
+    let mut segs: Vec<PreviewSegData> = Vec::new();
+    let mut cum_dist = 0.0_f64;
+    let mut sample_idx = 0usize;
+
+    for (slide_idx, pos) in positions.iter().enumerate() {
+        let (path_data, scale) = if pos.is_prime {
+            (prime_path, 1.0_f64)
+        } else {
+            let tidx = sample_idx;
+            sample_idx += 1;
+            let p = paths.get(tidx);
+            let s = transforms.get(tidx).map(|t| t.scale).unwrap_or(1.0);
+            (p, s)
+        };
+
+        let path_data = match path_data {
+            Some(p) => p,
+            None => continue,
+        };
+
+        for (seg_idx, seg) in path_data.segments.iter().enumerate() {
+            let pts = &seg.points;
+            if pts.is_empty() {
+                continue;
+            }
+            let mut point_dists = Vec::with_capacity(pts.len());
+            point_dists.push(0.0_f64);
+            let mut seg_dist = 0.0_f64;
+            for j in 1..pts.len() {
+                let dx = (pts[j].x - pts[j - 1].x) * scale;
+                let dy = (pts[j].y - pts[j - 1].y) * scale;
+                seg_dist += (dx * dx + dy * dy).sqrt();
+                point_dists.push(seg_dist);
+            }
+            segs.push(PreviewSegData {
+                slide_idx,
+                seg_idx,
+                path_start_dist: cum_dist,
+                point_dists,
+                seg_dist,
+            });
+            cum_dist += seg_dist.max(0.001);
+        }
+    }
+
+    PreviewDistResult { segs, total_dist: cum_dist }
+}
+
+// ─── Kontrola přesahu trasy ────────────────────────────────────────────────────
+
+/// Vrátí `true` pokud některá z transformovaných tras přesahuje svou pozici sklíčka
+/// s insetem `nozzle_diam / 2`.
+///
+/// Nahrazuje smyčky v `handleNozzleDiamGrew` v `App.svelte`.
+/// `paths`, `transforms` a `non_prime_positions` musí být seřazeny shodně — index 0 odpovídá prvnímu vzorkovému sklíčku.
+pub fn check_paths_overflow(
+    paths: &[SubstratePaths],
+    transforms: &[Transform],
+    non_prime_positions: &[LayoutPosition],
+    nozzle_diam: f64,
+) -> bool {
+    let r = nozzle_diam / 2.0;
+    for ((path, transform), pos) in paths.iter().zip(transforms.iter()).zip(non_prime_positions.iter()) {
+        if let Some((mn_x, mx_x, mn_y, mx_y)) = bbox_of_paths(path) {
+            let (wmin_x, wmax_x, wmin_y, wmax_y) =
+                compute_world_aabb(transform, mn_x, mx_x, mn_y, mx_y);
+            if wmin_x < pos.x + r
+                || wmax_x > pos.x + pos.width - r
+                || wmin_y < pos.y + r
+                || wmax_y > pos.y + pos.height - r
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // ─── Testy ───────────────────────────────────────────────────────────────────

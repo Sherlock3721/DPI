@@ -457,9 +457,10 @@ fn parse_path_d(d: &str, fineness: f64) -> Vec<PathSegment> {
         match cmd {
             'M' | 'm' => {
                 if current_pts.len() >= 2 {
-                    segments.push(PathSegment::new(current_pts.clone()));
+                    segments.push(PathSegment::new(std::mem::take(&mut current_pts)));
+                } else {
+                    current_pts.clear();
                 }
-                current_pts.clear();
                 let a = nums(&mut ti, 2);
                 if a.len() == 2 {
                     if cmd == 'm' && !segments.is_empty() {
@@ -680,9 +681,10 @@ fn parse_path_d(d: &str, fineness: f64) -> Vec<PathSegment> {
                 cy = start_y;
                 current_pts.push(Point2D::new(cx, cy));
                 if current_pts.len() >= 2 {
-                    segments.push(PathSegment::new(current_pts.clone()));
+                    segments.push(PathSegment::new(std::mem::take(&mut current_pts)));
+                } else {
+                    current_pts.clear();
                 }
-                current_pts.clear();
             }
             _ => {}
         }

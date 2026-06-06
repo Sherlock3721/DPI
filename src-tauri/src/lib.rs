@@ -327,6 +327,32 @@ fn generate_csv_protocol(
     )
 }
 
+// ─── Geometrie a preview ─────────────────────────────────────────────────────
+
+/// Předpočítá kumulativní vzdálenosti segmentů pro náhled průběhu tisku.
+/// Nahrazuje `recomputePreviewDist()` v `Canvas2D.svelte`.
+#[tauri::command]
+fn compute_preview_segments(
+    positions: Vec<dpi_core::LayoutPosition>,
+    paths: Vec<dpi_core::SubstratePaths>,
+    transforms: Vec<dpi_core::Transform>,
+    prime_path: Option<dpi_core::SubstratePaths>,
+) -> dpi_core::PreviewDistResult {
+    dpi_core::compute_preview_segments(&positions, &paths, &transforms, prime_path.as_ref())
+}
+
+/// Vrátí `true` pokud některá z transformovaných tras přesahuje okraj sklíčka s insetem trysky.
+/// Nahrazuje smyčky v `handleNozzleDiamGrew` v `App.svelte`.
+#[tauri::command]
+fn check_paths_overflow(
+    paths: Vec<dpi_core::SubstratePaths>,
+    transforms: Vec<dpi_core::Transform>,
+    non_prime_positions: Vec<dpi_core::LayoutPosition>,
+    nozzle_diam: f64,
+) -> bool {
+    dpi_core::check_paths_overflow(&paths, &transforms, &non_prime_positions, nozzle_diam)
+}
+
 // ─── Zpracování vektorových drah ──────────────────────────────────────────────
 
 #[tauri::command]
@@ -485,6 +511,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(manager)
         .invoke_handler(tauri::generate_handler![
+            compute_preview_segments,
+            check_paths_overflow,
             calculate_layout,
             recalculate_layout,
             generate_gcode_job,

@@ -12,4 +12,21 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-tauri": [
+            "@tauri-apps/api",
+            "@tauri-apps/plugin-dialog",
+            "@tauri-apps/plugin-fs",
+            "@tauri-apps/plugin-process",
+            "@tauri-apps/plugin-shell",
+            "@tauri-apps/plugin-updater",
+          ],
+          "vendor-icons": ["lucide-svelte"],
+        },
+      },
+    },
+  },
 });

@@ -22,6 +22,7 @@
   export let onOpenShortcuts: () => void;
   export let onOpenAbout: () => void;
   export let onCheckForUpdates: () => void;
+  export let onOpenBracketExport: () => void;
 
   const dispatch = createEventDispatcher();
 </script>
@@ -121,14 +122,8 @@
 
       <!-- KAPALINY -->
       <div class="relative group py-1">
-        <button class="hover:text-slate-100 transition-colors outline-none select-none flex items-center gap-1.5">
+        <button class="hover:text-slate-100 transition-colors outline-none select-none">
           Kapaliny
-          {#if activeLiquid}
-            <span class="flex items-center gap-1 text-[9px] font-normal text-labaccent/90">
-              <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background-color: {activeLiquidColor ?? '#3b82f6'}"></span>
-              <span class="truncate max-w-[70px]">{activeLiquid}</span>
-            </span>
-          {/if}
         </button>
         <div
           class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-52 z-50 transition-all duration-200"
@@ -144,21 +139,13 @@
             <div
               class="absolute left-full top-0 hidden group-hover/liqsel:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 ml-1 overflow-hidden"
             >
-              <button
-                on:click={() => onSelectLiquid(null)}
-                class="px-3 py-1.5 text-left hover:bg-slate-800/60 text-slate-400 hover:text-slate-200 border-l-2 border-transparent flex items-center gap-2 transition-all duration-150 text-[11px]"
-              >
-                <span class="w-3 text-center">{activeLiquid === null ? "✓" : ""}</span>
-                <span class="italic">Žádná kapalina</span>
-              </button>
-              <div class="border-t border-slate-800 my-0.5"></div>
               {#if liquidNames.length === 0}
                 <div class="px-3 py-1.5 text-slate-600 italic text-[11px]">Žádné kapaliny nejsou definovány</div>
               {:else}
                 {#each liquidNames as name}
                   <button
                     on:click={() => onSelectLiquid(name)}
-                    class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center gap-2 transition-all duration-150 text-[11px]"
+                    class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent border-l-2 flex items-center gap-2 transition-all duration-150 text-[11px] {activeLiquid === name ? 'text-labaccent border-labaccent bg-labaccent/10 font-semibold' : 'text-slate-200 border-transparent hover:border-labaccent'}"
                   >
                     <span class="w-3 text-center text-labaccent">{activeLiquid === name ? "✓" : ""}</span>
                     <span class="truncate">{name}</span>
@@ -186,7 +173,7 @@
           class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 overflow-hidden transition-all duration-200"
         >
           <button
-            on:click={() => alert("Tato funkce bude definována v dalším kroku")}
+            on:click={onOpenBracketExport}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Export držáku</span>

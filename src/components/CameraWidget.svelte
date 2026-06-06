@@ -14,7 +14,7 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { writeFile } from "@tauri-apps/plugin-fs";
   import CustomSelect from "./CustomSelect.svelte";
-  import { cameraStream } from "../stores/cameraStore";
+  import { cameraStream, cameraAvailable } from "../stores/cameraStore";
 
   let videoElementInline: HTMLVideoElement;
   let videoElementPopup: HTMLVideoElement;
@@ -97,6 +97,7 @@
         }
       }
       devices = unique;
+      cameraAvailable.set(devices.length > 0);
 
       if (devices.length > 0) {
         // Pokud nemáme uložené ID, zkusíme najít integrovanou (obsahuje "integrated" nebo "built-in"), jinak první
@@ -112,6 +113,7 @@
       }
     } catch (e) {
       console.error("Chyba při získávání video zařízení:", e);
+      cameraAvailable.set(false);
     }
   }
 

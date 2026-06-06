@@ -269,6 +269,49 @@ export async function recalculate_layout(
   });
 }
 
+export interface PreviewSegData {
+  slide_idx: number;
+  seg_idx: number;
+  path_start_dist: number;
+  point_dists: number[];
+  seg_dist: number;
+}
+
+export interface PreviewDistResult {
+  segs: PreviewSegData[];
+  total_dist: number;
+}
+
+/** Předpočítá kumulativní vzdálenosti segmentů pro náhled průběhu tisku. */
+export async function compute_preview_segments(
+  positions: LayoutPosition[],
+  paths: SubstratePaths[],
+  transforms: Transform[],
+  primePath: SubstratePaths | null
+): Promise<PreviewDistResult> {
+  return await invoke<PreviewDistResult>("compute_preview_segments", {
+    positions,
+    paths,
+    transforms,
+    primePath,
+  });
+}
+
+/** Vrátí `true` pokud některá z transformovaných tras přesahuje okraj sklíčka s insetem trysky. */
+export async function check_paths_overflow(
+  paths: SubstratePaths[],
+  transforms: Transform[],
+  nonPrimePositions: LayoutPosition[],
+  nozzleDiam: number
+): Promise<boolean> {
+  return await invoke<boolean>("check_paths_overflow", {
+    paths,
+    transforms,
+    nonPrimePositions,
+    nozzleDiam,
+  });
+}
+
 export async function generate_gcode(
   slidePaths: SubstratePaths[],
   params: ProcessParams,

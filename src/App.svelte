@@ -13,7 +13,7 @@
   import UpdateModal from "./components/UpdateModal.svelte";
   import SnowEffect from "./components/SnowEffect.svelte";
   import { getBoundingBoxOfPaths } from "./lib/path_processor";
-  import { computeWorldAABB, getTransformIdx } from "./lib/geometry";
+  import { getTransformIdx } from "./lib/geometry";
   import {
     parse_dxf,
     parse_svg,
@@ -26,6 +26,7 @@
     parse_gcode_metadata,
     parse_gcode_file_paths,
     generate_csv_protocol,
+    check_paths_overflow,
     type ProcessParams,
     type LayoutPosition,
     type SubstratePaths,
@@ -43,6 +44,7 @@
   import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
   import { check } from "@tauri-apps/plugin-updater";
   import WelcomeModal from "./components/WelcomeModal.svelte";
+  import BracketExportModal from "./components/BracketExportModal.svelte";
 
   // --- STAV APLIKACE ---
   const isTauri = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
@@ -89,6 +91,7 @@
   let showShortcutsModal = false;
   let showUpdateModal = false;
   let updateModalAutoCheck = false;
+  let showBracketExportModal = false;
 
   let leftPanelRef: any;
 
@@ -149,50 +152,15 @@
   async function handleNozzleDiamGrew(newDiam: number) {
     if (!$projectStore.rawLoadedPaths || $projectStore.autoScaleFile) return;
 
-    const r = newDiam / 2;
     const state = $projectStore;
     const nonPrimePositions = state.positions.filter((p) => !p.is_prime);
 
-    let anyOverflow = false;
-    for (let i = 0; i < nonPrimePositions.length; i++) {
-      const pos = nonPrimePositions[i];
-      const path = state.paths[i];
-      const transform = state.transforms[i];
-      if (!path || !transform || path.segments.length === 0) continue;
-
-      let mnX = Infinity,
-        mxX = -Infinity,
-        mnY = Infinity,
-        mxY = -Infinity;
-      for (const seg of path.segments)
-        for (const pt of seg.points) {
-          if (pt.x < mnX) mnX = pt.x;
-          if (pt.x > mxX) mxX = pt.x;
-          if (pt.y < mnY) mnY = pt.y;
-          if (pt.y > mxY) mxY = pt.y;
-        }
-      if (!isFinite(mnX)) continue;
-
-      const aabb = computeWorldAABB(
-        transform.gui_dx,
-        transform.gui_dy,
-        transform.scale,
-        transform.rotation,
-        transform.cx,
-        transform.cy,
-        { mnX, mxX, mnY, mxY }
-      );
-
-      if (
-        aabb.minX < pos.x + r ||
-        aabb.maxX > pos.x + pos.width - r ||
-        aabb.minY < pos.y + r ||
-        aabb.maxY > pos.y + pos.height - r
-      ) {
-        anyOverflow = true;
-        break;
-      }
-    }
+    const anyOverflow = await check_paths_overflow(
+      state.paths,
+      state.transforms,
+      nonPrimePositions,
+      newDiam
+    );
 
     if (!anyOverflow) return;
 
@@ -512,7 +480,7 @@
     await _internalSaveGCode(true);
   }
 
-  // Uložení protokolu tisku jako CSV pro chemiky a AI
+  // Uložení protokolu tisku jako CSV pro chemiky a další zpracování
   async function exportCSVProtocol() {
     const csvContent = await generate_csv_protocol(
       $projectStore.params,
@@ -743,6 +711,7 @@
     onOpenShortcuts={() => (showShortcutsModal = true)}
     onOpenAbout={() => (showAboutModal = true)}
     onCheckForUpdates={() => { updateModalAutoCheck = false; showUpdateModal = true; }}
+    onOpenBracketExport={() => (showBracketExportModal = true)}
   />
 
   <!-- HLAVNÍ PROSTOR - TŘÍSLOUPOVÝ LAYOUT -->
@@ -932,6 +901,11 @@
       on:close={() => (showUpdateModal = false)}
     />
   {/if}
+
+  <BracketExportModal
+    isOpen={showBracketExportModal}
+    on:close={() => (showBracketExportModal = false)}
+  />
 
   <WelcomeModal
     show={showWelcomeModal}

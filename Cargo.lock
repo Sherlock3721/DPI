@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "dpi-app"
-version = "1.8.3"
+version = "1.8.7"
 dependencies = [
  "dpi-core",
  "futures-util",
@@ -4161,9 +4161,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

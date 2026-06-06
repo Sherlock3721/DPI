@@ -3,6 +3,7 @@
   import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride } from "../lib/tauri";
   import { getTransformIdx } from "../lib/geometry";
   import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight } from "lucide-svelte";
+  import Tooltip from "./Tooltip.svelte";
   import Canvas2D from "./Canvas2D.svelte";
   import { printerStore } from "../stores/printerStore";
 
@@ -265,9 +266,7 @@
       >
         <Grid2x2 class="w-4 h-4" />
       </button>
-      <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-        Mřížka
-      </div>
+      <Tooltip text="Mřížka" />
     </div>
 
     <div class="relative group">
@@ -281,9 +280,7 @@
       >
         <Ruler class="w-4 h-4" />
       </button>
-      <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-        Pravítko
-      </div>
+      <Tooltip text="Pravítko" />
     </div>
 
     <div class="relative group">
@@ -293,9 +290,7 @@
       >
         <Maximize2 class="w-4 h-4" />
       </button>
-      <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-        Vycentrovat
-      </div>
+      <Tooltip text="Vycentrovat" />
     </div>
 
     <div class="relative group">
@@ -308,9 +303,7 @@
       >
         <VectorSquare class="w-4 h-4" />
       </button>
-      <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-        Na sklíčko
-      </div>
+      <Tooltip text="Na sklíčko" />
     </div>
 
   </div>

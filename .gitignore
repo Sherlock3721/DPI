@@ -22,14 +22,12 @@ playwright/.cache/
 Thumbs.db
 
 # =========================
-# AI a vývojářské nástroje
+# Konfigurační soubory a složky
 # =========================
-.claude/
-.gemini/
-.cursor/
-.aider/
-.vscode/
-.idea/
+.*
+!.gitignore
+!.prettierrc
+!.github/
 
 # =========================
 # Lokální skripty

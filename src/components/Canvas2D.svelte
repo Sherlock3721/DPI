@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from "svelte";
-  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride } from "../lib/tauri";
+  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData } from "../lib/tauri";
+  import { compute_preview_segments } from "../lib/tauri";
   import { computeWorldAABB, clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
   import { projectStore } from "../stores/projectStore";
 
@@ -40,6 +41,8 @@
   let dragStartWorld = { x: 0, y: 0 };
   let dragStartTransform: Transform | null = null;
   let dragStartTransformsAll: Map<number, Transform> = new Map();
+  // Indexy transformů mutovaných během dragu — store se aktualizuje až na mouseup
+  let _dragModifiedIndices: Set<number> = new Set();
 
   // Pan
   let lastMouseScreenX = 0;
@@ -57,6 +60,18 @@
 
   let width = 0;
   let height = 0;
+
+  // rAF throttling — draw() se volá max. 1× za snímek
+  let rafPending = false;
+  function scheduleDraw() {
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => { rafPending = false; draw(); });
+    }
+  }
+
+  // Cache bbox pro aktuální drag — path se při dragu nemění
+  let _bboxDragCache: Map<number, RawBbox | null> = new Map();
 
   $: {
     if (selectedIndex < 0) transformMode = "scale";
@@ -214,6 +229,7 @@
   // ─── Sdílené geometrické helpery ─────────────────────────────────────────
 
   function getPathBboxRaw(posIdx: number): RawBbox | null {
+    if (_bboxDragCache.has(posIdx)) return _bboxDragCache.get(posIdx)!;
     const tidx = getTransformIdx(posIdx, positions);
     const pathData = paths[tidx];
     if (!pathData || pathData.segments.length === 0) return null;
@@ -228,7 +244,9 @@
         if (pt.y < mnY) mnY = pt.y;
         if (pt.y > mxY) mxY = pt.y;
       }
-    return isFinite(mnX) ? { mnX, mxX, mnY, mxY } : null;
+    const result = isFinite(mnX) ? { mnX, mxX, mnY, mxY } : null;
+    if (dragOp) _bboxDragCache.set(posIdx, result);
+    return result;
   }
 
   // ─── Measure snap ─────────────────────────────────────────────────────────
@@ -285,15 +303,15 @@
         dispatch("measurePointsChange", measurePoints);
       }
       transformMode = "scale";
-      draw();
+      scheduleDraw();
     }
-    if (isMeasuring) draw();
+    if (isMeasuring) scheduleDraw();
   }
   function handleKeyUp(e: KeyboardEvent) {
     ctrlDown = e.ctrlKey;
     altDown = e.altKey;
     shiftDown = e.shiftKey;
-    if (isMeasuring || dragOp) draw();
+    if (isMeasuring || dragOp) scheduleDraw();
   }
 
   // ─── Wheel ────────────────────────────────────────────────────────────────
@@ -308,7 +326,7 @@
     const as = worldToScreen(bw.x, bw.y);
     panX += e.clientX - rect.left - as.x;
     panY += e.clientY - rect.top - as.y;
-    draw();
+    scheduleDraw();
   }
 
   // ─── Mouse down ───────────────────────────────────────────────────────────
@@ -326,7 +344,7 @@
         const snapped = applyMeasureSnap(raw.x, raw.y);
         measurePoints = [...measurePoints, snapped];
         dispatch("measurePointsChange", measurePoints);
-        draw();
+        scheduleDraw();
         return;
       }
 
@@ -374,7 +392,7 @@
           if (isDoubleClick) {
             // Přepnout rotační / scale mód
             transformMode = transformMode === "rotate" ? "scale" : "rotate";
-            draw();
+            scheduleDraw();
             return;
           }
           dispatch("slideSelected", hitIdx);
@@ -411,7 +429,7 @@
       if (isMeasuring) {
         measurePoints = measurePoints.slice(0, -1);
         dispatch("measurePointsChange", measurePoints);
-        draw();
+        scheduleDraw();
         return;
       }
       const w = screenToWorld(sx, sy);
@@ -438,7 +456,7 @@
       panY += mouseY - lastMouseScreenY;
       lastMouseScreenX = mouseX;
       lastMouseScreenY = mouseY;
-      draw();
+      scheduleDraw();
       return;
     }
 
@@ -472,7 +490,7 @@
             ot.gui_dy = p.y + relDy;
             const raw = getPathBboxRaw(i);
             if (raw) clampGuidXY(ot, p, raw, nozzleDiam);
-            dispatch("transformChanged", { index: oi, transform: { ...ot } });
+            _dragModifiedIndices.add(oi);
           }
         });
       } else {
@@ -480,9 +498,9 @@
         t.gui_dy = newY;
         const raw = getPathBboxRaw(dragSlideIdx);
         if (raw) clampGuidXY(t, pos, raw, nozzleDiam);
-        dispatch("transformChanged", { index: tidx, transform: { ...t } });
+        _dragModifiedIndices.add(tidx);
       }
-      draw();
+      scheduleDraw();
       return;
     }
 
@@ -558,7 +576,7 @@
             lo = startT.scale;
             if (!fits(lo)) return lo;
           }
-          for (let i = 0; i < 24; i++) {
+          for (let i = 0; i < 12; i++) {
             const mid = (lo + hi) / 2;
             if (fits(mid)) lo = mid;
             else hi = mid;
@@ -598,13 +616,13 @@
                 ? ih[oppositeIdx]
                 : { x: startT.gui_dx + startT.cx, y: startT.gui_dy + startT.cy };
             applyAnchored(ot, startT, anc, targetScale, p, i);
-            dispatch("transformChanged", { index: oi, transform: { ...ot } });
+            _dragModifiedIndices.add(oi);
           });
         } else {
           applyAnchored(t, st, anchor, newScale, pos, dragSlideIdx);
-          dispatch("transformChanged", { index: tidx, transform: { ...t } });
+          _dragModifiedIndices.add(tidx);
         }
-        draw();
+        scheduleDraw();
       }
       return;
     }
@@ -657,7 +675,7 @@
         if (!fits(0)) return 0;
         let lo = 0,
           hi = 1;
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 12; i++) {
           const mid = (lo + hi) / 2;
           if (fits(mid)) lo = mid;
           else hi = mid;
@@ -690,7 +708,7 @@
           ot.rotation = rot;
           const rawI = getPathBboxRaw(i);
           if (rawI) clampGuidXY(ot, p, rawI, nozzleDiam);
-          dispatch("transformChanged", { index: oi, transform: { ...ot } });
+          _dragModifiedIndices.add(oi);
         });
       } else {
         const raw = getPathBboxRaw(dragSlideIdx);
@@ -699,9 +717,9 @@
         if (ctrlDown) newRot = Math.round(newRot / 15) * 15;
         t.rotation = newRot;
         if (raw) clampGuidXY(t, pos, raw, nozzleDiam);
-        dispatch("transformChanged", { index: tidx, transform: { ...t } });
+        _dragModifiedIndices.add(tidx);
       }
-      draw();
+      scheduleDraw();
       return;
     }
 
@@ -711,11 +729,11 @@
       const nh = hitTestHandle(w.x, w.y);
       if (nh !== hoverHandle) {
         hoverHandle = nh;
-        draw();
+        scheduleDraw();
       }
     }
 
-    if (isMeasuring) draw();
+    if (isMeasuring) scheduleDraw();
   }
 
   function handleMouseUp() {
@@ -736,11 +754,19 @@
         }
       }
     }
+    // Odešli všechny změny transformů najednou (store update 1× místo n× za drag)
+    for (const idx of _dragModifiedIndices) {
+      if (transforms[idx]) dispatch("transformChanged", { index: idx, transform: { ...transforms[idx] } });
+    }
+    _dragModifiedIndices.clear();
+
     dragOp = null;
     activeHandle = -1;
     dragSlideIdx = -1;
     dragStartTransform = null;
     dragStartTransformsAll = new Map();
+    _bboxDragCache.clear();
+    recomputePreviewDist();
   }
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
@@ -832,17 +858,17 @@
       const targetDist = totalPreviewDist * (printProgress / 100);
       for (let ci = 0; ci < precomputedSegs.length; ci++) {
         const sd = precomputedSegs[ci];
-        if (targetDist <= sd.pathStartDist + sd.segDist || ci === precomputedSegs.length - 1) {
-          const distIntoSeg = Math.max(0, targetDist - sd.pathStartDist);
-          let ptIdx = sd.pointDists.length - 1;
-          for (let j = 1; j < sd.pointDists.length; j++) {
-            if (sd.pointDists[j] >= distIntoSeg) { ptIdx = j - 1; break; }
+        if (targetDist <= sd.path_start_dist + sd.seg_dist || ci === precomputedSegs.length - 1) {
+          const distIntoSeg = Math.max(0, targetDist - sd.path_start_dist);
+          let ptIdx = sd.point_dists.length - 1;
+          for (let j = 1; j < sd.point_dists.length; j++) {
+            if (sd.point_dists[j] >= distIntoSeg) { ptIdx = j - 1; break; }
           }
-          const d0 = sd.pointDists[ptIdx];
-          const d1 = ptIdx + 1 < sd.pointDists.length ? sd.pointDists[ptIdx + 1] : d0;
+          const d0 = sd.point_dists[ptIdx];
+          const d1 = ptIdx + 1 < sd.point_dists.length ? sd.point_dists[ptIdx + 1] : d0;
           const interval = d1 - d0;
           const fracT = interval > 1e-9 ? Math.min(1, (distIntoSeg - d0) / interval) : 0;
-          cursor = { slideIdx: sd.slideIdx, segIdx: sd.segIdx, ptIdx, fracT };
+          cursor = { slideIdx: sd.slide_idx, segIdx: sd.seg_idx, ptIdx, fracT };
           break;
         }
       }
@@ -1316,45 +1342,19 @@
   }
 
   // ─── Preview: předpočítané vzdálenosti segmentů pro přesný náhled tisku ───────
-  interface PreviewSegData {
-    slideIdx: number;
-    segIdx: number;
-    pathStartDist: number;
-    pointDists: number[];
-    segDist: number;
-  }
   let precomputedSegs: PreviewSegData[] = [];
   let totalPreviewDist = 0;
 
-  function recomputePreviewDist() {
-    const segs: PreviewSegData[] = [];
-    let cumDist = 0;
-    for (let i = 0; i < positions.length; i++) {
-      const pos = positions[i];
-      const tidx = getTransformIdx(i, positions);
-      const pathData = pos.is_prime ? primePath : (paths[tidx] || null);
-      if (!pathData) continue;
-      const scale = pos.is_prime ? 1.0 : (transforms[tidx]?.scale ?? 1.0);
-      for (let si = 0; si < pathData.segments.length; si++) {
-        const pts = pathData.segments[si].points;
-        if (pts.length === 0) continue;
-        const pointDists: number[] = [0];
-        let segDist = 0;
-        for (let j = 1; j < pts.length; j++) {
-          segDist += Math.hypot((pts[j].x - pts[j - 1].x) * scale, (pts[j].y - pts[j - 1].y) * scale);
-          pointDists.push(segDist);
-        }
-        segs.push({ slideIdx: i, segIdx: si, pathStartDist: cumDist, pointDists, segDist });
-        cumDist += Math.max(segDist, 0.001);
-      }
-    }
-    precomputedSegs = segs;
-    totalPreviewDist = cumDist;
+  async function recomputePreviewDist() {
+    if (dragOp) return;
+    const result = await compute_preview_segments(positions, paths, transforms, primePath);
+    precomputedSegs = result.segs;
+    totalPreviewDist = result.total_dist;
   }
 
   $: {
     paths; primePath; positions; transforms;
-    recomputePreviewDist();
+    if (!dragOp) recomputePreviewDist();
   }
 
   // Při změně rozměrů podložky resetujeme kameru s odkladem 200 ms —
@@ -1384,7 +1384,7 @@
       currentNozzle !== undefined &&
       printProgress !== undefined
     ) {
-      draw();
+      scheduleDraw();
     }
   }
 

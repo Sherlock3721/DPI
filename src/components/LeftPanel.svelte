@@ -24,7 +24,7 @@
   import CustomSelect from "./CustomSelect.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
-  import { liquidLimits } from "../stores/liquidStore";
+  import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import {
     Play,
     Pause,
@@ -593,8 +593,14 @@
   class="glass-panel rounded-lg p-2 flex flex-col gap-2 overflow-hidden h-full text-xs select-text"
 >
   <!-- NADPIS PANELU -->
-  <div class="flex items-center gap-1.5 text-sm font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-2 shrink-0">
+  <div class="flex items-center justify-between gap-1.5 text-sm font-extrabold uppercase tracking-wider text-slate-200 border-b border-slate-700/50 pb-2 shrink-0">
     <span>Globální nastavení</span>
+    <span class="flex items-center gap-1 text-[10px] font-normal normal-case tracking-normal {$selectedLiquidName ? 'text-labaccent' : 'text-slate-500'}">
+      {#if $selectedLiquidName}
+        <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background-color: {$liquidLimits?.color ?? '#3b82f6'}"></span>
+      {/if}
+      {$selectedLiquidName ?? 'Žádná kapalina'}
+    </span>
   </div>
 
   <!-- HLAVNÍ FORMULÁŘ -->

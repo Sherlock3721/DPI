@@ -12,62 +12,28 @@ struct RawGeometry {
     has_stroke: Option<bool>,
 }
 
-fn bbox_of_paths(segments: &[PathSegment]) -> Option<(f64, f64, f64, f64)> {
+fn bbox_of_points<'a>(iter: impl Iterator<Item = &'a Point2D>) -> Option<(f64, f64, f64, f64)> {
     let mut min_x = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
     let mut has = false;
-    for seg in segments {
-        for p in &seg.points {
-            if p.x < min_x {
-                min_x = p.x;
-            }
-            if p.x > max_x {
-                max_x = p.x;
-            }
-            if p.y < min_y {
-                min_y = p.y;
-            }
-            if p.y > max_y {
-                max_y = p.y;
-            }
-            has = true;
-        }
+    for p in iter {
+        if p.x < min_x { min_x = p.x; }
+        if p.x > max_x { max_x = p.x; }
+        if p.y < min_y { min_y = p.y; }
+        if p.y > max_y { max_y = p.y; }
+        has = true;
     }
-    if has {
-        Some((min_x, max_x, min_y, max_y))
-    } else {
-        None
-    }
+    if has { Some((min_x, max_x, min_y, max_y)) } else { None }
+}
+
+fn bbox_of_paths(segments: &[PathSegment]) -> Option<(f64, f64, f64, f64)> {
+    bbox_of_points(segments.iter().flat_map(|s| s.points.iter()))
 }
 
 fn bbox_of_poly(pts: &[Point2D]) -> Option<(f64, f64, f64, f64)> {
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    let mut has = false;
-    for p in pts {
-        if p.x < min_x {
-            min_x = p.x;
-        }
-        if p.x > max_x {
-            max_x = p.x;
-        }
-        if p.y < min_y {
-            min_y = p.y;
-        }
-        if p.y > max_y {
-            max_y = p.y;
-        }
-        has = true;
-    }
-    if has {
-        Some((min_x, max_x, min_y, max_y))
-    } else {
-        None
-    }
+    bbox_of_points(pts.iter())
 }
 
 fn is_path_closed(pts: &[Point2D]) -> bool {
@@ -318,17 +284,24 @@ fn snake_infill(
         return vec![];
     }
 
-    // Polygon je díra, pokud jeho těžiště leží uvnitř jiného polygonu v komponentě.
-    let hole_flags: Vec<bool> = (0..rotated_polygons.len())
-        .map(|i| {
-            let poly = &rotated_polygons[i];
+    // Pre-compute centroidy všech polygonů jednou — každý centroid se pak O(1) indexuje.
+    let centroids: Vec<Option<Point2D>> = rotated_polygons
+        .iter()
+        .map(|poly| {
             let n = poly.len() as f64;
             if n < 1.0 {
-                return false;
+                return None;
             }
             let cx = poly.iter().map(|p| p.x).sum::<f64>() / n;
             let cy = poly.iter().map(|p| p.y).sum::<f64>() / n;
-            let c = Point2D::new(cx, cy);
+            Some(Point2D::new(cx, cy))
+        })
+        .collect();
+
+    // Polygon je díra, pokud jeho těžiště leží uvnitř lichého počtu ostatních polygonů.
+    let hole_flags: Vec<bool> = (0..rotated_polygons.len())
+        .map(|i| {
+            let Some(c) = centroids[i] else { return false };
             rotated_polygons
                 .iter()
                 .enumerate()
@@ -360,24 +333,25 @@ fn snake_infill(
         })
         .map(|(_, p)| vec![p.clone()]);
 
-    // Seskupení scanline segmentů podle Y řady
-    let mut by_y: HashMap<String, Vec<(Point2D, Point2D)>> = HashMap::new();
+    // Seskupení scanline segmentů podle Y řady; klíč = (y × 10000).round() jako i64
+    // aby se předešlo string-formátovacím alokacím v hot loopě.
+    #[inline]
+    fn y_key(v: f64) -> i64 { (v * 10_000.0).round() as i64 }
+
+    let mut by_y: HashMap<i64, Vec<(Point2D, Point2D)>> = HashMap::new();
     for &(p1, p2) in &lines {
-        by_y.entry(format!("{:.4}", p1.y))
-            .or_default()
-            .push((p1, p2));
+        by_y.entry(y_key(p1.y)).or_default().push((p1, p2));
     }
 
-    let mut sorted_ys: Vec<f64> = by_y.keys().filter_map(|k| k.parse::<f64>().ok()).collect();
-    sorted_ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut sorted_ys: Vec<i64> = by_y.keys().copied().collect();
+    sorted_ys.sort_unstable();
 
     let mut all_pts: Vec<Point2D> = Vec::new();
     let mut current_pt: Option<Point2D> = None;
     let mut going_right = true;
 
-    for y in &sorted_ys {
-        let key = format!("{:.4}", y);
-        let Some(raw) = by_y.get(&key) else { continue };
+    for key in &sorted_ys {
+        let Some(raw) = by_y.get(key) else { continue };
 
         // Normalizace: p1.x ≤ p2.x, seřadit zleva doprava
         let mut row_segs: Vec<(Point2D, Point2D)> = raw

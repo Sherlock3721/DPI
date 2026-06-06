@@ -2,7 +2,10 @@
   import { onMount } from "svelte";
   import { get_app_settings, save_app_settings, send_manual_command, auto_connect_printer } from "../lib/tauri";
   import { printerStore } from "../stores/printerStore";
-  import { X, Plus, Trash2, Save, GripVertical, Sun, Moon, Monitor, Target, ShieldAlert, Cog } from "lucide-svelte";
+  import { X, Plus, Trash2, Save, GripVertical, ShieldAlert, Cog } from "lucide-svelte";
+  import SettingsGCode from "./settings/SettingsGCode.svelte";
+  import SettingsProgram from "./settings/SettingsProgram.svelte";
+  import SettingsLimits from "./settings/SettingsLimits.svelte";
   import { createEventDispatcher } from "svelte";
 
   export let isOpen = false;
@@ -477,110 +480,28 @@
     isOpen = false;
   }
 
-  // ─── Reaktivní minimy rozměrů tiskárny ───────────────────────────────────
-  // Pravá strana je fixovaná (bed_max_x). Plocha roste doleva od ní.
-  // Minimum bed_max_x: start_offset_x + max(šířka odplivu=76, největší sklíčko šířka)
-  // Minimum bed_max_y: start_offset_y + výška odplivu(26) + mezera + největší sklíčko výška
-  $: maxSlideW = glassList.length > 0 ? Math.max(...glassList.map((g) => g.w)) : 0;
-  $: maxSlideH = glassList.length > 0 ? Math.max(...glassList.map((g) => g.h)) : 0;
-  $: minBedMaxX = Math.ceil((settings?.start_offset_x ?? 18) + Math.max(76, maxSlideW));
-  $: minBedMaxY = Math.ceil(
-    (settings?.start_offset_y ?? 11) + 26 + (settings?.multi_spacing ?? 5) + maxSlideH
-  );
+  // minBedMaxX/Y jsou nyní počítány uvnitř SettingsLimits.svelte
 
   // ─── Bed leveling SVG ────────────────────────────────────────────────────
   const LVL_VW = 420;
   const LVL_VH = 330;
-  const LVL_ML = 38; // margin left (Y tick numbers)
-  const LVL_MT = 14; // margin top
-  const LVL_MR = 10; // margin right
-  const LVL_MB = 22; // margin bottom (X tick numbers)
+  const LVL_ML = 38;
+  const LVL_MT = 14;
+  const LVL_MR = 10;
+  const LVL_MB = 22;
 
-  $: lvlScale = Math.min(
-    (LVL_VW - LVL_ML - LVL_MR) / (settings?.bed_max_x ?? 250),
-    (LVL_VH - LVL_MT - LVL_MB) / (settings?.bed_max_y ?? 210)
-  );
-  $: lvlBedW = (settings?.bed_max_x ?? 250) * lvlScale;
-  $: lvlBedH = (settings?.bed_max_y ?? 210) * lvlScale;
-  $: lvlCircleR = ((settings?.leveling_circle_diameter ?? 8) / 2) * lvlScale;
-  $: lvlXTicks = Array.from(
-    { length: Math.floor((settings?.bed_max_x ?? 250) / 50) + 1 },
-    (_, i) => i * 50
-  );
-  $: lvlYTicks = Array.from(
-    { length: Math.floor((settings?.bed_max_y ?? 210) / 50) + 1 },
-    (_, i) => i * 50
-  );
-
-  // ─── Interaktivní SVG (bed visualizer) ───────────────────────────────────
-  // SVG viewport: 400×280, s marginy 30px vlevo/dole pro osy a 20px nahoře/vpravo
-  const SVG_MARGIN_L = 35;
-  const SVG_MARGIN_T = 30;
-  const SVG_INNER_W = 320;
-  const SVG_INNER_H = 210;
-
-  // Přepočet bed_max_x/y → SVG souřadnice (scaled do max 320×210)
-  $: maxBedDim = Math.max(settings?.bed_max_x ?? 200, settings?.bed_max_y ?? 200, 1);
-  $: svgBedW = ((settings?.bed_max_x ?? 200) / maxBedDim) * SVG_INNER_W;
-  $: svgBedH = ((settings?.bed_max_y ?? 200) / maxBedDim) * SVG_INNER_H;
-  $: svgBedX = SVG_MARGIN_L;
-  $: svgBedY = SVG_MARGIN_T + (SVG_INNER_H - svgBedH); // zarovnat doleva-dolů
-
-  // Přepočet offset → SVG souřadnice (relativně k tiskové ploše)
-  $: svgOffX = svgBedX + ((settings?.start_offset_x ?? 0) / (settings?.bed_max_x ?? 200)) * svgBedW;
-  $: svgOffY =
-    svgBedY + svgBedH - ((settings?.start_offset_y ?? 0) / (settings?.bed_max_y ?? 200)) * svgBedH;
-
-  // Drag stav
-  let svgDragTarget: "bed-br" | "offset" | null = null;
-  let svgDragStart = { x: 0, y: 0 };
-  let svgValStart = { bx: 200, by: 200, ox: 0, oy: 0 };
-
-  function svgStartDrag(e: MouseEvent, target: "bed-br" | "offset") {
-    e.preventDefault();
-    svgDragTarget = target;
-    svgDragStart = { x: e.clientX, y: e.clientY };
-    svgValStart = {
-      bx: settings?.bed_max_x ?? 200,
-      by: settings?.bed_max_y ?? 200,
-      ox: settings?.start_offset_x ?? 0,
-      oy: settings?.start_offset_y ?? 0,
-    };
-  }
-
-  function svgMouseMove(e: MouseEvent) {
-    if (!svgDragTarget || !settings) return;
-    const dx = e.clientX - svgDragStart.x;
-    const dy = e.clientY - svgDragStart.y;
-
-    // Kolik mm odpovídá jednomu pixelu SVG
-    const pxPerMm = SVG_INNER_W / (svgValStart.bx || 200);
-
-    if (svgDragTarget === "bed-br") {
-      // Táhnutí pravého dolního rohu → mění bed_max_x a bed_max_y
-      const newBx = Math.max(
-        10,
-        Math.round(svgValStart.bx + dx / (SVG_INNER_W / (svgValStart.bx || 200)) / 5) * 5
-      );
-      const newBy = Math.max(
-        10,
-        Math.round(svgValStart.by + dy / (SVG_INNER_H / (svgValStart.by || 200)) / 5) * 5
-      );
-      settings.bed_max_x = newBx;
-      settings.bed_max_y = newBy;
-      settings = settings; // trigger reaktivity
-    } else if (svgDragTarget === "offset") {
-      // Táhnutí startu → mění start_offset_x a start_offset_y
-      const dxMm = dx / (svgBedW / (settings.bed_max_x || 200));
-      const dyMm = -dy / (svgBedH / (settings.bed_max_y || 200));
-      settings.start_offset_x = Math.max(0, Math.round((svgValStart.ox + dxMm) * 10) / 10);
-      settings.start_offset_y = Math.max(0, Math.round((svgValStart.oy + dyMm) * 10) / 10);
-      settings = settings;
-    }
-  }
-
-  function svgMouseUp() {
-    svgDragTarget = null;
+  let lvlScale = 0, lvlBedW = 0, lvlBedH = 0, lvlCircleR = 0;
+  let lvlXTicks: number[] = [], lvlYTicks: number[] = [];
+  $: {
+    lvlScale = Math.min(
+      (LVL_VW - LVL_ML - LVL_MR) / (settings?.bed_max_x ?? 250),
+      (LVL_VH - LVL_MT - LVL_MB) / (settings?.bed_max_y ?? 210)
+    );
+    lvlBedW = (settings?.bed_max_x ?? 250) * lvlScale;
+    lvlBedH = (settings?.bed_max_y ?? 210) * lvlScale;
+    lvlCircleR = ((settings?.leveling_circle_diameter ?? 8) / 2) * lvlScale;
+    lvlXTicks = Array.from({ length: Math.floor((settings?.bed_max_x ?? 250) / 50) + 1 }, (_, i) => i * 50);
+    lvlYTicks = Array.from({ length: Math.floor((settings?.bed_max_y ?? 210) / 50) + 1 }, (_, i) => i * 50);
   }
 
   async function restoreDefaults() {
@@ -1262,239 +1183,11 @@
 
             <!-- ═══ 4. TISKÁRNA ═══ -->
             {#if activeTab === "limits"}
-              <div class="flex flex-col gap-5">
-                <span class="font-bold text-xs text-slate-300 pb-1 border-b border-slate-800"
-                  >Limitace a parametry tiskárny</span
-                >
-
-                <!-- INTERAKTIVNÍ SVG PODLOŽKY ODSTRANĚN DLE ZADÁNÍ -->
-
-                <!-- SEKCE: ROZMĚRY PODLOŽKY -->
-                <div class="flex flex-col gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider"
-                      >Rozměry tiskové plochy</span
-                    >
-                  </div>
-                  <p class="text-[10px] text-slate-500 pl-4">
-                    Levá strana tisku je výchozí. Oblast roste doprava — sklíčka se přidávají ve
-                    sloupcích od levé strany.
-                  </p>
-                  <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Pravá hranice osy X</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Pravý okraj tiskové plochy. Min: <span class="font-mono text-slate-400"
-                            >{minBedMaxX} mm</span
-                          >
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="5"
-                          min={minBedMaxX}
-                          bind:value={settings.bed_max_x}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Maximální délka osy Y</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Fyzická délka podložky. Min: <span class="font-mono text-slate-400"
-                            >{minBedMaxY} mm</span
-                          >
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="5"
-                          min={minBedMaxY}
-                          bind:value={settings.bed_max_y}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="border-b border-slate-800/60"></div>
-
-                <!-- SEKCE: TEPLOTA -->
-                <div class="flex flex-col gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
-                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider"
-                      >Teplota podložky</span
-                    >
-                  </div>
-                  <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Maximální teplota</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Horní mez výhřevu. Hodnota 0 = bez limitu
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="5"
-                          min="0"
-                          bind:value={settings.bed_max_temp}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">°C</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Minimální teplota při zapnutí</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Teplota výhřevu při aktivaci — přeskočí šedou zónu 1–29 °C
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="1"
-                          min="1"
-                          max="100"
-                          bind:value={settings.bed_min_temp}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">°C</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="border-b border-slate-800/60"></div>
-
-                <!-- SEKCE: STARTOVNÍ POZICE -->
-                <div class="flex flex-col gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider"
-                      >Startovní pozice tisku</span
-                    >
-                  </div>
-                  <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Offset X</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Posunutí výchozí pozice od nuly osy X
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="1"
-                          bind:value={settings.start_offset_x}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Offset Y</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Posunutí výchozí pozice od nuly osy Y
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="1"
-                          bind:value={settings.start_offset_y}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Výška přesunu (cestovní Z)</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Výška zdvihu trysky při přesunu mezi tisky
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="0.5"
-                          bind:value={settings.block_height}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Mezera mezi substráty</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Vzdálenost mezi substráty při multiplexním tisku
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="0.5"
-                          bind:value={settings.multi_spacing}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-6">mm</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    on:click={() => (activeTab = "leveling")}
-                    class="flex items-center gap-1.5 text-[10px] text-labaccent hover:text-blue-300 transition-colors mt-0.5 w-fit"
-                  >
-                    <Target class="w-3 h-3" /> Upravit kalibrační body bed levelingu →
-                  </button>
-                </div>
-
-                <div class="border-b border-slate-800/60"></div>
-
-                <!-- SEKCE: KALIBRACE -->
-                <div class="flex flex-col gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider"
-                      >Kalibrace extruze</span
-                    >
-                  </div>
-                  <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
-                    <div class="grid grid-cols-5 items-center gap-3">
-                      <div class="col-span-3">
-                        <div class="text-slate-300 font-medium">Kalibrační faktor extruze</div>
-                        <div class="text-[10px] text-slate-500 mt-0.5">
-                          Konstanta přepočtu kroků motoru na objemový průtok (µl/krok)
-                        </div>
-                      </div>
-                      <div class="col-span-2 flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="0.0001"
-                          bind:value={settings.calibration_factor}
-                          class="flex-1 input-premium py-1 text-center text-xs"
-                        />
-                        <span class="text-slate-500 text-[10px] w-12">krok/µl</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <SettingsLimits
+                bind:settings
+                {glassList}
+                onGoToLeveling={() => (activeTab = "leveling")}
+              />
             {/if}
 
             <!-- ═══ 4. BED LEVELING ═══ -->
@@ -1871,199 +1564,20 @@
 
             <!-- ═══ 6. G-KÓDY ═══ -->
             {#if activeTab === "gcode"}
-              <div class="flex flex-col gap-4 text-xs h-full">
-                <span class="font-bold text-xs text-slate-300 pb-1 border-b border-slate-800"
-                  >Inicializační a ukončovací sekvence G-kódu</span
-                >
-                <div class="flex flex-col gap-1">
-                  <span class="text-slate-400 font-bold uppercase text-[9px]">Start G-code</span>
-                  <textarea
-                    bind:value={settings.start_gcode}
-                    rows="4"
-                    class="input-premium font-mono text-[10px] w-full resize-y min-h-[80px]"
-                  ></textarea>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <span class="text-slate-400 font-bold uppercase text-[9px]">End G-code</span>
-                  <textarea
-                    bind:value={settings.end_gcode}
-                    rows="4"
-                    class="input-premium font-mono text-[10px] w-full resize-y min-h-[80px]"
-                  ></textarea>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <span class="text-slate-400 font-bold uppercase text-[9px]"
-                    >Loop Start G-code</span
-                  >
-                  <textarea
-                    bind:value={settings.loop_start_gcode}
-                    rows="2"
-                    class="input-premium font-mono text-[10px] w-full resize-y min-h-[50px]"
-                  ></textarea>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <span class="text-slate-400 font-bold uppercase text-[9px]">Loop End G-code</span>
-                  <textarea
-                    bind:value={settings.loop_end_gcode}
-                    rows="2"
-                    class="input-premium font-mono text-[10px] w-full resize-y min-h-[50px]"
-                  ></textarea>
-                </div>
-              </div>
+              <SettingsGCode bind:settings />
             {/if}
 
             <!-- ═══ 7. PROGRAM ═══ -->
             {#if activeTab === "program"}
-              <div class="flex flex-col gap-6">
-                <span class="font-bold text-xs text-slate-300 pb-1 border-b border-slate-800"
-                  >Nastavení aplikace</span
-                >
-
-                <!-- EXPERTNÍ REŽIM -->
-                <div class="flex flex-col gap-3">
-                  <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Expertní režim</span>
-                  <div class="rounded-xl border-2 p-4 flex flex-col gap-3 transition-all
-                               {expertModeActive ? 'border-labred/50 bg-labred/5' : 'border-slate-700 bg-slate-900/40'}">
-                    <div class="flex items-center justify-between gap-4">
-                      <div class="flex items-center gap-2.5">
-                        <ShieldAlert class="w-4 h-4 shrink-0 {expertModeActive ? 'text-labred' : 'text-slate-500'}" />
-                        <div>
-                          <p class="text-xs font-bold {expertModeActive ? 'text-labred' : 'text-slate-300'}">Aktivovat expertní režim</p>
-                          <p class="text-[10px] text-slate-500 mt-0.5">Zpřístupní úpravu inicializačních G-kódů tiskárny. Platí jen pro toto spuštění.</p>
-                        </div>
-                      </div>
-                      <button
-                        on:click={expertModeActive ? disableExpertMode : requestExpertMode}
-                        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
-                               {expertModeActive ? 'border-labred bg-labred/80' : 'border-slate-600 bg-slate-700'}"
-                      >
-                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
-                                     {expertModeActive ? 'translate-x-4' : 'translate-x-0.5'}"></span>
-                      </button>
-                    </div>
-                    {#if expertModeActive}
-                      <div class="flex items-start gap-2 rounded-lg bg-labred/10 border border-labred/30 px-3 py-2">
-                        <ShieldAlert class="w-3.5 h-3.5 text-labred shrink-0 mt-0.5" />
-                        <p class="text-[10px] text-labred/90 leading-relaxed">
-                          Expertní režim je aktivní. Nesprávná úprava G-kódů může poškodit tiskárnu nebo způsobit nebezpečné pohyby. Režim se deaktivuje po zavření aplikace.
-                        </p>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="border-b border-slate-800/60"></div>
-
-                <!-- THEME -->
-                <div class="flex flex-col gap-3">
-                  <span class="text-xs font-bold text-slate-400 uppercase tracking-wider"
-                    >Barevný motiv</span
-                  >
-                  <div class="grid grid-cols-2 gap-3">
-                    <!-- DARK -->
-                    <button
-                      on:click={() => applyTheme("dark")}
-                      class="relative flex flex-col gap-3 p-4 rounded-xl border-2 transition-all cursor-pointer
-                             {currentTheme === 'dark'
-                        ? 'border-labaccent bg-labaccent/10 shadow-lg shadow-labaccent/10'
-                        : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'}"
-                    >
-                      {#if currentTheme === "dark"}
-                        <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-labaccent"
-                        ></span>
-                      {/if}
-                      <!-- preview -->
-                      <div
-                        class="w-full h-16 rounded-lg overflow-hidden border border-slate-700 flex flex-col"
-                      >
-                        <div class="h-4 bg-slate-950 flex items-center gap-1 px-2">
-                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                          <span class="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
-                          <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                        </div>
-                        <div class="flex-1 bg-slate-900 flex gap-1 p-1">
-                          <div class="w-8 bg-slate-800 rounded"></div>
-                          <div class="flex-1 bg-slate-950/50 rounded"></div>
-                          <div class="w-8 bg-slate-800 rounded"></div>
-                        </div>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <Moon class="w-4 h-4 text-slate-300" />
-                        <div>
-                          <p class="text-xs font-bold text-slate-200">Tmavý</p>
-                          <p class="text-[10px] text-slate-500">Výchozí laboratorní motiv</p>
-                        </div>
-                      </div>
-                    </button>
-
-                    <!-- LIGHT -->
-                    <button
-                      on:click={() => applyTheme("light")}
-                      class="relative flex flex-col gap-3 p-4 rounded-xl border-2 transition-all cursor-pointer
-                             {currentTheme === 'light'
-                        ? 'border-labaccent bg-labaccent/10 shadow-lg shadow-labaccent/10'
-                        : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'}"
-                    >
-                      {#if currentTheme === "light"}
-                        <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-labaccent"
-                        ></span>
-                      {/if}
-                      <!-- preview -->
-                      <div
-                        class="w-full h-16 rounded-lg overflow-hidden border border-slate-300 flex flex-col"
-                      >
-                        <div class="h-4 bg-gray-100 flex items-center gap-1 px-2">
-                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                          <span class="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
-                          <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                        </div>
-                        <div class="flex-1 bg-white flex gap-1 p-1">
-                          <div class="w-8 bg-gray-100 rounded"></div>
-                          <div class="flex-1 bg-gray-50 rounded"></div>
-                          <div class="w-8 bg-gray-100 rounded"></div>
-                        </div>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <Sun class="w-4 h-4 text-yellow-400" />
-                        <div>
-                          <p class="text-xs font-bold text-slate-200">Světlý</p>
-                          <p class="text-[10px] text-slate-500">Čistý bílý motiv</p>
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                  <p class="text-[10px] text-slate-500">
-                    Motiv se projeví okamžitě a zapamatuje si pro příští spuštění.
-                  </p>
-                </div>
-
-                {#if snowSeason}
-                  <div class="border-b border-slate-800/60"></div>
-
-                  <!-- SNĚŽENÍ -->
-                  <div class="flex flex-col gap-3">
-                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Sezónní efekty</span>
-                    <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
-                      <div class="flex items-center gap-2.5">
-                        <span class="text-lg leading-none select-none">❄️</span>
-                        <div>
-                          <p class="text-xs font-bold text-slate-300">Vypnout sněžení</p>
-                          <p class="text-[10px] text-slate-500 mt-0.5">Efekt padajícího sněhu (aktivní 15. 11. – 30. 1.)</p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        on:click={() => (snowDisabled = !snowDisabled)}
-                        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
-                               {snowDisabled ? 'border-slate-600 bg-slate-700' : 'border-labaccent bg-labaccent/80'}"
-                      >
-                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
-                                     {snowDisabled ? 'translate-x-0.5' : 'translate-x-4'}"></span>
-                      </button>
-                    </div>
-                  </div>
-                {/if}
-              </div>
+              <SettingsProgram
+                {expertModeActive}
+                {snowSeason}
+                bind:snowDisabled
+                {currentTheme}
+                onRequestExpertMode={requestExpertMode}
+                onDisableExpertMode={disableExpertMode}
+                onApplyTheme={applyTheme}
+              />
             {/if}
           </div>
           <!-- end TAB CONTENT -->

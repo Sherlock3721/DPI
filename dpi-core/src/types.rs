@@ -156,6 +156,24 @@ pub struct LayoutWithTransforms {
     pub transforms: Vec<Transform>,
 }
 
+/// Předpočítaná data jednoho segmentu pro náhled průběhu tisku.
+/// Výstup `compute_preview_segments` — odpovídá `PreviewSegData` v Canvas2D.svelte.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewSegData {
+    pub slide_idx: usize,
+    pub seg_idx: usize,
+    pub path_start_dist: f64,
+    pub point_dists: Vec<f64>,
+    pub seg_dist: f64,
+}
+
+/// Výsledek `compute_preview_segments`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewDistResult {
+    pub segs: Vec<PreviewSegData>,
+    pub total_dist: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SlideOverride {
     pub name: Option<String>,

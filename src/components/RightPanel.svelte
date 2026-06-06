@@ -18,6 +18,7 @@
   } from "lucide-svelte";
   import { subscribe_printer_status, type SlideOverride, type PrinterStatus } from "../lib/tauri";
   import { liquidLimits } from "../stores/liquidStore";
+  import { cameraAvailable } from "../stores/cameraStore";
 
   export let sampleCount = 1;
   export let primeActive = false;
@@ -416,7 +417,9 @@
   class="glass-panel rounded-lg p-3 flex flex-col gap-3 h-full overflow-hidden text-xs select-text"
 >
   <!-- CAMERA PREVIEW (At the top) -->
-  <CameraWidget />
+  {#if $cameraAvailable}
+    <CameraWidget />
+  {/if}
 
   <!-- MANUAL MOVEMENT GRID (In a collapsible box) -->
   <CollapsibleBox
