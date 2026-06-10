@@ -1,6 +1,6 @@
 {
   "productName": "Droplet Printing Interface",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,
@@ -31,7 +31,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:5174 ws://localhost:5174; font-src 'self' data:"
     }
   },
   "plugins": {
