@@ -192,7 +192,7 @@
           </div>
         {:else}
           <!-- SÉRIOVÁ KONZOLE (Nahoře na šířku) -->
-          <div class="w-full shrink-0 h-[240px] border-b border-slate-800/50 p-6 bg-slate-950/30">
+          <div class="w-full shrink-0 h-1/2 border-b border-slate-800/50 p-4 bg-slate-950/30">
             <Terminal />
           </div>
 

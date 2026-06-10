@@ -3,6 +3,7 @@
   import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData } from "../lib/tauri";
   import { compute_preview_segments } from "../lib/tauri";
   import { computeWorldAABB, clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
+  import { wasm_max_fit_rotation_factor, wasm_max_fit_scale } from "../lib/dpiWasm";
   import { projectStore } from "../stores/projectStore";
 
   const dispatch = createEventDispatcher();
@@ -21,6 +22,7 @@
   export let isMeasuring = false;
   export let measurePoints: { x: number; y: number }[] = [];
   export let printProgress = 100;
+  export let extrusionRateUl = 0; // µl/mm, 0 = neznámý (skryj objem)
 
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D | null = null;
@@ -539,50 +541,19 @@
         newScale = Math.max(0.05, Math.min(10.0, newScale));
         const scaleRatio = newScale / st.scale;
 
-        // Binárním hledáním najde maximální scale ≤ wanted, při němž cesta (s anchor-based
-        // pozicí) stále celá leží uvnitř skla. Zaručuje, že trasa nepřekročí žádnou hranu.
         const maxFitScale = (
           startT: Transform,
           anc: { x: number; y: number },
           wanted: number,
           p: LayoutPosition,
           raw: RawBbox
-        ): number => {
-          // Scaling down never needs clamping — path only shrinks toward anchor.
-          // The clamp logic is unreliable when scaling down because handle positions
-          // include ±nozzleDiam/2 padding which places anchors outside the inset,
-          // causing fits(startT.scale) to return false and blocking all shrinking.
-          if (wanted <= startT.scale) return Math.max(0.05, wanted);
-
-          const nd = nozzleDiam / 2;
-          const fits = (s: number) => {
-            const ratio = s / startT.scale;
-            const dx = anc.x - startT.cx - ratio * (anc.x - startT.gui_dx - startT.cx);
-            const dy = anc.y - startT.cy - ratio * (anc.y - startT.gui_dy - startT.cy);
-            const a = computeWorldAABB(dx, dy, s, startT.rotation, startT.cx, startT.cy, raw);
-            // 1e-4 mm tolerance avoids false negatives from floating-point at the exact boundary.
-            const eps = 1e-4;
-            return (
-              a.minX >= p.x + nd - eps &&
-              a.maxX <= p.x + p.width - nd + eps &&
-              a.minY >= p.y + nd - eps &&
-              a.maxY <= p.y + p.height - nd + eps
-            );
-          };
-          if (fits(wanted)) return wanted;
-          let lo = 0.05,
-            hi = wanted;
-          if (!fits(lo)) {
-            lo = startT.scale;
-            if (!fits(lo)) return lo;
-          }
-          for (let i = 0; i < 12; i++) {
-            const mid = (lo + hi) / 2;
-            if (fits(mid)) lo = mid;
-            else hi = mid;
-          }
-          return lo;
-        };
+        ): number => wasm_max_fit_scale(
+          startT.gui_dx, startT.gui_dy, startT.scale, startT.rotation, startT.cx, startT.cy,
+          anc.x, anc.y, wanted,
+          p.x, p.y, p.width, p.height,
+          raw.mnX, raw.mxX, raw.mnY, raw.mxY,
+          nozzleDiam
+        );
 
         // Přepočítá gui_dx/gui_dy tak, aby anchor zůstal na místě:
         // anchor_world = (dx+cx) + ratio*(anchor-dx0-cx)  →  dx = anchor-cx - ratio*(anchor-dx0-cx)
@@ -642,46 +613,18 @@
       // Raw (un-normalized) delta in degrees — kept separate for binary search interpolation.
       const rawDeltaDeg = (-(currAngle - initAngle) * 180) / Math.PI;
 
-      // Returns the largest factor in [0,1] s.t. the path (repositioned by clampGuidXY) still
-      // fits entirely inside the slide. factor=1 means the full drag rotation is valid.
       const maxFitFactor = (
         startT: Transform,
         delta: number,
         p: LayoutPosition,
         raw: RawBbox
-      ): number => {
-        const nd = nozzleDiam / 2;
-        const fits = (f: number): boolean => {
-          const rot = (((startT.rotation + f * delta) % 360) + 360) % 360;
-          const testT = { ...startT, rotation: rot };
-          clampGuidXY(testT, p, raw, nozzleDiam);
-          const a = computeWorldAABB(
-            testT.gui_dx,
-            testT.gui_dy,
-            testT.scale,
-            rot,
-            testT.cx,
-            testT.cy,
-            raw
-          );
-          return (
-            a.minX >= p.x + nd &&
-            a.maxX <= p.x + p.width - nd &&
-            a.minY >= p.y + nd &&
-            a.maxY <= p.y + p.height - nd
-          );
-        };
-        if (fits(1)) return 1;
-        if (!fits(0)) return 0;
-        let lo = 0,
-          hi = 1;
-        for (let i = 0; i < 12; i++) {
-          const mid = (lo + hi) / 2;
-          if (fits(mid)) lo = mid;
-          else hi = mid;
-        }
-        return lo;
-      };
+      ): number => wasm_max_fit_rotation_factor(
+        startT.gui_dx, startT.gui_dy, startT.scale, startT.cx, startT.cy,
+        startT.rotation, delta,
+        p.x, p.y, p.width, p.height,
+        raw.mnX, raw.mxX, raw.mnY, raw.mxY,
+        nozzleDiam
+      );
 
       const rotFromFactor = (startRot: number, factor: number): number =>
         (((startRot + factor * rawDeltaDeg) % 360) + 360) % 360;
@@ -1258,6 +1201,42 @@
       ctx.fillText(lbl3, 18, 25);
     }
 
+    // ── Pravý horní overlay — celkové statistiky G-kódu (odděleno od info o prvku) ──
+    let _statsBoxBottom = 46;
+    if ($projectStore.totalDist > 0) {
+      const _td = $projectStore.totalDist;
+      const _tt = $projectStore.totalTime;
+      const _statLines: string[] = [
+        "Statistiky G-kódu",
+        `Celková dráha: ${_td.toFixed(1)} mm`,
+        `Čas tisku: ${Math.floor(_tt / 60)} min ${Math.round(_tt % 60)} s`,
+      ];
+      if (extrusionRateUl > 0) {
+        const _vol = _td * extrusionRateUl;
+        _statLines.push(
+          `Celkový objem: ${_vol >= 1000 ? (_vol / 1000).toFixed(3) + " ml" : _vol.toFixed(2) + " µl"}`
+        );
+      }
+
+      ctx.font = "bold 11px sans-serif";
+      const _slh = 17,
+        _spad = 8;
+      const _sbw = Math.max(..._statLines.map((l) => ctx!.measureText(l).width)) + _spad * 2;
+      const _sbh = _statLines.length * _slh + _spad;
+      const _sbx = width - _sbw - 10,
+        _sby = 54;
+
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillRect(_sbx, _sby, _sbw, _sbh);
+      ctx.fillStyle = "#7dd3fc";
+      ctx.fillText(_statLines[0], _sbx + _spad, _sby + _spad + 3);
+      ctx.fillStyle = "#e2e8f0";
+      for (let li = 1; li < _statLines.length; li++)
+        ctx.fillText(_statLines[li], _sbx + _spad, _sby + _spad + li * _slh + 3);
+
+      _statsBoxBottom = _sby + _sbh;
+    }
+
     // ── Pravý horní overlay — info o vybraném prvku ──────────────────────────
     if (
       selectedIndex >= 0 &&
@@ -1297,6 +1276,10 @@
           `Rozměr: ${_pw.toFixed(1)} × ${_ph.toFixed(1)} mm  (${_area.toFixed(1)} mm²)`,
           `Trasa: ${_pathLen.toFixed(1)} mm`,
         ];
+        if (extrusionRateUl > 0) {
+          const _vol = _pathLen * extrusionRateUl;
+          _lines.push(`Objem: ${_vol >= 1000 ? (_vol / 1000).toFixed(3) + " ml" : _vol.toFixed(2) + " µl"}`);
+        }
         if (measTotal !== null) _lines.push(`Pravítko: ${measTotal.toFixed(1)} mm`);
 
         ctx.font = "bold 11px sans-serif";
@@ -1305,7 +1288,7 @@
         const _bw = Math.max(..._lines.map((l) => ctx!.measureText(l).width)) + _pad * 2;
         const _bh = _lines.length * _lh + _pad;
         const _bx = width - _bw - 10,
-          _by = 54;
+          _by = _statsBoxBottom + 8;
 
         ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.fillRect(_bx, _by, _bw, _bh);

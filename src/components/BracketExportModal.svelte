@@ -2,423 +2,614 @@
   import { createEventDispatcher } from "svelte";
   import { X, Download } from "lucide-svelte";
   import NumberInput from "./NumberInput.svelte";
-  import { projectStore } from "../stores/projectStore";
-  import type { LayoutPosition } from "../lib/tauri";
+  import CustomSelect from "./CustomSelect.svelte";
+  import { settingsStore } from "../stores/settingsStore";
   import { save } from "@tauri-apps/plugin-dialog";
-  import { writeTextFile } from "@tauri-apps/plugin-fs";
+  import { writeTextFile, writeFile } from "@tauri-apps/plugin-fs";
+  import { wasm_bracket_geometry, wasm_bracket_svg, wasm_bracket_stl } from "../lib/dpiWasm";
+  import type { LayoutPosition } from "../lib/tauri";
 
   export let isOpen = false;
   const dispatch = createEventDispatcher();
   function close() { dispatch("close"); }
 
   // === PARAMETRY ===
-  let topFrameThick   = 10.0;  // výška horního rámu (pružinová zóna)
-  let rightFrameThick = 10.0;  // šířka pravého rámu (pružinová zóna)
-  let leftBorderW     = 3.0;   // levý pevný okraj
-  let bottomBorderH   = 3.0;   // spodní pevný okraj
-  let springWidth     = 10.0;  // šířka jednoho pružinového elementu (mm)
-  let springCountX    = 3;     // počet pružin v ose X (horní rám)
-  let springCountY    = 1;     // počet pružin v ose Y (pravý rám)
-  let springBends     = 4;     // počet U-ohybů jedné pružiny
-  let cornerDiam      = 3.0;   // průměr výseče v rozích (mm)
-  let offsetTop       = 2.0;
-  let offsetBottom    = 2.0;
-  let offsetLeft      = 2.0;
-  let offsetRight     = 2.0;
-  let bracketThick    = 3.0;   // tloušťka pro 3D export (mm)
+  let leftBorderW   = 18.0;  // tloušťka levé pevné stěny (jen u prvního sloupce sestavy)
+  let bottomBorderH = 24.0;  // tloušťka spodní pevné stěny (jen u posledního řádku sestavy)
+  let extendWalls   = false; // rozšířit pevné stěny o extendAmount doleva a dolů
+  let extendAmount  = 2.0;   // velikost rozšíření stěn (mm)
+  let fixedThickX   = 5.0;   // tloušťka pravého ramene pevného L (směrem doleva)
+  let fixedThickY   = 5.0;   // tloušťka horního ramene pevného L (směrem dolů)
+  let flexThick     = 2.0;   // tloušťka ramen flexibilního L
+  let flexGap       = 1.0;   // mezera od levé a spodní stěny skla
+  let springCountX  = 2;     // počet pružin v ose X (horní zóna)
+  let springCountY  = 1;     // počet pružin v ose Y (pravá zóna)
+  let springWidth   = 10.0;  // šířka/výška jednoho pružinového prvku (mm)
+  let springBends   = 6;     // počet ohybů jedné pružiny
+  let springGapMod  = 0.2;   // modifikátor mezery řezu (mm) – kompenzace tolerancí tiskárny
+  let cornerR       = 1.5;   // poloměr rohových výsečí (mm)
+  let magnetSize    = 3.0;   // průměr (kružnice) / strana (čtverec) díry pro magnet (mm)
+  let magnetShape: "circle" | "square" = "circle"; // tvar díry pro magnet
 
-  // === DATA ZE STORE ===
-  $: positions = $projectStore.positions.filter((p: LayoutPosition) => !p.is_prime);
-  $: glassW    = $projectStore.params?.slide_w ?? 25.0;
-  $: glassH    = $projectStore.params?.slide_h ?? 75.0;
+  // === 3D TISK (STL) ===
+  // Tloušťka držáku (výška v ose Z) — nikdy nesmí přesáhnout tloušťku skla
+  // (jinak by deska vyčnívala nad/pod sklo a bránila jeho usazení), proto je
+  // vždy ořízlá na glassThickness — viz reaktivní clamp níže.
+  let bracketThickness = 1.0;
+  // Dodatečná výška ROZŠÍŘENÉ ČÁSTI pevných stěn (viz extendWalls/extendAmount)
+  // nad rámec bracketThickness — tato část tak vyčnívá nad desku a tvoří
+  // "zarážku" držící sklo na místě. Má smysl jen když je rozšíření aktivní.
+  let wallExtraHeight  = 5.0;
 
-  $: glassBBox = (() => {
-    if (positions.length === 0) return { minX: 0, minY: 0, maxX: glassW, maxY: glassH };
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of positions) {
-      const pw = p.width  || glassW;
-      const ph = p.height || glassH;
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x + pw);
-      maxY = Math.max(maxY, p.y + ph);
-    }
-    return { minX, minY, maxX, maxY };
-  })();
+  // === SUBSTRÁTY ===
+  $: substrateOptions = Object.entries($settingsStore.sklo_dims || {}).map(([name, dims]: [string, any]) => ({
+    value: name,
+    label: `${name}  (${Number(dims[0]).toFixed(1)} × ${Number(dims[1]).toFixed(1)} mm)`,
+    w: Number(dims[0]),
+    h: Number(dims[1]),
+    thickness: Number(dims[2]),
+  }));
+  let selectedSubstrateId: string = "";
+  $: if (!selectedSubstrateId && substrateOptions.length > 0) selectedSubstrateId = substrateOptions[0].value;
+  $: selectedSubstrate = substrateOptions.find(s => s.value === selectedSubstrateId) ?? null;
+  $: glassW = selectedSubstrate?.w ?? 25.0;
+  $: glassH = selectedSubstrate?.h ?? 75.0;
+  $: glassThickness = selectedSubstrate?.thickness ?? 1.0;
 
-  $: ggW = Math.max(1, glassBBox.maxX - glassBBox.minX);
-  $: ggH = Math.max(1, glassBBox.maxY - glassBBox.minY);
+  // Tloušťka držáku nesmí nikdy přesáhnout tloušťku skla — jinak by deska
+  // vyčnívala nad jeho povrch a bránila jeho usazení do sestavy.
+  $: bracketThickness = Math.min(Math.max(0.2, bracketThickness), glassThickness);
 
-  $: bW = Math.max(10, leftBorderW + offsetLeft + ggW + offsetRight + rightFrameThick);
-  $: bH = Math.max(10, topFrameThick + offsetTop + ggH + offsetBottom + bottomBorderH);
+  // === MULTIPLIKACE ===
+  // Skutečné rozložení kopií na podložce počítá Rust (compute_bracket_geometry,
+  // viz dpi-core/src/bracket.rs::grid_layout_positions). Max. kapacita mřížky
+  // se počítá zde přímo ze vstupů (bedConfig + rozměry skla) — NESMÍ záviset
+  // na `geometry`, protože by to vytvořilo reaktivní cyklus:
+  //   bracketParams → geometry → maxMultiply → multiplyCount → bracketParams.
+  // Algoritmus zrcadlí `grid_max_capacity` v bracket.rs (závisí jen na glass_w/h,
+  // spacing a bed — nikoli na multiply_count).
+  let multiplyCount = 1;
+  let maxMultiply   = 1;
+  $: spacing = $settingsStore.multi_spacing || 5.0;
+  $: bedConfig = {
+    min_x:    $settingsStore.bed_min_x ?? 0.0,
+    max_x:    $settingsStore.bed_max_x || 250.0,
+    max_y:    $settingsStore.bed_max_y || 250.0,
+    offset_x: $settingsStore.start_offset_x || 18.0,
+    offset_y: $settingsStore.start_offset_y || 18.0,
+  };
+  $: {
+    const colTop     = bedConfig.offset_y;
+    const rowsPerCol = Math.max(0, Math.floor((bedConfig.max_y - colTop + spacing) / (glassH + spacing)));
+    let currX = bedConfig.min_x + bedConfig.offset_x;
+    let total = 0;
+    while (currX + glassW <= bedConfig.max_x) { total += rowsPerCol; currX += glassW + spacing; }
+    maxMultiply = Math.max(1, total);
+  }
+  $: multiplyCount = Math.min(Math.max(1, multiplyCount), maxMultiply);
 
-  $: gox = leftBorderW  + offsetLeft;
-  $: goy = topFrameThick + offsetTop;
-
-  $: glassRects = (() => {
-    if (positions.length === 0) return [{ x: gox, y: goy, w: glassW, h: glassH }];
-    return positions.map((p: LayoutPosition) => ({
-      x: gox + (p.x - glassBBox.minX),
-      y: goy + (p.y - glassBBox.minY),
-      w: p.width  || glassW,
-      h: p.height || glassH,
-    }));
-  })();
-
-  // Pružiny X — v horním rámu, rovnoměrně rozloženy přes šířku skupiny skel
-  $: xSprings = (() => {
-    if (springCountX <= 0 || ggW <= 0) return [];
-    const sw  = Math.min(springWidth, ggW / (springCountX + 0.5));
-    const gap = (ggW - springCountX * sw) / (springCountX + 1);
-    return Array.from({ length: springCountX }, (_, i) => ({
-      x: gox + gap * (i + 1) + sw * i,
-      y: 0,
-      w: sw,
-      h: topFrameThick,
-    }));
-  })();
-
-  // Pružiny Y — v pravém rámu, rozloženy přes výšku skupiny skel
-  $: ySprings = (() => {
-    if (springCountY <= 0 || ggH <= 0) return [];
-    const sh  = Math.min(springWidth, ggH / (springCountY + 0.5));
-    const gap = (ggH - springCountY * sh) / (springCountY + 1);
-    const sx  = gox + ggW + offsetRight;
-    return Array.from({ length: springCountY }, (_, i) => ({
-      x: sx,
-      y: goy + gap * (i + 1) + sh * i,
-      w: rightFrameThick,
-      h: sh,
-    }));
-  })();
-
-  $: cornerR = cornerDiam / 2;
-
-  // === GENERÁTORY CEST ===
-
-  // Horizontální pružina: řezy jdou vodorovně střídavě zleva/zprava
-  function hSpringPath(x: number, y: number, w: number, h: number, bends: number): string {
-    if (bends <= 0 || w < 1 || h < 1) return "";
-    const cutT = Math.max(0.3, Math.min(1.2, h / (bends * 5)));
-    const tabW = Math.max(1.0, w * 0.2);
-    const legH = (h - bends * cutT) / (bends + 1);
-    if (legH < 0.3) return "";
-    let d = "";
-    for (let i = 0; i < bends; i++) {
-      const cy = y + legH * (i + 1) + cutT * i;
-      d += i % 2 === 0
-        ? `M ${x} ${cy} H ${x + w - tabW} V ${cy + cutT} H ${x} Z `
-        : `M ${x + tabW} ${cy} H ${x + w} V ${cy + cutT} H ${x + tabW} Z `;
-    }
-    return d;
+  // === GEOMETRIE (jediný zdroj pravdy — Rust, viz dpi-core/src/bracket.rs) ===
+  // Veškerá geometrie sestavy (cesty, obdélníky, středy děr, layout kopií…) se
+  // počítá v Rustu jedním voláním — náhled, SVG export i rasterizace pro STL
+  // export tak vždy vychází ze stejných dat. Frontend pouze vykresluje/ukládá.
+  interface BracketPoint { x: number; y: number; }
+  interface BracketRect  { x: number; y: number; w: number; h: number; }
+  interface SpringGeom extends BracketRect { path: string; }
+  interface CopyOffset   { tx: number; ty: number; }
+  interface BracketGeometry {
+    b_w: number; b_h: number; hole_x: number; hole_y: number; hole_x2: number; hole_y2: number;
+    flex_l_path: string; fixed_l_path: string; corner_square_size: number;
+    magnet_center: BracketPoint; effective_magnet_size: number;
+    x_springs: SpringGeom[]; y_springs: SpringGeom[];
+    multiply_positions: LayoutPosition[]; copy_offsets: CopyOffset[];
+    corner_hole_centers: BracketPoint[];
+    left_wall_rect: BracketRect; bottom_wall_rect: BracketRect; wall_extend: number;
+    wall_magnet_centers: BracketPoint[];
+    assembly_min_x: number; assembly_min_y: number; assembly_max_x: number; assembly_max_y: number;
+    assembly_w: number; assembly_h: number;
+    /** Skutečný max. počet kopií na podložku — vypočítán v Rustu. */
+    max_multiply: number;
   }
 
-  // Vertikální pružina: řezy jdou svisle střídavě shora/zdola
-  function vSpringPath(x: number, y: number, w: number, h: number, bends: number): string {
-    if (bends <= 0 || w < 1 || h < 1) return "";
-    const cutT = Math.max(0.3, Math.min(1.2, w / (bends * 5)));
-    const tabH = Math.max(1.0, h * 0.2);
-    const legW = (w - bends * cutT) / (bends + 1);
-    if (legW < 0.3) return "";
-    let d = "";
-    for (let i = 0; i < bends; i++) {
-      const cx = x + legW * (i + 1) + cutT * i;
-      d += i % 2 === 0
-        ? `M ${cx} ${y} V ${y + h - tabH} H ${cx + cutT} V ${y} Z `
-        : `M ${cx} ${y + tabH} V ${y + h} H ${cx + cutT} V ${y + tabH} Z `;
+  $: bracketParams = {
+    glass_w: glassW, glass_h: glassH, glass_label: selectedSubstrate?.label ?? "—",
+    left_border_w: leftBorderW, bottom_border_h: bottomBorderH,
+    extend_walls: extendWalls, extend_amount: extendAmount,
+    fixed_thick_x: fixedThickX, fixed_thick_y: fixedThickY,
+    flex_thick: flexThick, flex_gap: flexGap,
+    spring_count_x: springCountX, spring_count_y: springCountY,
+    spring_width: springWidth, spring_bends: springBends, spring_gap_mod: springGapMod,
+    corner_r: cornerR, magnet_size: magnetSize, magnet_shape: magnetShape,
+    multiply_count: multiplyCount, spacing,
+    bed: bedConfig,
+  };
+
+  let geometry: BracketGeometry | null = null;
+  let geometryError: string | null = null;
+
+  // Výpočet geometrie proběhne synchronně — WASM je rychlý (<5 ms) a geometrie
+  // musí být vždy aktuální: slouží jako validační základ pro max_multiply/clampy
+  // i pro export. Debounce slouží jen pro vykreslení SVG náhledu (viz renderedPreview).
+  $: {
+    try {
+      geometry      = JSON.parse(wasm_bracket_geometry(JSON.stringify(bracketParams))) as BracketGeometry;
+      geometryError = null;
+    } catch (e) {
+      geometry      = null;
+      geometryError = String(e);
     }
-    return d;
   }
 
   // === EXPORT SVG ===
-  function generateExportSVG(): string {
-    const glassHoles = glassRects.map(gr =>
-      `  <rect x="${gr.x.toFixed(3)}" y="${gr.y.toFixed(3)}" width="${gr.w.toFixed(3)}" height="${gr.h.toFixed(3)}" fill="white"/>`
-    ).join("\n");
-
-    const xZones = xSprings.map(s => [
-      `  <rect x="${s.x.toFixed(3)}" y="${s.y.toFixed(3)}" width="${s.w.toFixed(3)}" height="${s.h.toFixed(3)}" fill="#1e40af"/>`,
-      `  <path d="${hSpringPath(s.x, s.y, s.w, s.h, springBends)}" fill="white"/>`,
-    ].join("\n")).join("\n");
-
-    const yZones = ySprings.map(s => [
-      `  <rect x="${s.x.toFixed(3)}" y="${s.y.toFixed(3)}" width="${s.w.toFixed(3)}" height="${s.h.toFixed(3)}" fill="#1e40af"/>`,
-      `  <path d="${vSpringPath(s.x, s.y, s.w, s.h, springBends)}" fill="white"/>`,
-    ].join("\n")).join("\n");
-
-    const corners = cornerR > 0 ? glassRects.flatMap(gr => [
-      `  <circle cx="${gr.x.toFixed(3)}" cy="${gr.y.toFixed(3)}" r="${cornerR.toFixed(3)}" fill="white"/>`,
-      `  <circle cx="${(gr.x + gr.w).toFixed(3)}" cy="${gr.y.toFixed(3)}" r="${cornerR.toFixed(3)}" fill="white"/>`,
-      `  <circle cx="${gr.x.toFixed(3)}" cy="${(gr.y + gr.h).toFixed(3)}" r="${cornerR.toFixed(3)}" fill="white"/>`,
-      `  <circle cx="${(gr.x + gr.w).toFixed(3)}" cy="${(gr.y + gr.h).toFixed(3)}" r="${cornerR.toFixed(3)}" fill="white"/>`,
-    ]).join("\n") : "";
-
-    return [
-      `<?xml version="1.0" encoding="UTF-8"?>`,
-      `<!-- DPI Bracket Mask: ${bW.toFixed(1)} x ${bH.toFixed(1)} mm, tloušťka: ${bracketThick} mm -->`,
-      `<svg width="${bW.toFixed(3)}mm" height="${bH.toFixed(3)}mm"`,
-      `  viewBox="0 0 ${bW.toFixed(3)} ${bH.toFixed(3)}"`,
-      `  xmlns="http://www.w3.org/2000/svg">`,
-      `  <rect x="0" y="0" width="${bW.toFixed(3)}" height="${bH.toFixed(3)}" fill="#3b82f6"/>`,
-      xZones,
-      yZones,
-      glassHoles,
-      corners,
-      `</svg>`,
-    ].filter(Boolean).join("\n");
+  async function handleExportSVG() {
+    let content: string;
+    try {
+      content = wasm_bracket_svg(JSON.stringify(bracketParams));
+    } catch (e) { alert(`Chyba při generování SVG: ${e}`); return; }
+    try {
+      const filePath = await save({ filters: [{ name: "SVG soubor", extensions: ["svg"] }], defaultPath: "drzak.svg" });
+      if (filePath) await writeTextFile(filePath, content);
+    } catch (e) { alert(`Chyba při exportu SVG: ${e}`); }
   }
 
-  async function handleExportSVG() {
-    const content = generateExportSVG();
-    try {
-      const filePath = await save({
-        filters: [{ name: "SVG soubor", extensions: ["svg"] }],
-        defaultPath: "drzak.svg",
-      });
-      if (filePath) {
-        await writeTextFile(filePath, content);
+  // === EXPORT STL (3D model) ===
+  // STL se generuje jako 2.5D vytlačení (extruze) 2D průřezu — stejná geometrie
+  // jako u SVG náhledu/exportu, jen "naskládaná" do výšky. Protože průřez
+  // obsahuje díry a oblé řezy (pružiny, magnety, výseče), vyrastruje se nejprve
+  // do bitmapy (plno/díra) pomocí canvasu a Path2D (jediná část pipeline, která
+  // vyžaduje DOM/Canvas — cesty samotné dodává Rust). Vše ostatní — greedy
+  // meshing, vytlačení do kvádrů a binární STL encoding — proběhne v Rustu
+  // (build_bracket_stl, viz dpi-core/src/bracket.rs).
+
+  // Vykreslí 2D průřez sestavy do canvasu — bíle plné plochy, černě díry.
+  // Pořadí vrstev je přesně shodné s SVG náhledem — cesty a obdélníky jsou
+  // předpočítané v `g`, žádný další geometrický výpočet zde neprobíhá.
+  function drawCrossSectionForSTL(ctx: CanvasRenderingContext2D, g: BracketGeometry) {
+    function drawMagnet(cx: number, cy: number) {
+      if (g.effective_magnet_size <= 0) return;
+      const s = g.effective_magnet_size;
+      if (magnetShape === "square") {
+        ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+      } else {
+        ctx.beginPath();
+        ctx.arc(cx, cy, s / 2, 0, Math.PI * 2);
+        ctx.fill();
       }
-    } catch (e) {
-      alert(`Chyba při exportu SVG: ${e}`);
+    }
+
+    ctx.fillStyle = "black";
+    ctx.fillRect(g.assembly_min_x, g.assembly_min_y, g.assembly_w, g.assembly_h);
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(g.left_wall_rect.x,   g.left_wall_rect.y,   g.left_wall_rect.w,   g.left_wall_rect.h);
+    ctx.fillRect(g.bottom_wall_rect.x, g.bottom_wall_rect.y, g.bottom_wall_rect.w, g.bottom_wall_rect.h);
+
+    ctx.fillStyle = "black";
+    for (const c of g.wall_magnet_centers) drawMagnet(c.x, c.y);
+
+    for (const o of g.copy_offsets) {
+      ctx.save();
+      ctx.translate(o.tx, o.ty);
+
+      ctx.fillStyle = "white";
+      ctx.fill(new Path2D(g.fixed_l_path));
+
+      ctx.fillStyle = "black";
+      drawMagnet(g.magnet_center.x, g.magnet_center.y);
+
+      ctx.fillStyle = "white";
+      for (const s of g.x_springs) ctx.fillRect(s.x, s.y, s.w, s.h);
+      for (const s of g.y_springs) ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = "black";
+      for (const s of g.x_springs) ctx.fill(new Path2D(s.path));
+      for (const s of g.y_springs) ctx.fill(new Path2D(s.path));
+
+      ctx.fillStyle = "white";
+      ctx.fill(new Path2D(g.flex_l_path));
+
+      ctx.restore();
+    }
+
+    ctx.fillStyle = "black";
+    for (const c of g.corner_hole_centers) {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, cornerR, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
+
+  // Vyrastruje průřez do bitmapy plno/díra. Velikost buňky se volí jemně
+  // (rozliší i nejtenčí řezy pružin), ale s horní mezí na celkový počet buněk,
+  // aby u velkých sestav (více kopií) negenerovala obrovské množství trojúhelníků.
+  function rasterizeCrossSection(g: BracketGeometry): { mask: Uint8Array; cols: number; rows: number; cellSize: number } {
+    let cellSize = 0.2;
+    let cols = Math.max(1, Math.ceil(g.assembly_w / cellSize));
+    let rows = Math.max(1, Math.ceil(g.assembly_h / cellSize));
+    const MAX_CELLS = 4_000_000;
+    if (cols * rows > MAX_CELLS) {
+      cellSize *= Math.sqrt((cols * rows) / MAX_CELLS);
+      cols = Math.max(1, Math.ceil(g.assembly_w / cellSize));
+      rows = Math.max(1, Math.ceil(g.assembly_h / cellSize));
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width  = cols;
+    canvas.height = rows;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.scale(1 / cellSize, 1 / cellSize);
+    ctx.translate(-g.assembly_min_x, -g.assembly_min_y);
+    drawCrossSectionForSTL(ctx, g);
+
+    // Čteme jen R kanál (index 0) z RGBA — ostatní tři kanály ignorujeme.
+    const { data } = ctx.getImageData(0, 0, cols, rows);
+    const mask = new Uint8Array(cols * rows);
+    for (let i = 0; i < cols * rows; i++) mask[i] = data[i * 4] > 128 ? 1 : 0;
+    return { mask, cols, rows, cellSize };
+  }
+
+  function generateExportSTL(): Uint8Array {
+    if (!geometry) throw new Error("Geometrie držáku není k dispozici");
+    const g = geometry;
+    const { mask, cols, rows, cellSize } = rasterizeCrossSection(g);
+    return wasm_bracket_stl(
+      mask, cols, rows, cellSize, g.assembly_min_x, g.assembly_min_y,
+      g.left_wall_rect.x, g.left_wall_rect.y, g.left_wall_rect.w, g.left_wall_rect.h,
+      g.bottom_wall_rect.x, g.bottom_wall_rect.y, g.bottom_wall_rect.w, g.bottom_wall_rect.h,
+      g.wall_extend, bracketThickness, wallExtraHeight,
+    );
+  }
+
+  async function handleExportSTL() {
+    let content: Uint8Array;
+    try {
+      content = generateExportSTL();
+    } catch (e) { alert(`Chyba při generování STL: ${e}`); return; }
+    try {
+      const filePath = await save({ filters: [{ name: "STL soubor", extensions: ["stl"] }], defaultPath: "drzak.stl" });
+      if (filePath) await writeFile(filePath, content);
+    } catch (e) { alert(`Chyba při exportu STL: ${e}`); }
+  }
+
+  const PAD = 8;
+
+  // === Debounce živého náhledu ===
+  // SVG náhled obsahuje desítky <path> s clip-pathy (pružiny, magnety, kóty)
+  // a jeho překreslení je nákladné (~150–300 ms na cyklus layout/paint/composite).
+  // Při každém kliknutí na parametr se tak aplikace na chvíli „zasekla". Šablona
+  // proto čerpá geometrii ze snímku `rp`, který se aktualizuje až s krátkým
+  // zpožděním po poslední změně — vstupní pole i export zůstávají navázané
+  // na živé (nedebouncované) hodnoty.
+  type PreviewModel = BracketGeometry & { magnetShape: "circle" | "square"; cornerR: number; glassW: number; glassH: number };
+  $: previewModel = geometry ? { ...geometry, magnetShape, cornerR, glassW, glassH } as PreviewModel : null;
+  let renderedPreview: PreviewModel | undefined;
+  let previewDebounce: ReturnType<typeof setTimeout> | undefined;
+
+  // Reset stale preview při zavření/znovuotevření modalu — bez toho by se
+  // zobrazila stará geometrie, dokud nepřijde nový model.
+  $: if (!isOpen) {
+    renderedPreview = undefined;
+    clearTimeout(previewDebounce);
+  }
+
+  // Pozn.: záměrně obyčejná funkce volaná z reaktivního výrazu (ne `$: { ... }` blok) —
+  // ten by četl i zapisoval `renderedPreview`, čímž by se sám stal na sobě závislým
+  // a vyvolal nekonečný cyklus přehodnocování (= zamrznutí).
+  function schedulePreviewUpdate(model: PreviewModel | null) {
+    if (!model) return;
+    if (!renderedPreview) {
+      renderedPreview = model;
+      return;
+    }
+    clearTimeout(previewDebounce);
+    previewDebounce = setTimeout(() => { renderedPreview = model; }, 120);
+  }
+  $: schedulePreviewUpdate(previewModel);
+  $: rp = renderedPreview ?? previewModel;
 </script>
 
 {#if isOpen}
-<div
-  class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4"
->
-  <div
-    class="glass-panel w-[94vw] h-[90vh] rounded-xl flex flex-col border border-slate-800 shadow-2xl overflow-hidden"
-  >
-    <!-- Hlavička -->
+<div class="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
+  <div class="glass-panel w-[94vw] h-[90vh] rounded-xl flex flex-col border border-slate-800 shadow-2xl overflow-hidden">
+
     <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 shrink-0">
       <div>
-        <h3 class="text-sm font-bold text-slate-100 uppercase tracking-wider">
-          Nastavení / export držáku
-        </h3>
+        <h3 class="text-sm font-bold text-slate-100 uppercase tracking-wider">Export držáku</h3>
         <p class="text-[10px] text-slate-500 mt-0.5">
-          Rozměr: {bW.toFixed(1)} × {bH.toFixed(1)} mm
-          · {positions.length > 0 ? positions.length : 1} sklo/skel
-          {#if positions.length === 0}
-            <span class="text-yellow-500"> — žádné sklo nenačteno, zobrazen náhled</span>
+          {#if geometry}
+            Deska: {geometry.assembly_w.toFixed(1)} × {geometry.assembly_h.toFixed(1)} mm · Sklo: {glassW.toFixed(1)} × {glassH.toFixed(1)} mm
           {/if}
         </p>
       </div>
-      <button
-        on:click={close}
-        class="p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-slate-100"
-      >
+      <button on:click={close} class="p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-slate-100">
         <X class="w-4 h-4" />
       </button>
     </div>
 
-    <!-- Hlavní obsah -->
     <div class="flex-1 flex overflow-hidden min-h-0">
 
-      <!-- LEVÁ ČÁST: SVG canvas (~75%) -->
-      <div class="flex-1 overflow-hidden bg-slate-950 flex items-center justify-center p-6 min-w-0">
+      <!-- SVG náhled -->
+      <div class="flex-1 overflow-hidden bg-slate-950 flex items-center justify-center p-8 min-w-0">
+        {#if rp}
         <svg
-          viewBox="0 0 {bW} {bH}"
+          viewBox="{rp.assembly_min_x - PAD} {rp.assembly_min_y - PAD} {rp.assembly_w + PAD * 2} {rp.assembly_h + PAD * 2}"
           preserveAspectRatio="xMidYMid meet"
           style="max-width: 100%; max-height: 100%; display: block;"
         >
           <defs>
-            <pattern id="bgrid" width="10" height="10" patternUnits="userSpaceOnUse">
-              <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#1e293b" stroke-width="0.15"/>
+            <pattern id="bgrid" width="5" height="5" patternUnits="userSpaceOnUse">
+              <path d="M 5 0 L 0 0 0 5" fill="none" stroke="#1e293b" stroke-width="0.2"/>
             </pattern>
           </defs>
+          <!-- Pozadí = vše je díra -->
+          <rect x={rp.assembly_min_x - PAD} y={rp.assembly_min_y - PAD} width={rp.assembly_w + PAD * 2} height={rp.assembly_h + PAD * 2} fill="#0b0f19"/>
+          <rect x={rp.assembly_min_x - PAD} y={rp.assembly_min_y - PAD} width={rp.assembly_w + PAD * 2} height={rp.assembly_h + PAD * 2} fill="url(#bgrid)"/>
 
-          <!-- Mřížkové pozadí -->
-          <rect width={bW} height={bH} fill="url(#bgrid)"/>
+          <!-- Levá stěna sestavy (jen první sloupec) -->
+          <rect x={rp.left_wall_rect.x} y={rp.left_wall_rect.y} width={rp.left_wall_rect.w} height={rp.left_wall_rect.h} fill="#3b82f6"/>
+          <!-- Spodní stěna sestavy (jen poslední řádek) -->
+          <rect x={rp.bottom_wall_rect.x} y={rp.bottom_wall_rect.y} width={rp.bottom_wall_rect.w} height={rp.bottom_wall_rect.h} fill="#3b82f6"/>
 
-          <!-- Tělo držáku (modrá = tisknutelná plocha) -->
-          <rect x="0" y="0" width={bW} height={bH} fill="#3b82f6"/>
-
-          <!-- Pružinové zóny X (horní rám, tmavší modrá) -->
-          {#each xSprings as s}
-            <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="#1e40af"/>
-            <path d={hSpringPath(s.x, s.y, s.w, s.h, springBends)} fill="#0b0f19"/>
+          <!-- Díry pro magnet v pevných stěnách sestavy -->
+          {#each rp.wall_magnet_centers as c}
+            {#if rp.magnetShape === "square"}
+              <rect x={c.x - rp.effective_magnet_size / 2} y={c.y - rp.effective_magnet_size / 2}
+                width={rp.effective_magnet_size} height={rp.effective_magnet_size} fill="#0b0f19"/>
+            {:else}
+              <circle cx={c.x} cy={c.y} r={rp.effective_magnet_size / 2} fill="#0b0f19"/>
+            {/if}
           {/each}
 
-          <!-- Pružinové zóny Y (pravý rám, tmavší modrá) -->
-          {#each ySprings as s}
-            <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="#1e40af"/>
-            <path d={vSpringPath(s.x, s.y, s.w, s.h, springBends)} fill="#0b0f19"/>
+          {#each rp.copy_offsets as o, idx}
+            <g transform="translate({o.tx},{o.ty})">
+              <!-- Pevný L roh -->
+              <path d={rp.fixed_l_path} fill="#f59e0b"/>
+
+              <!-- Díra pro magnet (uprostřed výztužného čtverce v rohu pevného L) -->
+              {#if rp.effective_magnet_size > 0}
+                {#if rp.magnetShape === "square"}
+                  <rect x={rp.magnet_center.x - rp.effective_magnet_size / 2} y={rp.magnet_center.y - rp.effective_magnet_size / 2}
+                    width={rp.effective_magnet_size} height={rp.effective_magnet_size} fill="#0b0f19"/>
+                {:else}
+                  <circle cx={rp.magnet_center.x} cy={rp.magnet_center.y} r={rp.effective_magnet_size / 2} fill="#0b0f19"/>
+                {/if}
+              {/if}
+
+              <!-- Pružiny X (horní zóna, jen v mezeře) -->
+              {#each rp.x_springs as s, i}
+                <clipPath id="prev{idx}-xspring-clip-{i}"><rect x={s.x} y={s.y} width={s.w} height={s.h}/></clipPath>
+                <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="#a855f7"/>
+                <path d={s.path} fill="#0b0f19" clip-path="url(#prev{idx}-xspring-clip-{i})"/>
+              {/each}
+              <!-- Pružiny Y (pravá zóna, jen v mezeře) -->
+              {#each rp.y_springs as s, i}
+                <clipPath id="prev{idx}-yspring-clip-{i}"><rect x={s.x} y={s.y} width={s.w} height={s.h}/></clipPath>
+                <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="#a855f7"/>
+                <path d={s.path} fill="#0b0f19" clip-path="url(#prev{idx}-yspring-clip-{i})"/>
+              {/each}
+
+              <!-- Flex L (zelený, uvnitř díry skla) -->
+              <path d={rp.flex_l_path} fill="#22c55e" opacity="0.9"/>
+
+              <!-- Obrys desky -->
+              <rect x="0" y="0" width={rp.b_w} height={rp.b_h} fill="none" stroke="#334155" stroke-width="0.3"/>
+
+              <!-- Popisek skla -->
+              {#if rp.glassW > 10 && rp.glassH > 8}
+                <text x={rp.hole_x + rp.glassW / 2} y={rp.hole_y + rp.glassH / 2}
+                  text-anchor="middle" font-size="3" fill="rgba(255,255,255,0.15)"
+                >{rp.glassW.toFixed(1)} × {rp.glassH.toFixed(1)}</text>
+              {/if}
+
+            </g>
+          {/each}
+          <!-- Rohové výseče (díry) — poslední vrstva NAD vším, aby výseč udělala
+               díru i tam, kudy prochází přes okraj/zónu sousední kopie či stěny -->
+          {#each rp.corner_hole_centers as c}
+            <circle cx={c.x} cy={c.y} r={rp.cornerR} fill="#0b0f19"/>
           {/each}
 
-          <!-- Díry pro skla -->
-          {#each glassRects as gr}
-            <rect x={gr.x} y={gr.y} width={gr.w} height={gr.h} fill="#0b0f19"/>
-          {/each}
-
-          <!-- Výseče v rozích skel -->
-          {#if cornerR > 0}
-            {#each glassRects as gr}
-              <circle cx={gr.x}        cy={gr.y}        r={cornerR} fill="#0b0f19"/>
-              <circle cx={gr.x + gr.w} cy={gr.y}        r={cornerR} fill="#0b0f19"/>
-              <circle cx={gr.x}        cy={gr.y + gr.h} r={cornerR} fill="#0b0f19"/>
-              <circle cx={gr.x + gr.w} cy={gr.y + gr.h} r={cornerR} fill="#0b0f19"/>
-            {/each}
-          {/if}
-
-          <!-- Kontury skel (pro přehlednost) -->
-          {#each glassRects as gr}
-            <rect
-              x={gr.x} y={gr.y} width={gr.w} height={gr.h}
-              fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="0.3"
-            />
-          {/each}
-
-          <!-- Rozměrové popisky -->
-          <text
-            x={bW / 2} y={bH + 4}
-            text-anchor="middle" font-size="3" fill="#94a3b8"
-          >{bW.toFixed(1)} mm</text>
-          <text
-            x={bW + 2} y={bH / 2}
-            text-anchor="start" font-size="3" fill="#94a3b8"
-            transform="rotate(90, {bW + 2}, {bH / 2})"
-          >{bH.toFixed(1)} mm</text>
+          <!-- Kóty celé sestavy -->
+          <line x1={rp.assembly_min_x} y1={rp.assembly_min_y - 3} x2={rp.assembly_max_x} y2={rp.assembly_min_y - 3} stroke="#64748b" stroke-width="0.2"/>
+          <line x1={rp.assembly_min_x} y1={rp.assembly_min_y - 4} x2={rp.assembly_min_x} y2={rp.assembly_min_y - 2} stroke="#64748b" stroke-width="0.2"/>
+          <line x1={rp.assembly_max_x} y1={rp.assembly_min_y - 4} x2={rp.assembly_max_x} y2={rp.assembly_min_y - 2} stroke="#64748b" stroke-width="0.2"/>
+          <text x={(rp.assembly_min_x + rp.assembly_max_x) / 2} y={rp.assembly_min_y - 4.5} text-anchor="middle" font-size="2.5" fill="#94a3b8">{rp.assembly_w.toFixed(1)} mm</text>
+          <line x1={rp.assembly_max_x + 3} y1={rp.assembly_min_y} x2={rp.assembly_max_x + 3} y2={rp.assembly_max_y} stroke="#64748b" stroke-width="0.2"/>
+          <line x1={rp.assembly_max_x + 2} y1={rp.assembly_min_y} x2={rp.assembly_max_x + 4} y2={rp.assembly_min_y} stroke="#64748b" stroke-width="0.2"/>
+          <line x1={rp.assembly_max_x + 2} y1={rp.assembly_max_y} x2={rp.assembly_max_x + 4} y2={rp.assembly_max_y} stroke="#64748b" stroke-width="0.2"/>
+          <text x={rp.assembly_max_x + 5} y={(rp.assembly_min_y + rp.assembly_max_y) / 2} text-anchor="middle" font-size="2.5" fill="#94a3b8"
+            transform="rotate(90,{rp.assembly_max_x + 5},{(rp.assembly_min_y + rp.assembly_max_y) / 2})">{rp.assembly_h.toFixed(1)} mm</text>
         </svg>
+        {:else if geometryError}
+          <p class="text-[11px] text-red-400/80 px-6 text-center">Chyba výpočtu geometrie držáku: {geometryError}</p>
+        {/if}
       </div>
 
-      <!-- PRAVÁ ČÁST: Ovládací panel (~25%) -->
-      <div class="w-72 shrink-0 flex flex-col border-l border-slate-800 overflow-y-auto">
+      <!-- Panel -->
+      <div class="w-[272px] shrink-0 flex flex-col border-l border-slate-800 overflow-y-auto">
         <div class="flex flex-col gap-4 p-4">
 
-          <!-- Rám -->
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-600 bg-[#0b0f19]/60">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Substrát</div>
+            {#if substrateOptions.length > 0}
+              <CustomSelect bind:value={selectedSubstrateId} options={substrateOptions} placeholder="Vyberte substrát..."/>
+              {#if selectedSubstrate}
+                <p class="text-[10px] text-slate-500 mt-1.5">{glassW.toFixed(1)} × {glassH.toFixed(1)} mm</p>
+              {/if}
+            {:else}
+              <p class="text-[11px] text-yellow-500/80">Žádné substráty — přidejte v Nastavení → Podložky.</p>
+            {/if}
+          </section>
+
           <section>
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              Rám
-            </div>
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Multiplikace</div>
             <div class="flex flex-col gap-1.5">
-              {#each [
-                { label: "Horní rám (mm)",   bind: "topFrameThick",  val: topFrameThick,   min: 3, max: 50 },
-                { label: "Pravý rám (mm)",   bind: "rightFrameThick", val: rightFrameThick, min: 3, max: 50 },
-                { label: "Levý okraj (mm)",  bind: "leftBorderW",    val: leftBorderW,     min: 1, max: 20 },
-                { label: "Dolní okraj (mm)", bind: "bottomBorderH",  val: bottomBorderH,   min: 1, max: 20 },
-              ] as row}
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Počet vzorků</span>
+                <div class="w-20"><NumberInput bind:value={multiplyCount} step={1} min={1} max={maxMultiply}/></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-lg p-2.5 border-l-2 border-[#3b82f6] bg-[#3b82f6]/20">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Pevné stěny</div>
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Levá stěna (mm)</span>
+                <div class="w-20"><NumberInput bind:value={leftBorderW} step={0.5} min={1} max={50}/></div>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Spodní stěna (mm)</span>
+                <div class="w-20"><NumberInput bind:value={bottomBorderH} step={0.5} min={1} max={50}/></div>
+              </div>
+              <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/60">
+                <label class="flex items-center gap-1.5 text-[11px] text-slate-300 flex-1 cursor-pointer">
+                  <input type="checkbox" bind:checked={extendWalls}
+                    class="w-3.5 h-3.5 rounded accent-[#3b82f6] cursor-pointer"/>
+                  Rozšířit doleva a dolů (mm)
+                </label>
+                <div class="w-20 transition-opacity {extendWalls ? '' : 'opacity-40'}">
+                  <NumberInput bind:value={extendAmount} step={0.5} min={0} max={50}/>
+                </div>
+              </div>
+              {#if extendWalls}
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1 pl-5">Zvýšení rozšířené části (mm)</span>
+                <div class="w-20"><NumberInput bind:value={wallExtraHeight} step={0.5} min={0} max={50}/></div>
+              </div>
+              <p class="text-[9px] leading-snug text-slate-500">
+                Pouze rozšířená část stěn (přesah {extendAmount.toFixed(1)} mm doleva a dolů) je navíc o {wallExtraHeight.toFixed(1)} mm vyšší — tvoří zarážku, která drží sklo na místě.
+              </p>
+              {/if}
+              <p class="text-[9px] leading-snug text-slate-500 pt-1 border-t border-slate-800/60">
+                Díry pro magnet se do pevných stěn doplní automaticky v gridu navazujícím na díry v rohových čtvercích pevného L — přímo pod nimi (spodní stěna) a přímo vedle nich (levá stěna). Sdílejí tvar a velikost s rohovým magnetem ({magnetShape === "square" ? "strana" : "průměr"} {(geometry?.effective_magnet_size ?? 0).toFixed(1)} mm).
+              </p>
+            </div>
+          </section>
+
+          <section class="rounded-lg p-2.5 border-l-2 border-[#f59e0b] bg-[#f59e0b]/25">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Pevný L roh</div>
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Tloušťka ramene vpravo (mm)</span>
+                <div class="w-20"><NumberInput bind:value={fixedThickX} step={0.5} min={0.5} max={20}/></div>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Tloušťka ramene nahoře (mm)</span>
+                <div class="w-20"><NumberInput bind:value={fixedThickY} step={0.5} min={0.5} max={20}/></div>
+              </div>
+              <div class="pt-1.5 mt-0.5 border-t border-slate-800/60 flex flex-col gap-1.5">
                 <div class="flex items-center justify-between gap-2">
-                  <span class="text-[11px] text-slate-300 flex-1">{row.label}</span>
-                  <div class="w-28">
-                    {#if row.bind === "topFrameThick"}
-                      <NumberInput bind:value={topFrameThick}   step={0.5} min={row.min} max={row.max}/>
-                    {:else if row.bind === "rightFrameThick"}
-                      <NumberInput bind:value={rightFrameThick} step={0.5} min={row.min} max={row.max}/>
-                    {:else if row.bind === "leftBorderW"}
-                      <NumberInput bind:value={leftBorderW}     step={0.5} min={row.min} max={row.max}/>
-                    {:else}
-                      <NumberInput bind:value={bottomBorderH}   step={0.5} min={row.min} max={row.max}/>
-                    {/if}
+                  <span class="text-[11px] text-slate-300 flex-1">Tvar díry pro magnet</span>
+                  <div class="flex rounded overflow-hidden border border-slate-700/50 shrink-0">
+                    <button type="button" on:click={() => magnetShape = "circle"}
+                      class="px-2 py-1 text-[10px] transition-colors {magnetShape === 'circle' ? 'bg-[#f59e0b] text-slate-900 font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}">Kruh</button>
+                    <button type="button" on:click={() => magnetShape = "square"}
+                      class="px-2 py-1 text-[10px] transition-colors border-l border-slate-700/50 {magnetShape === 'square' ? 'bg-[#f59e0b] text-slate-900 font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}">Čtverec</button>
                   </div>
                 </div>
-              {/each}
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] text-slate-300 flex-1">{magnetShape === "square" ? "Strana" : "Průměr"} magnetu (mm)</span>
+                  <div class="w-20"><NumberInput bind:value={magnetSize} step={0.5} min={0} max={20}/></div>
+                </div>
+                {#if geometry}
+                <p class="text-[9px] leading-snug {magnetSize > geometry.corner_square_size ? 'text-amber-400/80' : 'text-slate-500'}">
+                  Díra se umístí do středu výztužného čtverce v rohu — automaticky omezena na max. {geometry.corner_square_size.toFixed(1)} mm,
+                  aby se nikdy nedotkla flexibilního L rohu{magnetSize > geometry.corner_square_size ? ` (aktuálně oříznuto z ${magnetSize.toFixed(1)} mm)` : ''}.
+                </p>
+                {/if}
+              </div>
             </div>
           </section>
 
-          <!-- Pružiny -->
-          <section>
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              Pružiny
-            </div>
+          <section class="rounded-lg p-2.5 border-l-2 border-[#22c55e] bg-[#22c55e]/20">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Flexibilní L roh</div>
             <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Tloušťka ramen (mm)</span>
+                <div class="w-20"><NumberInput bind:value={flexThick} step={0.5} min={0.5} max={20}/></div>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Mezera od stěn (mm)</span>
+                <div class="w-20"><NumberInput bind:value={flexGap} step={0.5} min={0.1} max={10}/></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-500 bg-[#0b0f19]/60">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Rohové výseče</div>
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Poloměr výseče (mm)</span>
+                <div class="w-20"><NumberInput bind:value={cornerR} step={0.25} min={0} max={10}/></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-lg p-2.5 border-l-2 border-[#a855f7] bg-[#a855f7]/20">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Pružiny</div>
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Počet X (horní)</span>
+                <div class="w-20"><NumberInput bind:value={springCountX} step={1} min={0} max={10}/></div>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-slate-300 flex-1">Počet Y (pravý)</span>
+                <div class="w-20"><NumberInput bind:value={springCountY} step={1} min={0} max={10}/></div>
+              </div>
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[11px] text-slate-300 flex-1">Šířka pružiny (mm)</span>
-                <div class="w-28">
-                  <NumberInput bind:value={springWidth} step={0.5} min={3} max={60}/>
-                </div>
+                <div class="w-20"><NumberInput bind:value={springWidth} step={0.5} min={1} max={60}/></div>
               </div>
               <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Počet pružin X</span>
-                <div class="w-28">
-                  <NumberInput bind:value={springCountX} step={1} min={0} max={15}/>
-                </div>
+                <span class="text-[11px] text-slate-300 flex-1">Počet ohybů</span>
+                <div class="w-20"><NumberInput bind:value={springBends} step={1} min={1} max={20}/></div>
               </div>
               <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Počet pružin Y</span>
-                <div class="w-28">
-                  <NumberInput bind:value={springCountY} step={1} min={0} max={15}/>
-                </div>
-              </div>
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Počet zakřivení</span>
-                <div class="w-28">
-                  <NumberInput bind:value={springBends} step={1} min={1} max={30}/>
-                </div>
+                <span class="text-[11px] text-slate-300 flex-1">Modifikátor mezery (mm)</span>
+                <div class="w-20"><NumberInput bind:value={springGapMod} step={0.05} min={-0.3} max={1.5}/></div>
               </div>
             </div>
           </section>
 
-          <!-- Rohy -->
-          <section>
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              Rohy
-            </div>
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-[11px] text-slate-300 flex-1">Průměr výseče (mm)</span>
-              <div class="w-28">
-                <NumberInput bind:value={cornerDiam} step={0.1} min={0} max={10}/>
-              </div>
-            </div>
-          </section>
-
-          <!-- Odsazení -->
-          <section>
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              Odsazení od skel
-            </div>
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-400 bg-[#0b0f19]/60">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">3D tisk (STL)</div>
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Nahoře (mm)</span>
-                <div class="w-28"><NumberInput bind:value={offsetTop}    step={0.5} min={0} max={30}/></div>
+                <span class="text-[11px] text-slate-300 flex-1">Tloušťka držáku (mm)</span>
+                <div class="w-20"><NumberInput bind:value={bracketThickness} step={0.1} min={0.2} max={glassThickness}/></div>
               </div>
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Dole (mm)</span>
-                <div class="w-28"><NumberInput bind:value={offsetBottom} step={0.5} min={0} max={30}/></div>
-              </div>
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Vlevo (mm)</span>
-                <div class="w-28"><NumberInput bind:value={offsetLeft}   step={0.5} min={0} max={30}/></div>
-              </div>
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-[11px] text-slate-300 flex-1">Vpravo (mm)</span>
-                <div class="w-28"><NumberInput bind:value={offsetRight}  step={0.5} min={0} max={30}/></div>
-              </div>
+              <p class="text-[9px] leading-snug text-slate-500 pt-1 border-t border-slate-800/60">
+                Tloušťka držáku nikdy nepřesáhne tloušťku skla ({glassThickness.toFixed(1)} mm), aby deska nevyčnívala nad jeho povrch.
+              </p>
             </div>
           </section>
 
-          <!-- 3D tisk -->
-          <section>
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              3D tisk
-            </div>
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-[11px] text-slate-300 flex-1">Tloušťka (mm)</span>
-              <div class="w-28">
-                <NumberInput bind:value={bracketThick} step={0.5} min={0.5} max={30}/>
-              </div>
-            </div>
-            <p class="text-[10px] text-slate-600 mt-1.5">STL export bude přidán v další verzi.</p>
-          </section>
-
-          <!-- Legenda -->
           <section class="mt-auto">
-            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">
-              Legenda
-            </div>
-            <div class="flex flex-col gap-1">
+            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Legenda</div>
+            <div class="flex flex-col gap-1.5">
               <div class="flex items-center gap-2">
                 <div class="w-3 h-3 rounded-sm bg-[#3b82f6] shrink-0"></div>
-                <span class="text-[10px] text-slate-400">Pevný materiál (tisk)</span>
+                <span class="text-[10px] text-slate-400">Pevné stěny</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#1e40af] shrink-0"></div>
-                <span class="text-[10px] text-slate-400">Pružinová zóna</span>
+                <div class="w-3 h-3 rounded-sm bg-[#f59e0b] shrink-0"></div>
+                <span class="text-[10px] text-slate-400">Pevný L roh</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-sm bg-[#a855f7] shrink-0"></div>
+                <span class="text-[10px] text-slate-400">Pružiny</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-sm bg-[#22c55e] shrink-0"></div>
+                <span class="text-[10px] text-slate-400">Flexibilní L roh</span>
               </div>
               <div class="flex items-center gap-2">
                 <div class="w-3 h-3 rounded-sm bg-[#0b0f19] border border-slate-700 shrink-0"></div>
-                <span class="text-[10px] text-slate-400">Díra (nevytisknuto)</span>
+                <span class="text-[10px] text-slate-400">Díra (otevřeno)</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-[#0b0f19] border border-slate-600 shrink-0"></div>
+                <span class="text-[10px] text-slate-400">Rohová výseč (díra)</span>
               </div>
             </div>
           </section>
@@ -427,27 +618,30 @@
       </div>
     </div>
 
-    <!-- Patička -->
     <div class="shrink-0 flex items-center justify-between px-5 py-3 border-t border-slate-800 bg-slate-900/30">
       <div class="text-[10px] text-slate-500">
-        Celkový rozměr: <span class="text-slate-300 font-mono">{bW.toFixed(1)} × {bH.toFixed(1)} mm</span>
+        {#if geometry}
+        Deska: <span class="text-slate-300 font-mono">{geometry.b_w.toFixed(1)} × {geometry.b_h.toFixed(1)} mm</span>
+        <span class="mx-2 text-slate-700">·</span>
+        Sklo: <span class="text-slate-300 font-mono">{glassW.toFixed(1)} × {glassH.toFixed(1)} mm</span>
+        {/if}
       </div>
       <div class="flex items-center gap-2">
-        <button
-          on:click={handleExportSVG}
-          class="flex items-center gap-1.5 bg-labaccent hover:bg-blue-600 text-white text-xs font-medium px-4 py-1.5 rounded-md transition-colors"
-        >
-          <Download class="w-3.5 h-3.5" />
-          Export SVG
+        <button on:click={handleExportSVG} disabled={!geometry}
+          class="flex items-center gap-1.5 bg-labaccent hover:bg-blue-600 text-white text-xs font-medium px-4 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <Download class="w-3.5 h-3.5" /> Export SVG
         </button>
-        <button
-          on:click={close}
-          class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs px-4 py-1.5 rounded-md transition-colors"
-        >
+        <button on:click={handleExportSTL} disabled={!geometry}
+          class="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 border border-slate-600 text-white text-xs font-medium px-4 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <Download class="w-3.5 h-3.5" /> Export STL
+        </button>
+        <button on:click={close}
+          class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs px-4 py-1.5 rounded-md transition-colors">
           Zavřít
         </button>
       </div>
     </div>
+
   </div>
 </div>
 {/if}

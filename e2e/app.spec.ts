@@ -1,10 +1,20 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { TAURI_MOCK_SCRIPT } from "./tauri-mock";
 
 // Každý test začne s injektovaným Tauri mockem — jinak by invoke() selhal
 test.beforeEach(async ({ page }) => {
   await page.addInitScript({ content: TAURI_MOCK_SCRIPT });
 });
+
+/** Zavře uvítací modal (zobrazuje se v Tauri režimu, který mock simuluje),
+ *  jinak jeho overlay blokuje kliknutí na prvky pod ním. */
+async function dismissWelcomeModal(page: Page) {
+  const closeBtn = page.locator('button[title="Přeskočit uvítací obrazovku"]');
+  if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await closeBtn.click();
+    await closeBtn.waitFor({ state: "hidden", timeout: 2000 }).catch(() => {});
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 1. Inicializace aplikace
@@ -57,6 +67,7 @@ test("canvas element se vykreslí", async ({ page }) => {
 test("změna počtu vzorků aktualizuje formulář", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
+  await dismissWelcomeModal(page);
 
   // Hledáme number input pro počet vzorků (sample_count)
   // Použijeme first() čísleného inputu — v levém panelu je to obvykle první
@@ -119,6 +130,7 @@ test("kliknutí na tlačítko generování G-kódu volá backend", async ({ page
 test("lze otevřít nastavení", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
+  await dismissWelcomeModal(page);
 
   // Tlačítko nastavení (ozubené kolo nebo text "Nastavení")
   const settingsBtn = page

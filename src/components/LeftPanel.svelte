@@ -25,6 +25,8 @@
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
+  import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
+  import { settingsStore } from "../stores/settingsStore";
   import {
     Play,
     Pause,
@@ -267,32 +269,17 @@
     dispatch("paramsChanged", params);
   }
 
-  let lastExtUnit = "nl/mm";
-  const extUnitOptions: Record<string, number> = {
-    "µl/mm": 1.0,
-    "nl/mm": 0.001,
-    "kroky/mm": 1.0,
-  };
+  let lastExtUnit: ExtUnit = "nl/mm";
 
   function handleExtUnitChange() {
     const calFactor = settingsCache?.calibration_factor ?? 0.014108;
-    let baseVal = params.extrusion_rate;
-
-    // 1. Převod z předchozí jednotky na µl/mm
-    if (lastExtUnit === "kroky/mm") {
-      baseVal = params.extrusion_rate / calFactor;
-    } else {
-      baseVal = params.extrusion_rate * extUnitOptions[lastExtUnit];
-    }
-
-    // 2. Převod z µl/mm na novou jednotku
-    if (params.extrusion_unit === "kroky/mm") {
-      params.extrusion_rate = baseVal * calFactor;
-    } else {
-      params.extrusion_rate = baseVal / extUnitOptions[params.extrusion_unit];
-    }
-
-    lastExtUnit = params.extrusion_unit;
+    params.extrusion_rate = convertExtrusionRate(
+      params.extrusion_rate,
+      lastExtUnit,
+      params.extrusion_unit as ExtUnit,
+      calFactor
+    );
+    lastExtUnit = params.extrusion_unit as ExtUnit;
     dispatch("paramsChanged", params);
   }
 

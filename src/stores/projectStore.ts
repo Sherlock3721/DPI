@@ -1,11 +1,9 @@
 import { writable, get } from "svelte/store";
 import {
-  calculate_slide_layout,
-  recalculate_layout,
+  update_layout,
   process_substrate_paths,
   parse_dxf,
   parse_svg,
-  get_prime_preview,
   type ProcessParams,
   type LayoutPosition,
   type SubstratePaths,
@@ -411,100 +409,42 @@ function createProjectStore() {
     doUpdateLayout: async () => {
       const state = get(store);
       const settings = get(settingsStore);
-
       const { params, overrides, rawLoadedPaths, autoScaleFile } = state;
 
-      const bedMinX = settings.bed_min_x ?? 0.0;
-
-      // Zjistíme absolutní maximum možných vzorků
-      const testPositions = await calculate_slide_layout(
-        100,
-        params.slide_w,
-        params.slide_h,
-        settings.multi_spacing || 5.0,
-        settings.bed_max_x || 250.0,
-        settings.bed_max_y || 210.0,
-        settings.start_offset_x || 18.0,
-        settings.start_offset_y || 11.0,
-        params.prime_active,
-        bedMinX
+      // Kompletní přepočet (kapacita, dráhy, pozice, transformace, prime náhled)
+      // proběhne v jediném Rust volání.
+      const res = await update_layout(
+        params,
+        overrides,
+        rawLoadedPaths,
+        autoScaleFile,
+        state.bakedScales,
+        state.positions,
+        state.transforms,
+        {
+          max_x: settings.bed_max_x || 250.0,
+          max_y: settings.bed_max_y || 210.0,
+          min_x: settings.bed_min_x ?? 0.0,
+          offset_x: settings.start_offset_x || 18.0,
+          offset_y: settings.start_offset_y || 11.0,
+        },
+        settings.multi_spacing || 5.0
       );
 
-      const maxVal = testPositions.filter((p) => !p.is_prime).length || 1;
-      const finalSampleCount = Math.min(params.sample_count, maxVal);
-
-      if (finalSampleCount !== params.sample_count) {
-        update((s) => ({ ...s, params: { ...s.params, sample_count: finalSampleCount } }));
+      if (res.final_sample_count !== params.sample_count) {
+        update((s) => ({
+          ...s,
+          params: { ...s.params, sample_count: res.final_sample_count },
+        }));
       }
-
-      let newPaths: SubstratePaths[] = [];
-      if (rawLoadedPaths) {
-        for (let i = 0; i < finalSampleCount; i++) {
-          const slideOverride = overrides[i.toString()] || {};
-          // Zachováme aktuální zapečené měřítko a rotaci — bez nich se geometrie resetuje
-          const currentBaked = state.bakedScales[i] ?? 1.0;
-          const currentRot = state.transforms[i]?.rotation ?? 0;
-          const sliceParams: SliceParams = {
-            slide_w: params.slide_w,
-            slide_h: params.slide_h,
-            margin: 2.0,
-            auto_scale: autoScaleFile,
-            infill_style:
-              (slideOverride.infill_style ?? "") !== ""
-                ? slideOverride.infill_style!
-                : params.infill_style,
-            infill_val: slideOverride.infill_val ?? params.infill_val ?? 1.0,
-            infill_type: slideOverride.infill_type ?? params.infill_type ?? "mm",
-            infill_angle: (params.infill_angle ?? 0) + currentRot,
-            nozzle_diam: params.nozzle_diam ?? 0.4,
-            user_scale: currentBaked,
-          };
-          const processed = await process_substrate_paths(rawLoadedPaths, sliceParams);
-          newPaths.push(processed);
-        }
-      } else {
-        newPaths = [];
-      }
-
-      // Zachováme bakedScales — nové sklíčka dostanou 1.0, existující si udrží hodnotu
-      const newBakedScales = Array.from(
-        { length: finalSampleCount },
-        (_, i) => state.bakedScales[i] ?? 1.0
-      );
-
-      // Vypočítáme pozice A přizpůsobíme transformace v jediném Rust volání
-      const { positions: calculatedPositions, transforms: newTransforms } =
-        await recalculate_layout(
-          finalSampleCount,
-          params.slide_w,
-          params.slide_h,
-          settings.multi_spacing || 5.0,
-          params.prime_active,
-          settings.bed_max_x || 250.0,
-          settings.bed_max_y || 210.0,
-          settings.bed_min_x ?? 0.0,
-          settings.start_offset_x || 18.0,
-          settings.start_offset_y || 11.0,
-          state.positions,
-          state.transforms,
-          newPaths,
-          params.nozzle_diam || 0.4,
-          overrides["-1"]?.glass_type ?? null
-        );
-
-      const primePos = calculatedPositions.find((p) => p.is_prime);
-      const primePath =
-        params.prime_active && primePos
-          ? await get_prime_preview(primePos, params, overrides["-1"] ?? null)
-          : null;
 
       update((s) => ({
         ...s,
-        positions: calculatedPositions,
-        paths: newPaths,
-        primePath,
-        transforms: newTransforms,
-        bakedScales: newBakedScales,
+        positions: res.positions,
+        paths: res.paths,
+        primePath: res.prime_path,
+        transforms: res.transforms,
+        bakedScales: res.baked_scales,
       }));
     },
   };

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
-  import { FolderOpen, FileText, Code, Clock, ChevronRight } from "lucide-svelte";
+  import { FolderOpen, FileText, Code, Clock, ChevronRight, X } from "lucide-svelte";
   import { recentFilesStore, type RecentFile } from "../stores/projectStore";
   import { open } from "@tauri-apps/plugin-shell";
   import { invoke } from "@tauri-apps/api/core";
@@ -15,6 +15,10 @@
   let networkUrl = "";
   let qrCodeDataUrl = "";
   let appVersion = "";
+
+  function handleClose() {
+    dispatch("close");
+  }
 
   function handleNewProject() {
     dispatch("newProject");
@@ -58,6 +62,14 @@
     <div
       class="bg-slate-900 border border-slate-700 shadow-2xl rounded-xl w-full max-w-2xl overflow-hidden flex flex-col relative animate-fade-in-up"
     >
+      <button
+        on:click={handleClose}
+        title="Přeskočit uvítací obrazovku"
+        class="absolute top-3 right-3 z-10 p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+      >
+        <X class="w-5 h-5" />
+      </button>
+
       <!-- Hlavička s logem -->
       <div
         class="p-8 flex flex-col items-center justify-center border-b border-slate-800 bg-gradient-to-b from-slate-800/50 to-slate-900"

@@ -108,7 +108,7 @@ pub struct ProcessParams {
 
 /// Konfigurace tiskárny — fyzické rozměry podložky a polohovací offsety.
 /// Předávána do `get_layout_positions` a `generate_gcode`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedConfig {
     pub max_x: f64,
     pub max_y: f64,
@@ -118,7 +118,9 @@ pub struct BedConfig {
 }
 
 /// Nastavení stroje pro generování G-kódu — vše mimo procesní parametry vzorku.
-#[derive(Debug, Clone)]
+/// Serializovatelná, aby šla předat z frontendu jako jediný objekt
+/// (místo dlouhého seznamu pozičních parametrů Tauri commandu).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineConfig {
     pub bed: BedConfig,
     pub start_gcode: String,
@@ -132,6 +134,9 @@ pub struct MachineConfig {
     pub z_hop: f64,
     /// Bezpečná Z-výška pro virtuální posun nuly (mm).
     pub safe_z: f64,
+    /// Maximální povolená teplota podložky (°C) — bezpečnostní strop pro M140/M190.
+    #[serde(default)]
+    pub bed_max_temp: Option<f64>,
 }
 
 /// Parametry pro slicování a zpracování vektorových drah do tiskového formátu.

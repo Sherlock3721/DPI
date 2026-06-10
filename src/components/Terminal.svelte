@@ -10,10 +10,31 @@
   let consoleContainer: HTMLDivElement;
   let unsub: () => void;
 
+  // Historie příkazů pro šipky nahoru/dolů
+  let commandHistory: string[] = [];
+  let historyIndex = -1;
+
+  // Dávkování příchozích serial-rx zpráv (zabraňuje zmrznutí UI při přílivu zpráv)
+  let pendingLogs: string[] = [];
+  let flushScheduled = false;
+
+  function scheduleFlush() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    requestAnimationFrame(() => {
+      if (pendingLogs.length > 0) {
+        const combined = [...logs, ...pendingLogs];
+        logs = combined.length > 300 ? combined.slice(combined.length - 300) : combined;
+        pendingLogs = [];
+      }
+      flushScheduled = false;
+      if (consoleContainer) consoleContainer.scrollTop = consoleContainer.scrollHeight;
+    });
+  }
+
   onMount(async () => {
     unsub = await subscribe_serial_rx((line) => {
       const trimmed = line.trim();
-      // Ignorovat běžnou telemetrii na kterou se uživatel neptal
       if (
         !trimmed ||
         trimmed === "ok" ||
@@ -23,17 +44,8 @@
       ) {
         return;
       }
-
-      logs = [...logs, `< ${trimmed}`];
-      // Keep only last 500 lines to prevent memory issues
-      if (logs.length > 500) {
-        logs = logs.slice(logs.length - 500);
-      }
-      setTimeout(() => {
-        if (consoleContainer) {
-          consoleContainer.scrollTop = consoleContainer.scrollHeight;
-        }
-      }, 10);
+      pendingLogs.push(`< ${trimmed}`);
+      scheduleFlush();
     });
   });
 
@@ -44,15 +56,19 @@
   async function handleSend() {
     if (!manualCommand.trim()) return;
     const cmd = manualCommand.trim();
+
+    // Uložit do historie (bez duplicit po sobě)
+    if (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== cmd) {
+      commandHistory = [...commandHistory, cmd];
+      if (commandHistory.length > 50) commandHistory = commandHistory.slice(-50);
+    }
+    historyIndex = -1;
+
     logs = [...logs, `> ${cmd}`];
     manualCommand = "";
-
-    // Automatické posunutí scrollbaru dolů
-    setTimeout(() => {
-      if (consoleContainer) {
-        consoleContainer.scrollTop = consoleContainer.scrollHeight;
-      }
-    }, 20);
+    requestAnimationFrame(() => {
+      if (consoleContainer) consoleContainer.scrollTop = consoleContainer.scrollHeight;
+    });
 
     try {
       await send_manual_command(cmd);
@@ -61,9 +77,23 @@
     }
   }
 
-  function handleKeyPress(e: KeyboardEvent) {
+  function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter") {
       handleSend();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (commandHistory.length === 0) return;
+      historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
+      manualCommand = commandHistory[commandHistory.length - 1 - historyIndex];
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIndex <= 0) {
+        historyIndex = -1;
+        manualCommand = "";
+      } else {
+        historyIndex--;
+        manualCommand = commandHistory[commandHistory.length - 1 - historyIndex];
+      }
     }
   }
 </script>
@@ -82,9 +112,9 @@
 
   <div
     bind:this={consoleContainer}
-    class="flex-1 bg-slate-950/80 rounded border border-slate-800 p-2 font-mono text-[10px] overflow-y-auto mb-1.5 select-text {compact
+    class="flex-1 min-h-0 bg-slate-950/80 rounded border border-slate-800 p-2 font-mono text-[10px] overflow-y-auto mb-1.5 select-text {compact
       ? 'h-[110px]'
-      : 'h-48'}"
+      : ''}"
   >
     {#each logs as log}
       <div
@@ -103,7 +133,7 @@
     <input
       type="text"
       bind:value={manualCommand}
-      on:keypress={handleKeyPress}
+      on:keydown={handleKeyDown}
       placeholder="G-code..."
       class="input-premium py-0.5 text-xs flex-1"
     />

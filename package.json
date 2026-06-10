@@ -4,7 +4,7 @@
   "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "wasm:build": "$HOME/.cargo/bin/wasm-pack build dpi-core --target bundler --out-dir ../src/wasm",
+    "wasm:build": "node scripts/wasm-build.mjs",
     "dev": "vite",
     "build": "npm run wasm:build && vite build",
     "preview": "vite preview",

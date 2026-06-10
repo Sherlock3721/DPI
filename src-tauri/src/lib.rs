@@ -13,7 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(target_os = "linux")]
-use webkit2gtk::{PermissionRequestExt, WebViewExt};
+use webkit2gtk::{
+    glib::Cast, PermissionRequestExt, UserMediaPermissionRequest, WebViewExt,
+};
 
 // ─── Datové typy ─────────────────────────────────────────────────────────────
 
@@ -27,70 +29,13 @@ struct GCodeResponse {
 // ─── G-kód příkazy ───────────────────────────────────────────────────────────
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn calculate_layout(
-    count: usize,
-    slide_w: f64,
-    slide_h: f64,
-    spacing: f64,
-    bed_max_x: f64,
-    bed_max_y: f64,
-    start_offset_x: f64,
-    start_offset_y: f64,
-    prime_active: bool,
-    bed_min_x: f64,
-    prime_glass_type: Option<String>,
-) -> Vec<dpi_core::LayoutPosition> {
-    let bed = dpi_core::BedConfig {
-        max_x: bed_max_x,
-        max_y: bed_max_y,
-        min_x: bed_min_x,
-        offset_x: start_offset_x,
-        offset_y: start_offset_y,
-    };
-    dpi_core::get_layout_positions(count, slide_w, slide_h, spacing, prime_active, prime_glass_type.as_deref(), &bed)
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
 fn generate_gcode_job(
     slide_paths: Vec<dpi_core::SubstratePaths>,
     params: dpi_core::ProcessParams,
     transforms: Vec<dpi_core::Transform>,
     slide_overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
-    start_gcode: String,
-    end_gcode: String,
-    loop_start_gcode: String,
-    loop_end_gcode: String,
-    bed_max_x: f64,
-    bed_max_y: f64,
-    start_offset_x: f64,
-    start_offset_y: f64,
-    multi_spacing: f64,
-    block_height: f64,
-    calibration_factor: f64,
-    bed_min_x: f64,
-    z_hop: f64,
-    safe_z: f64,
+    machine: dpi_core::MachineConfig,
 ) -> Result<GCodeResponse, String> {
-    let machine = dpi_core::MachineConfig {
-        bed: dpi_core::BedConfig {
-            max_x: bed_max_x,
-            max_y: bed_max_y,
-            min_x: bed_min_x,
-            offset_x: start_offset_x,
-            offset_y: start_offset_y,
-        },
-        start_gcode,
-        end_gcode,
-        loop_start_gcode,
-        loop_end_gcode,
-        multi_spacing,
-        block_height,
-        calibration_factor,
-        z_hop,
-        safe_z,
-    };
     let (gcode, total_dist, total_time) = dpi_core::generate_gcode(
         &slide_paths,
         &params,
@@ -213,9 +158,31 @@ fn resume_app_pause_job(manager: State<'_, Arc<PrinterManager>>) -> Result<(), S
     manager.send(PrinterCommand::AppResume)
 }
 
+/// Odvodí bezpečnou parkovací pozici po nouzovém zastavení z uložené
+/// konfigurace podložky. Při chybě čtení nastavení vrací konzervativní default.
+fn read_park_position(app_handle: &AppHandle) -> (f64, f64) {
+    const DEFAULT: (f64, f64) = (0.0, 200.0);
+    let Ok(dir) = get_app_config_dir(app_handle) else {
+        return DEFAULT;
+    };
+    let Ok(content) = std::fs::read_to_string(dir.join("settings.json")) else {
+        return DEFAULT;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return DEFAULT;
+    };
+    let min_x = v.get("bed_min_x").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let max_y = v.get("bed_max_y").and_then(|x| x.as_f64()).unwrap_or(210.0);
+    (min_x.max(0.0), (max_y - 10.0).max(0.0))
+}
+
 #[tauri::command]
-fn stop_print_job(manager: State<'_, Arc<PrinterManager>>) -> Result<(), String> {
-    manager.send(PrinterCommand::Stop)
+fn stop_print_job(
+    manager: State<'_, Arc<PrinterManager>>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let (park_x, park_y) = read_park_position(&app_handle);
+    manager.send(PrinterCommand::Stop { park_x, park_y })
 }
 
 #[tauri::command]
@@ -238,46 +205,34 @@ async fn send_manual_gcode_blocking(
     .map_err(|e| e.to_string())?
 }
 
-/// Vypočítá nové pozice sklíček A přizpůsobí transformace v jediném Rust volání.
-/// Nahrazuje kombinaci `calculate_layout` + TS smyčky pro přizpůsobení transformací.
+/// Kompletní přepočet layoutu v jediném volání: kapacita podložky, zpracování
+/// drah všech sklíček, pozice, přizpůsobení transformací a náhled odplivu.
+/// Nahrazuje sekvenci calculate_layout + N× process_paths + recalculate_layout
+/// + get_prime_preview ve frontendu.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn recalculate_layout(
-    sample_count: usize,
-    slide_w: f64,
-    slide_h: f64,
-    multi_spacing: f64,
-    prime_active: bool,
-    bed_max_x: f64,
-    bed_max_y: f64,
-    bed_min_x: f64,
-    start_offset_x: f64,
-    start_offset_y: f64,
+fn update_layout(
+    params: dpi_core::ProcessParams,
+    overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
+    raw_paths: Option<dpi_core::SubstratePaths>,
+    auto_scale: bool,
+    baked_scales: Vec<f64>,
     old_positions: Vec<dpi_core::LayoutPosition>,
     current_transforms: Vec<dpi_core::Transform>,
-    current_paths: Vec<dpi_core::SubstratePaths>,
-    nozzle_diam: f64,
-    prime_glass_type: Option<String>,
-) -> dpi_core::LayoutWithTransforms {
-    let bed = dpi_core::BedConfig {
-        max_x: bed_max_x,
-        max_y: bed_max_y,
-        min_x: bed_min_x,
-        offset_x: start_offset_x,
-        offset_y: start_offset_y,
-    };
-    let positions =
-        dpi_core::get_layout_positions(sample_count, slide_w, slide_h, multi_spacing, prime_active, prime_glass_type.as_deref(), &bed);
-    let old_non_prime: Vec<dpi_core::LayoutPosition> =
-        old_positions.into_iter().filter(|p| !p.is_prime).collect();
-    let transforms = dpi_core::fit_transforms_to_layout(
-        &positions,
-        &old_non_prime,
+    bed: dpi_core::BedConfig,
+    multi_spacing: f64,
+) -> dpi_core::LayoutUpdateResult {
+    dpi_core::update_layout(
+        &params,
+        &overrides,
+        raw_paths.as_ref(),
+        auto_scale,
+        &baked_scales,
+        &old_positions,
         &current_transforms,
-        &current_paths,
-        nozzle_diam,
-    );
-    dpi_core::LayoutWithTransforms { positions, transforms }
+        &bed,
+        multi_spacing,
+    )
 }
 
 // ─── Metadata a export ───────────────────────────────────────────────────────
@@ -295,15 +250,6 @@ fn parse_gcode_metadata(gcode_text: String) -> Option<dpi_core::GCodeMetadata> {
 #[tauri::command]
 fn parse_gcode_file_paths(gcode_text: String) -> dpi_core::SubstratePaths {
     dpi_core::parse_gcode_paths(&gcode_text)
-}
-
-#[tauri::command]
-fn get_prime_preview(
-    pos: dpi_core::LayoutPosition,
-    params: dpi_core::ProcessParams,
-    prime_override: Option<dpi_core::SlideOverride>,
-) -> dpi_core::SubstratePaths {
-    dpi_core::generate_prime_preview(&pos, &params, prime_override.as_ref())
 }
 
 #[tauri::command]
@@ -375,47 +321,10 @@ fn parse_svg_file(svg_text: String, fineness: f64) -> dpi_core::SubstratePaths {
 
 // ─── Nastavení ───────────────────────────────────────────────────────────────
 
-const DEFAULT_SETTINGS_JSON: &str = r##"{
-    "bed_max_x": 250.0,
-    "bed_max_y": 210.0,
-    "bed_min_x": 0.0,
-    "start_offset_x": 18.0,
-    "start_offset_y": 11.0,
-    "multi_spacing": 5.0,
-    "block_height": 34.0,
-    "hidden_nozzle_part": 4.0,
-    "print_speed": 1500,
-    "bed_min_temp": 30,
-    "start_gcode": ";FLAVOR:Marlin\n; --- INICIALIZACE TISKÁRNY PRO KAPALINY ---\nM201 X1000 Y1000 Z200 E5000\nM203 X200 Y200 Z12 E120\nM204 S1250 T1250\nM205 X8.00 Y8.00 Z0.40 E4.50\nM205 S0 T0\n\nG90 ; use absolute coordinates\nM83 ; extruder RELATIVE mode\nM302 P1 ; disable cold extrusion checking\nM302 S0 ; always allow extrusion\nM900 K0 ; disable Linear Advance for liquids\n\nG28\nG92 E0.0\n",
-    "loop_start_gcode": "",
-    "loop_end_gcode": "",
-    "end_gcode": "G0 Z30 F1000 ; Zvednuti tiskove hlavy\nG0 X0 Y200 F3000 ; Vysunuti podlozky vpred\nM84 ; Vypnuti motoru\n",
-    "sklo_dims": {
-        "Laboratorní Sklo (76 x 26 x 1 mm)": [76.0, 26.0, 1.0],
-        "FTO (76 x 50 x 1 mm)": [50.0, 76.0, 1.0],
-        "Vlastní": [25.0, 25.0, 1.0]
-    },
-    "default_z_offset": 0.2,
-    "default_z_hop": 2.0,
-    "safe_z": 20.0,
-    "default_speed": 1500,
-    "default_infill": 1.0,
-    "default_density": 0.05,
-    "show_slide_grid": true,
-    "nozzle_defs": {
-        "Červená": [31.1, 0.3, 4.0, "#ef4444"],
-        "Modrá": [31.0, 0.41, 4.0, "#3b82f6"]
-    },
-    "filament_diameter": 9.5,
-    "flow_multiplier": 1.0,
-    "calibration_factor": 0.323877,
-    "calibration_object_height": 0.1,
-    "camera_rotation": 180,
-    "z_step": 0.0025,
-    "camera_mirror": false,
-    "show_bed_axes": true,
-    "liquid_density": 1.0
-}"##;
+/// Výchozí nastavení vestavěné do binárky — viz src-tauri/default_settings.json.
+/// include_str! zaručí, že se soubor zvaliduje při kompilaci (existence)
+/// a nemíchá se JSON s Rust kódem.
+const DEFAULT_SETTINGS_JSON: &str = include_str!("../default_settings.json");
 
 /// Vrátí cestu ke konfiguračnímu adresáři aplikace (dle platformy).
 /// Pokud adresář neexistuje, vytvoří ho.
@@ -513,8 +422,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             compute_preview_segments,
             check_paths_overflow,
-            calculate_layout,
-            recalculate_layout,
+            update_layout,
             generate_gcode_job,
             process_paths,
             parse_dxf_file,
@@ -522,7 +430,6 @@ pub fn run() {
             build_gcode_metadata_header,
             parse_gcode_metadata,
             parse_gcode_file_paths,
-            get_prime_preview,
             generate_csv_protocol,
             get_ports,
             connect_printer,
@@ -553,9 +460,54 @@ pub fn run() {
                     let _ = window.with_webview(|webview| {
                         let webview_inner = webview.inner();
                         webview_inner.connect_permission_request(move |_webview, request| {
-                            request.allow();
+                            // Povolujeme pouze přístup ke kameře/mikrofonu (náhled tisku);
+                            // vše ostatní (geolokace, notifikace…) zamítáme.
+                            if request.dynamic_cast_ref::<UserMediaPermissionRequest>().is_some() {
+                                request.allow();
+                            } else {
+                                request.deny();
+                            }
                             true
                         });
+                    });
+                }
+            }
+
+            // Stejná politika pro Windows (WebView2): kamera/mikrofon povolit,
+            // vše ostatní zamítnout — bez handleru WebView2 zobrazuje vlastní
+            // prompt, případně getUserMedia tiše zamítne.
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::Microsoft::Web::WebView2::Win32::{
+                    COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+                    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
+                };
+                use webview2_com::PermissionRequestedEventHandler;
+
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.with_webview(|webview| unsafe {
+                        let Ok(core) = webview.controller().CoreWebView2() else {
+                            return;
+                        };
+                        let handler = PermissionRequestedEventHandler::create(Box::new(
+                            |_sender, args| {
+                                if let Some(args) = args {
+                                    let mut kind = COREWEBVIEW2_PERMISSION_KIND_CAMERA;
+                                    args.PermissionKind(&mut kind)?;
+                                    let state = if kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
+                                        || kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
+                                    {
+                                        COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                                    } else {
+                                        COREWEBVIEW2_PERMISSION_STATE_DENY
+                                    };
+                                    args.SetState(state)?;
+                                }
+                                Ok(())
+                            },
+                        ));
+                        let mut token = Default::default();
+                        let _ = core.add_PermissionRequested(&handler, &mut token);
                     });
                 }
             }

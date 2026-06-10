@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { get_app_settings, save_app_settings, send_manual_command, auto_connect_printer } from "../lib/tauri";
   import { printerStore } from "../stores/printerStore";
-  import { X, Plus, Trash2, Save, GripVertical, ShieldAlert, Cog } from "lucide-svelte";
+  import { X, Plus, Trash2, Save, GripVertical, ShieldAlert, Cog, Target } from "lucide-svelte";
   import SettingsGCode from "./settings/SettingsGCode.svelte";
   import SettingsProgram from "./settings/SettingsProgram.svelte";
   import SettingsLimits from "./settings/SettingsLimits.svelte";
@@ -508,7 +508,7 @@
     const confirmed = await import("@tauri-apps/plugin-dialog").then((m) =>
       m.ask(
         "Opravdu chcete obnovit výchozí nastavení?\n\nPřepíšou se limitace tiskárny a inicializační G-kódy. Definice trysek a substrátů zůstanou zachovány.",
-        { title: "DPI", type: "warning" }
+        { title: "DPI", kind: "warning" }
       )
     );
     if (!confirmed) return;

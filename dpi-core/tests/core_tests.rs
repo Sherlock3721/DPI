@@ -223,6 +223,7 @@ fn test_gcode_generation_z_shift() {
         calibration_factor: 0.0141,
         z_hop: 2.0,
         safe_z: 20.0,
+        bed_max_temp: None,
     };
     let res = generate_gcode(
         &paths,
@@ -318,6 +319,7 @@ fn test_gcode_generation_with_overrides() {
         calibration_factor: 0.0141,
         z_hop: 2.0,
         safe_z: 20.0,
+        bed_max_temp: None,
     };
     let res = generate_gcode(&paths, &params, &transforms, &overrides, &machine);
 

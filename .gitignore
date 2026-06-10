@@ -4,6 +4,7 @@
 target/
 dist/
 node_modules/
+src/wasm/
 
 # =========================
 # Logy a testy
@@ -47,6 +48,7 @@ release.sh
 src-tauri/*.key
 
 # Lokální konfigurace, zpětná vazba a tajné soubory
+src-tauri/settings.json
 feedback_log.json
 *feedback*.json
 *secret*

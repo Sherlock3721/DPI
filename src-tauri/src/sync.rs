@@ -11,23 +11,35 @@ type Tx = mpsc::UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<usize, Tx>>>;
 type SharedState = Arc<Mutex<Option<String>>>;
 
+/// WebSocket server pro sdílení stavu aplikace na vzdálené náhledy (telefon na LAN).
+///
+/// Bezpečnostní model: stav smí publikovat POUZE spojení z loopbacku (samotná
+/// Tauri aplikace). Zprávy od vzdálených (LAN) klientů se ignorují — vzdálený
+/// náhled je read-only, takže nikdo na síti nemůže přepsat stav projektu.
 pub async fn start_ws_server() {
     let addr = "0.0.0.0:5174";
-    let listener = TcpListener::bind(&addr)
-        .await
-        .expect("Failed to bind WS server");
+    // Obsazený port (např. souběh s Vite preview) nesmí shodit task panikou —
+    // aplikace poběží dál, jen bez vzdáleného náhledu.
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("WS server: nelze naslouchat na {addr}: {e} — vzdálený náhled nebude dostupný.");
+            return;
+        }
+    };
 
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let last_state: SharedState = Arc::new(Mutex::new(None));
     let next_id = Arc::new(AtomicUsize::new(1));
 
-    while let Ok((stream, _)) = listener.accept().await {
+    while let Ok((stream, peer_addr)) = listener.accept().await {
         let peers = peers.clone();
         let last_state = last_state.clone();
         let next_id = next_id.clone();
+        let is_local = peer_addr.ip().is_loopback();
 
         tokio::spawn(async move {
-            handle_connection(peers, last_state, next_id, stream).await;
+            handle_connection(peers, last_state, next_id, stream, is_local).await;
         });
     }
 }
@@ -37,6 +49,7 @@ async fn handle_connection(
     last_state: SharedState,
     next_id: Arc<AtomicUsize>,
     stream: TcpStream,
+    is_local: bool,
 ) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -65,6 +78,10 @@ async fn handle_connection(
 
     // Receive messages from websocket and broadcast
     while let Some(Ok(msg)) = rx_ws.next().await {
+        // Stav smí publikovat jen lokální aplikace — zprávy z LAN zahazujeme
+        if !is_local {
+            continue;
+        }
         if let Message::Text(text) = &msg {
             // Update last known state
             *last_state.lock().await = Some(text.to_string());

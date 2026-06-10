@@ -6,6 +6,37 @@ use crate::types::{
 };
 use std::collections::HashMap;
 
+/// Společný generátor cik-cak bodů odplivového (prime) vzoru.
+///
+/// Vrací posloupnost cílových bodů od startu (x1, y1); příznak u bodu říká,
+/// zda jde o krátkou příčnou spojku mezi liniemi (`true`) nebo dlouhou linii.
+/// Jediný zdroj pravdy pro náhled (`generate_prime_preview`)
+/// i tiskový G-kód (`generate_gcode`).
+fn prime_zigzag_waypoints(
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    spacing: f64,
+) -> Vec<(Point2D, bool)> {
+    let mut waypoints: Vec<(Point2D, bool)> = Vec::new();
+    if spacing <= 1e-9 || spacing.is_nan() {
+        return waypoints; // ochrana proti nekonečné smyčce při nulovém rozestupu
+    }
+    let mut curr_y = y1;
+    let mut direction = 1.0_f64;
+    while curr_y <= y2 {
+        let target_x = if direction > 0.0 { x2 } else { x1 };
+        waypoints.push((Point2D::new(target_x, curr_y), false));
+        curr_y += spacing;
+        if curr_y <= y2 {
+            waypoints.push((Point2D::new(target_x, curr_y), true));
+        }
+        direction *= -1.0;
+    }
+    waypoints
+}
+
 /// Generuje náhledové dráhy odplivové (prime) pozice pro canvas.
 /// Logika odpovídá priming smyčce v `generate_gcode`.
 pub fn generate_prime_preview(
@@ -49,27 +80,66 @@ pub fn generate_prime_preview(
     let y1 = cy - prime_h / 2.0;
     let y2 = cy + prime_h / 2.0;
 
-    let mut points: Vec<Point2D> = Vec::new();
-    let mut curr_y = y1;
-    let mut direction = 1.0_f64;
-
-    while curr_y <= y2 {
-        let target_x = if direction > 0.0 { x2 } else { x1 };
-        let src_x = if direction > 0.0 { x1 } else { x2 };
-        points.push(Point2D::new(src_x, curr_y));
-        points.push(Point2D::new(target_x, curr_y));
-        curr_y += spacing;
-        if curr_y <= y2 {
-            points.push(Point2D::new(target_x, curr_y));
-        }
-        direction *= -1.0;
+    let waypoints = prime_zigzag_waypoints(x1, y1, x2, y2, spacing);
+    if waypoints.is_empty() {
+        return SubstratePaths::new(vec![]);
     }
 
-    if points.is_empty() {
-        SubstratePaths::new(vec![])
-    } else {
-        SubstratePaths::new(vec![PathSegment::new(points)])
+    let mut points: Vec<Point2D> = Vec::with_capacity(waypoints.len() + 1);
+    points.push(Point2D::new(x1, y1));
+    points.extend(waypoints.into_iter().map(|(pt, _)| pt));
+    SubstratePaths::new(vec![PathSegment::new(points)])
+}
+
+// ─── Parsování G-kód řádků (sdílené s tauri backendem) ──────────────────────
+
+/// Vrátí `true` pokud řádek začíná daným příkazem (case-insensitive)
+/// a NENÍ delším číselným kódem — tj. "G1 X5" ano, ale "G10" ne.
+#[inline]
+fn starts_with_cmd(line: &str, cmd: &str) -> bool {
+    let l = line.trim_start();
+    l.len() >= cmd.len()
+        && l[..cmd.len()].eq_ignore_ascii_case(cmd)
+        && l.as_bytes().get(cmd.len()).is_none_or(|b| !b.is_ascii_digit())
+}
+
+/// Vrátí `true` pokud je řádek lineární pohyb G0/G1 (nikoliv G10, G17…).
+#[inline]
+pub fn is_linear_move(line: &str) -> bool {
+    starts_with_cmd(line, "G0") || starts_with_cmd(line, "G1")
+}
+
+/// Vrátí `true` pokud je řádek extruzní pohyb (G1 s parametrem E).
+#[inline]
+pub fn is_extrusion_move(line: &str) -> bool {
+    starts_with_cmd(line, "G1") && parse_axis_value(line, 'E').is_some()
+}
+
+/// Extrahuje hodnotu osy (X/Y/Z/E…) z G-kód řádku, case-insensitive,
+/// bez alokace paměti. Volající zodpovídá za odstranění komentářů.
+#[inline]
+pub fn parse_axis_value(line: &str, axis: char) -> Option<f64> {
+    let upper = axis.to_ascii_uppercase();
+    let lower = axis.to_ascii_lowercase();
+    let idx = line.find(|c: char| c == upper || c == lower)?;
+    let sub = &line[idx + 1..];
+    let end = sub
+        .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+        .unwrap_or(sub.len());
+    sub[..end].parse().ok()
+}
+
+/// Parsuje souřadnice X/Y/Z z G0/G1 řádku.
+/// Pro jiné příkazy (včetně G10/G11!) vrací (None, None, None).
+pub fn parse_move_axes(line: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
+    if !is_linear_move(line) {
+        return (None, None, None);
     }
+    (
+        parse_axis_value(line, 'X'),
+        parse_axis_value(line, 'Y'),
+        parse_axis_value(line, 'Z'),
+    )
 }
 
 /// Extrahuje tiskové dráhy z G-kód textu (G0/G1 příkazy) pro vizualizaci.
@@ -80,19 +150,16 @@ pub fn parse_gcode_paths(gcode: &str) -> SubstratePaths {
     let mut cur_y = 0.0_f64;
 
     for line in gcode.lines() {
-        let clean = line.split(';').next().unwrap_or("").to_uppercase();
-        let clean = clean.trim();
+        let clean = line.split(';').next().unwrap_or("").trim();
 
-        let is_g0 = clean.starts_with("G0")
-            && clean.as_bytes().get(2).map_or(true, |b| !b.is_ascii_digit());
-        let is_g1 = clean.starts_with("G1")
-            && clean.as_bytes().get(2).map_or(true, |b| !b.is_ascii_digit());
+        let is_g0 = starts_with_cmd(clean, "G0");
+        let is_g1 = starts_with_cmd(clean, "G1");
         if !is_g0 && !is_g1 {
             continue;
         }
 
-        let new_x = extract_gcode_coord(clean, 'X').unwrap_or(cur_x);
-        let new_y = extract_gcode_coord(clean, 'Y').unwrap_or(cur_y);
+        let new_x = parse_axis_value(clean, 'X').unwrap_or(cur_x);
+        let new_y = parse_axis_value(clean, 'Y').unwrap_or(cur_y);
 
         if is_g0 {
             if current_points.len() >= 2 {
@@ -117,15 +184,6 @@ pub fn parse_gcode_paths(gcode: &str) -> SubstratePaths {
     }
 
     SubstratePaths::new(segments)
-}
-
-fn extract_gcode_coord(line: &str, axis: char) -> Option<f64> {
-    let pos = line.find(axis)?;
-    let rest = &line[pos + 1..];
-    let end = rest
-        .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
 }
 
 /// Pomocná funkce pro transformaci bodu z lokálních souřadnic sklíčka
@@ -276,11 +334,13 @@ pub fn generate_gcode(
     }
 
     let mut total_time_sec = 0.0_f64;
-    if params.bed_temp > 0.0 {
+    // Bezpečnostní strop teploty podložky — nikdy neposíláme M140/M190
+    // nad nakonfigurované (či konzervativní výchozí) maximum.
+    let bed_temp = params.bed_temp.clamp(0.0, machine.bed_max_temp.unwrap_or(110.0));
+    if bed_temp > 0.0 {
         result.push_str(&format!(
-            "M140 S{:.0} ; Zacit nahrivat podlozku\n\
-             M190 S{:.0} ; Pockat na nahrati podlozky\n",
-            params.bed_temp, params.bed_temp
+            "M140 S{bed_temp:.0} ; Zacit nahrivat podlozku\n\
+             M190 S{bed_temp:.0} ; Pockat na nahrati podlozky\n"
         ));
         total_time_sec += 60.0; // Přibližně 1 minuta na nahřátí
     }
@@ -385,40 +445,24 @@ pub fn generate_gcode(
                 print_z
             ));
 
-            let mut curr_y = y1;
-            let mut direction = 1.0_f64;
-            let mut last_prime_y = y1;
-            while curr_y <= y2 {
-                let target_x = if direction > 0.0 { x2 } else { x1 };
-                let dist = (x2 - x1).abs();
+            // Sdílený cik-cak generátor — stejné body jako generate_prime_preview.
+            // Dlouhá linie extruduje podle své délky, příčná spojka podle průměru
+            // trysky (parita s původní Python implementací).
+            let line_dist = (x2 - x1).abs();
+            for (pt, is_connector) in prime_zigzag_waypoints(x1, y1, x2, y2, prime_infill) {
+                let dist = if is_connector { params.nozzle_diam } else { line_dist };
                 result.push_str(&format!(
                     "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
-                    target_x,
-                    curr_y,
+                    pt.x,
+                    pt.y,
                     dist * e_per_mm,
                     loc_spd
                 ));
                 total_dist += dist;
                 total_time_sec += (dist / loc_spd) * 60.0;
-                last_prime_y = curr_y;
-
-                curr_y += prime_infill;
-                if curr_y <= y2 {
-                    result.push_str(&format!(
-                        "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
-                        target_x,
-                        curr_y,
-                        params.nozzle_diam * e_per_mm,
-                        loc_spd
-                    ));
-                    total_dist += params.nozzle_diam;
-                    total_time_sec += (params.nozzle_diam / loc_spd) * 60.0;
-                    last_prime_y = curr_y;
-                }
-                direction *= -1.0;
-                last_abs_x = target_x;
+                last_abs_x = pt.x;
+                last_abs_y = pt.y;
             }
-            last_abs_y = last_prime_y;
             result.push_str(&format!("G0 Z{:.3} F1000\n", print_z + machine.z_hop));
         } else {
             result.push_str(&format!("\n; --- VZOREK {} ---\n", measurement_idx + 1));
@@ -539,10 +583,56 @@ pub fn generate_gcode(
         push_gcode_block(&mut result, &machine.loop_end_gcode);
     }
 
-    if params.bed_temp > 0.0 {
+    if bed_temp > 0.0 {
         result.push_str("M140 S0 ; Vypnout vyhrivani podlozky\n");
     }
     push_gcode_block(&mut result, &machine.end_gcode);
 
     Ok((result, total_dist, total_time_sec))
+}
+
+// ─── Testy ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_move_axes_basic() {
+        let (x, y, z) = parse_move_axes("G1 X100.5 Y50.2 Z2.0 F1500");
+        assert_eq!(x, Some(100.5));
+        assert_eq!(y, Some(50.2));
+        assert_eq!(z, Some(2.0));
+
+        let (x2, y2, z2) = parse_move_axes("g0 x-10.0 y-20.5 z-1.2");
+        assert_eq!(x2, Some(-10.0));
+        assert_eq!(y2, Some(-20.5));
+        assert_eq!(z2, Some(-1.2));
+    }
+
+    #[test]
+    fn test_parse_move_axes_ignores_non_moves() {
+        // G10 (retract) a G17 nesmí být parsovány jako pohyb — regrese
+        assert_eq!(parse_move_axes("G10 X5"), (None, None, None));
+        assert_eq!(parse_move_axes("G11"), (None, None, None));
+        assert_eq!(parse_move_axes("G17"), (None, None, None));
+        assert_eq!(parse_move_axes("M117 X stav"), (None, None, None));
+    }
+
+    #[test]
+    fn test_is_extrusion_move() {
+        assert!(is_extrusion_move("G1 X10 Y5 E0.5 F600"));
+        assert!(!is_extrusion_move("G1 X10 Y5 F600"));
+        assert!(!is_extrusion_move("G0 X10 E5"));
+        assert!(!is_extrusion_move("G10 E5"));
+    }
+
+    #[test]
+    fn test_is_linear_move() {
+        assert!(is_linear_move("G0 X1"));
+        assert!(is_linear_move("G1 X1"));
+        assert!(is_linear_move("  g1 x1"));
+        assert!(!is_linear_move("G10"));
+        assert!(!is_linear_move("G28"));
+    }
 }

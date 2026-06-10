@@ -20,6 +20,8 @@
   export let nozzleDiam = 0.4;
   export let externalSelectedIndex = -1;
   export let totalPreviewTime = 0; // celkový čas tisku v sekundách (0 = neznámý)
+  export let extrusionRateUl = 0; // µl/mm pro zobrazení objemu v overlay
+  export let suspendAutoCenter = false; // dokud true (např. welcome screen), centrování se odloží
 
   let selectedIndex = -1;
 
@@ -97,10 +99,19 @@
   $: if ($printerStore.is_printing) printProgress = Math.round($printerStore.progress);
 
   // Při změně počtu sklíček/pozic resetuj pohled kamery, aby byla všechna sklíčka viditelná.
+  // Pokud je centrování odloženo (např. běží welcome screen), provedeme ho až po jeho zavření.
   let prevPositionCount = -1;
+  let pendingAutoCenter = false;
   $: if (positions.length !== prevPositionCount && canvasRef?.resetCamera) {
     prevPositionCount = positions.length;
-    if (positions.length > 0) canvasRef.resetCamera();
+    if (positions.length > 0) {
+      if (suspendAutoCenter) pendingAutoCenter = true;
+      else canvasRef.resetCamera();
+    }
+  }
+  $: if (!suspendAutoCenter && pendingAutoCenter && canvasRef?.resetCamera) {
+    pendingAutoCenter = false;
+    canvasRef.resetCamera();
   }
 
   function getSelectedTransform(): Transform | null {
@@ -326,6 +337,7 @@
       {measurePoints}
       {currentNozzle}
       {printProgress}
+      {extrusionRateUl}
       on:slideSelected={handleSlideSelected}
       on:slideContext={handleSlideContext}
       on:measurePointsChange={handleMeasurePointsChange}

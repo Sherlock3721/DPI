@@ -198,74 +198,47 @@ export async function disconnect_from_printer(): Promise<void> {
   await invoke("disconnect_printer");
 }
 
-export async function calculate_slide_layout(
-  count: number,
-  slideW: number,
-  slideH: number,
-  spacing: number,
-  bedMaxX: number,
-  bedMaxY: number,
-  startOffsetX: number,
-  startOffsetY: number,
-  primeActive: boolean,
-  bedMinX: number = 0.0,
-  primeGlassType: string | null = null
-): Promise<LayoutPosition[]> {
-  return await invoke<LayoutPosition[]>("calculate_layout", {
-    count,
-    slideW,
-    slideH,
-    spacing,
-    bedMaxX,
-    bedMaxY,
-    startOffsetX,
-    startOffsetY,
-    primeActive,
-    bedMinX,
-    primeGlassType,
-  });
-}
-
-export interface LayoutWithTransforms {
+/** Výsledek update_layout — kompletní data pro překreslení plátna. */
+export interface LayoutUpdateResult {
   positions: LayoutPosition[];
   transforms: Transform[];
+  paths: SubstratePaths[];
+  prime_path: SubstratePaths | null;
+  final_sample_count: number;
+  baked_scales: number[];
 }
 
-/** Vypočítá nové pozice sklíček a přizpůsobí transformace v jediném volání Rustu.
- *  Nahrazuje `calculate_slide_layout` + TS smyčku pro přizpůsobení transformací. */
-export async function recalculate_layout(
-  sampleCount: number,
-  slideW: number,
-  slideH: number,
-  multiSpacing: number,
-  primeActive: boolean,
-  bedMaxX: number,
-  bedMaxY: number,
-  bedMinX: number,
-  startOffsetX: number,
-  startOffsetY: number,
+export interface BedConfig {
+  max_x: number;
+  max_y: number;
+  min_x: number;
+  offset_x: number;
+  offset_y: number;
+}
+
+/** Kompletní přepočet layoutu v jediném Rust volání (kapacita, dráhy, pozice,
+ *  transformace, prime náhled) — nahrazuje sekvenci 3+N samostatných invoke. */
+export async function update_layout(
+  params: ProcessParams,
+  overrides: Record<string, SlideOverride>,
+  rawPaths: SubstratePaths | null,
+  autoScale: boolean,
+  bakedScales: number[],
   oldPositions: LayoutPosition[],
   currentTransforms: Transform[],
-  currentPaths: SubstratePaths[],
-  nozzleDiam: number,
-  primeGlassType: string | null = null
-): Promise<LayoutWithTransforms> {
-  return await invoke<LayoutWithTransforms>("recalculate_layout", {
-    sampleCount,
-    slideW,
-    slideH,
-    multiSpacing,
-    primeActive,
-    bedMaxX,
-    bedMaxY,
-    bedMinX,
-    startOffsetX,
-    startOffsetY,
+  bed: BedConfig,
+  multiSpacing: number
+): Promise<LayoutUpdateResult> {
+  return await invoke<LayoutUpdateResult>("update_layout", {
+    params,
+    overrides,
+    rawPaths,
+    autoScale,
+    bakedScales,
     oldPositions,
     currentTransforms,
-    currentPaths,
-    nozzleDiam,
-    primeGlassType,
+    bed,
+    multiSpacing,
   });
 }
 
@@ -312,45 +285,41 @@ export async function check_paths_overflow(
   });
 }
 
+/** Konfigurace stroje pro generování G-kódu — odpovídá dpi_core::MachineConfig. */
+export interface MachineConfig {
+  bed: {
+    max_x: number;
+    max_y: number;
+    min_x: number;
+    offset_x: number;
+    offset_y: number;
+  };
+  start_gcode: string;
+  end_gcode: string;
+  loop_start_gcode: string;
+  loop_end_gcode: string;
+  multi_spacing: number;
+  block_height: number;
+  calibration_factor: number;
+  z_hop: number;
+  safe_z: number;
+  /** Bezpečnostní strop teploty podložky (°C); null = konzervativní default v Rustu. */
+  bed_max_temp: number | null;
+}
+
 export async function generate_gcode(
   slidePaths: SubstratePaths[],
   params: ProcessParams,
   transforms: Transform[],
   slideOverrides: Record<string, SlideOverride>,
-  startGcode: string,
-  endGcode: string,
-  loopStartGcode: string,
-  loopEndGcode: string,
-  bedMaxX: number,
-  bedMaxY: number,
-  startOffsetX: number,
-  startOffsetY: number,
-  multiSpacing: number,
-  blockHeight: number,
-  calibrationFactor: number,
-  bedMinX: number = 0.0,
-  zHop: number = 2.0,
-  safeZ: number = 20.0
+  machine: MachineConfig
 ): Promise<GCodeResponse> {
   return await invoke<GCodeResponse>("generate_gcode_job", {
     slidePaths,
     params,
     transforms,
     slideOverrides,
-    startGcode,
-    endGcode,
-    loopStartGcode,
-    loopEndGcode,
-    bedMaxX,
-    bedMaxY,
-    startOffsetX,
-    startOffsetY,
-    multiSpacing,
-    blockHeight,
-    calibrationFactor,
-    bedMinX,
-    zHop,
-    safeZ,
+    machine,
   });
 }
 
@@ -446,15 +415,6 @@ export async function parse_gcode_metadata(gcodeText: string): Promise<GCodeMeta
 /** Parsuje G-kód (G0/G1) na SubstratePaths pro vizualizaci. */
 export async function parse_gcode_file_paths(gcodeText: string): Promise<SubstratePaths> {
   return await invoke<SubstratePaths>("parse_gcode_file_paths", { gcodeText });
-}
-
-/** Vrátí náhledové dráhy odplivové (prime) pozice pro canvas. */
-export async function get_prime_preview(
-  pos: LayoutPosition,
-  params: ProcessParams,
-  primeOverride: SlideOverride | null
-): Promise<SubstratePaths> {
-  return await invoke<SubstratePaths>("get_prime_preview", { pos, params, primeOverride });
 }
 
 /** Sestaví CSV protokol tisku. `dateStr` předávej z frontendu kvůli lokalizaci data. */

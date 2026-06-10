@@ -58,7 +58,12 @@ pub enum PrinterCommand {
         gcode: String,
         reply: Sender<Result<(), String>>,
     },
-    Stop,
+    Stop {
+        /// Parkovací pozice po nouzovém zastavení — odvozená z konfigurace
+        /// podložky (bed_min_x, bed_max_y), ne hardcoded.
+        park_x: f64,
+        park_y: f64,
+    },
 }
 
 pub struct PrinterManager {
@@ -110,28 +115,11 @@ pub fn parse_temperatures(line: &str) -> Option<(f64, f64)> {
     Some((temp_e, temp_b))
 }
 
-/// Pomocný parser souřadnic trysky z G0/G1 příkazů.
-/// Vrací trojici (Option<f64>, Option<f64>, Option<f64>) reprezentující X, Y, Z.
-pub fn parse_gcode_pos(line: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
-    // Rychlá kontrola bez alokace paměti
-    if !(line.starts_with("G0") || line.starts_with("G1") || line.starts_with("g0") || line.starts_with("g1")) {
-        return (None, None, None);
-    }
-    let x = parse_axis(line, 'X', 'x');
-    let y = parse_axis(line, 'Y', 'y');
-    let z = parse_axis(line, 'Z', 'z');
-    (x, y, z)
-}
-
-/// Pomocná funkce pro parsování jedné osy ze G-kódu bez alokace paměti.
+/// Parser souřadnic trysky z G0/G1 příkazů — sdílený s dpi-core.
+/// Na rozdíl od dřívější lokální verze správně ignoruje G10/G11 (retract).
 #[inline]
-fn parse_axis(line: &str, axis_upper: char, axis_lower: char) -> Option<f64> {
-    let idx = line.find(|c: char| c == axis_upper || c == axis_lower)?;
-    let sub = &line[idx + 1..];
-    let end = sub
-        .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
-        .unwrap_or(sub.len());
-    sub[..end].parse().ok()
+pub fn parse_gcode_pos(line: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
+    dpi_core::parse_move_axes(line)
 }
 
 /// Detekuje, zda řádek odpovědi tiskárny obsahuje potvrzení příkazu.
@@ -174,6 +162,11 @@ pub fn try_connect_port(
         .timeout(Duration::from_millis(100))
         .open()
         .map_err(|e| format!("Nelze otevřít {port_name}: {e}"))?;
+
+    // POSIX při otevření TTY nastaví DTR automaticky, Windows ne — desky
+    // s nativním USB CDC (Prusa Buddy, 32U4…) bez DTR vůbec nevysílají.
+    // Chybu ignorujeme: některé adaptéry DTR nepodporují.
+    let _ = port.write_data_terminal_ready(true);
 
     // Počkáme na restart desky po DTR resetu (jako Python: time.sleep(2.5))
     thread::sleep(Duration::from_millis(2500));
@@ -230,8 +223,20 @@ pub fn auto_find_printer(
         return Err("Žádné sériové porty nenalezeny".to_string());
     }
 
+    // Bluetooth COM porty (fantomové porty na Windows) umí při otevírání
+    // blokovat desítky sekund — přeskakujeme je. USB porty zkoušíme jako
+    // první, ostatní (PCI, neznámé) až po nich.
+    let (usb, other): (Vec<_>, Vec<_>) = available
+        .into_iter()
+        .filter(|p| !matches!(p.port_type, serialport::SerialPortType::BluetoothPort))
+        .partition(|p| matches!(p.port_type, serialport::SerialPortType::UsbPort(_)));
+
+    if usb.is_empty() && other.is_empty() {
+        return Err("Žádné použitelné sériové porty (nalezeny pouze Bluetooth)".to_string());
+    }
+
     let mut last_error = String::new();
-    for port_info in available {
+    for port_info in usb.into_iter().chain(other) {
         let name = port_info.port_name.clone();
         match try_connect_port(&name, baudrate) {
             Ok(port) => return Ok((name, port)),
@@ -244,6 +249,97 @@ pub fn auto_find_printer(
     Err(format!(
         "Žádná tiskárna nenalezena. Poslední chyba: {last_error}"
     ))
+}
+
+// ─── Sdílené obsluhy příkazů (volané z hlavní i wait_ok smyčky) ──────────────
+
+type Port = Box<dyn serialport::SerialPort>;
+
+fn lock_status(arc: &Arc<Mutex<PrinterStatus>>) -> std::sync::MutexGuard<'_, PrinterStatus> {
+    arc.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Pozastaví tisk (M601). Vrátí `true` pokud byl příkaz skutečně odeslán
+/// (tj. tiskárna nebyla už pozastavená) — volající pak ví, že přijde "ok".
+fn handle_pause(
+    port: &mut Port,
+    status_arc: &Arc<Mutex<PrinterStatus>>,
+    app_handle: &AppHandle,
+    pause_start: &mut Option<Instant>,
+) -> bool {
+    let mut status = lock_status(status_arc);
+    if status.is_paused {
+        return false;
+    }
+    status.is_paused = true;
+    *pause_start = Some(Instant::now());
+    let _ = port.write_all(b"M601\n");
+    let _ = port.flush();
+    app_handle.emit("printer-status-changed", status.clone()).ok();
+    true
+}
+
+/// Obnoví tisk. `send_m602 = false` pro app-side pauzu (M1/M0 modal).
+/// Vrátí `true` pokud bylo odesláno M602 (přijde "ok").
+fn handle_resume(
+    port: &mut Port,
+    status_arc: &Arc<Mutex<PrinterStatus>>,
+    app_handle: &AppHandle,
+    pause_start: &mut Option<Instant>,
+    paused_duration: &mut Duration,
+    send_m602: bool,
+) -> bool {
+    let mut status = lock_status(status_arc);
+    if !status.is_paused {
+        return false;
+    }
+    status.is_paused = false;
+    if let Some(ps) = pause_start.take() {
+        *paused_duration += ps.elapsed();
+    }
+    if send_m602 {
+        let _ = port.write_all(b"M602\n");
+        let _ = port.flush();
+    }
+    app_handle.emit("printer-status-changed", status.clone()).ok();
+    send_m602
+}
+
+/// Nouzové zastavení tisku: vyčistí frontu, pošle M410 a odjede na parkovací pozici.
+#[allow(clippy::too_many_arguments)]
+fn handle_stop(
+    port: &mut Port,
+    status_arc: &Arc<Mutex<PrinterStatus>>,
+    app_handle: &AppHandle,
+    gcode_queue: &mut Vec<String>,
+    dist_per_line: &mut Vec<f64>,
+    queue_idx: &mut usize,
+    dist_sent: &mut f64,
+    pause_start: &mut Option<Instant>,
+    park_x: f64,
+    park_y: f64,
+) {
+    gcode_queue.clear();
+    dist_per_line.clear();
+    *queue_idx = 0;
+    *dist_sent = 0.0;
+    *pause_start = None;
+
+    // Nouzový stop a bezpečný odjezd trysky (stejně jako Python)
+    let _ = port.clear(serialport::ClearBuffer::Output);
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    let _ = port.write_all(b"M410\n"); // Okamžité zastavení
+    let _ = port.flush();
+    thread::sleep(Duration::from_millis(500));
+    let safe_stop = format!("G91\nG0 Z15 F1000\nG90\nG0 X{park_x:.1} Y{park_y:.1} F5000\n");
+    let _ = port.write_all(safe_stop.as_bytes());
+    let _ = port.flush();
+
+    let mut status = lock_status(status_arc);
+    status.is_printing = false;
+    status.is_paused = false;
+    status.progress = 0;
+    app_handle.emit("printer-status-changed", status.clone()).ok();
 }
 
 /// Maximální čekací doba na "ok" odpověď tiskárny (zahrnuje nahřívání podložky apod.).
@@ -402,8 +498,7 @@ pub fn spawn_comms_loop(
                                 let (ox, oy, _) = parse_gcode_pos(line);
                                 let new_x = ox.unwrap_or(cur_x);
                                 let new_y = oy.unwrap_or(cur_y);
-                                let is_extrusion = parse_axis(line, 'E', 'e').is_some()
-                                    && (line.starts_with("G1") || line.starts_with("g1"));
+                                let is_extrusion = dpi_core::is_extrusion_move(line);
                                 let d = if is_extrusion {
                                     ((new_x - cur_x).powi(2) + (new_y - cur_y).powi(2)).sqrt()
                                 } else {
@@ -435,45 +530,29 @@ pub fn spawn_comms_loop(
                     }
 
                     PrinterCommand::Pause => {
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        if !status.is_paused {
-                            status.is_paused = true;
-                            pause_start = Some(Instant::now());
-                            // Prusa: pozastavení tisku
-                            let _ = serial_port.write_all(b"M601\n");
-                            let _ = serial_port.flush();
-                            app_handle
-                                .emit("printer-status-changed", status.clone())
-                                .ok();
-                        }
+                        handle_pause(&mut serial_port, &status_arc2, &app_handle, &mut pause_start);
                     }
 
                     PrinterCommand::Resume => {
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        if status.is_paused {
-                            status.is_paused = false;
-                            if let Some(ps) = pause_start.take() {
-                                paused_duration += ps.elapsed();
-                            }
-                            let _ = serial_port.write_all(b"M602\n");
-                            let _ = serial_port.flush();
-                            app_handle
-                                .emit("printer-status-changed", status.clone())
-                                .ok();
-                        }
+                        handle_resume(
+                            &mut serial_port,
+                            &status_arc2,
+                            &app_handle,
+                            &mut pause_start,
+                            &mut paused_duration,
+                            true,
+                        );
                     }
 
                     PrinterCommand::AppResume => {
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        if status.is_paused {
-                            status.is_paused = false;
-                            if let Some(ps) = pause_start.take() {
-                                paused_duration += ps.elapsed();
-                            }
-                            app_handle
-                                .emit("printer-status-changed", status.clone())
-                                .ok();
-                        }
+                        handle_resume(
+                            &mut serial_port,
+                            &status_arc2,
+                            &app_handle,
+                            &mut pause_start,
+                            &mut paused_duration,
+                            false,
+                        );
                     }
 
                     PrinterCommand::SendManual { gcode } => {
@@ -602,30 +681,19 @@ pub fn spawn_comms_loop(
                         }
                     }
 
-                    PrinterCommand::Stop => {
-                        gcode_queue.clear();
-                        dist_per_line.clear();
-                        queue_idx = 0;
-                        dist_sent = 0.0;
-                        pause_start = None;
-
-                        // Nouzový stop a bezpečný odjezd trysky (stejně jako Python)
-                        let _ = serial_port.clear(serialport::ClearBuffer::Output);
-                        let _ = serial_port.clear(serialport::ClearBuffer::Input);
-                        let _ = serial_port.write_all(b"M410\n"); // Okamžité zastavení
-                        let _ = serial_port.flush();
-                        thread::sleep(Duration::from_millis(500));
-                        let safe_stop = b"G91\nG0 Z15 F1000\nG90\nG0 X0 Y200 F5000\n";
-                        let _ = serial_port.write_all(safe_stop);
-                        let _ = serial_port.flush();
-
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        status.is_printing = false;
-                        status.is_paused = false;
-                        status.progress = 0;
-                        app_handle
-                            .emit("printer-status-changed", status.clone())
-                            .ok();
+                    PrinterCommand::Stop { park_x, park_y } => {
+                        handle_stop(
+                            &mut serial_port,
+                            &status_arc2,
+                            &app_handle,
+                            &mut gcode_queue,
+                            &mut dist_per_line,
+                            &mut queue_idx,
+                            &mut dist_sent,
+                            &mut pause_start,
+                            park_x,
+                            park_y,
+                        );
                     }
                 }
             }
@@ -716,13 +784,24 @@ pub fn spawn_comms_loop(
                         let ping_start = Instant::now();
                         let mut ok_received = false;
                         let mut stop_requested = false;
+                        // Příkazy vstříknuté během čekání (manuální G-kód, M601/M602)
+                        // vygenerují vlastní "ok" — ta nesmí být započtena jako
+                        // potvrzení aktuálního řádku fronty.
+                        let mut extra_oks_needed = 0usize;
+                        let consume_ok = |extra: &mut usize, ok_flag: &mut bool| {
+                            if *extra > 0 {
+                                *extra -= 1;
+                            } else {
+                                *ok_flag = true;
+                            }
+                        };
 
                         'wait_ok: while ping_start.elapsed() < Duration::from_secs(OK_TIMEOUT_SECS) {
                             // Čteme zprávy z tiskárny s timeoutem (odstraní stuttering způsobený thread::sleep)
                             match reader_rx.recv_timeout(Duration::from_millis(5)) {
                                 Ok(msg) => {
                                     match msg {
-                                        ReaderMessage::Ok => { ok_received = true; }
+                                        ReaderMessage::Ok => consume_ok(&mut extra_oks_needed, &mut ok_received),
                                         ReaderMessage::Temperatures(te, tb) => {
                                             let mut status =
                                                 status_arc2.lock().unwrap_or_else(|e| e.into_inner());
@@ -733,7 +812,7 @@ pub fn spawn_comms_loop(
                                     }
                                     while let Ok(msg2) = reader_rx.try_recv() {
                                         match msg2 {
-                                            ReaderMessage::Ok => { ok_received = true; }
+                                            ReaderMessage::Ok => consume_ok(&mut extra_oks_needed, &mut ok_received),
                                             ReaderMessage::Temperatures(te, tb) => {
                                                 let mut status =
                                                     status_arc2.lock().unwrap_or_else(|e| e.into_inner());
@@ -756,79 +835,63 @@ pub fn spawn_comms_loop(
                             // OPRAVA: zpracujeme ALL příkazy, nejen Stop
                             while let Ok(cmd) = cmd_rx.try_recv() {
                                 match cmd {
-                                    PrinterCommand::Stop => {
-                                        gcode_queue.clear();
-                                        dist_per_line.clear();
-                                        queue_idx = 0;
-                                        dist_sent = 0.0;
-                                        pause_start = None;
-                                        let _ = serial_port.clear(serialport::ClearBuffer::Output);
-                                        let _ = serial_port.clear(serialport::ClearBuffer::Input);
-                                        let _ = serial_port.write_all(b"M410\n");
-                                        let _ = serial_port.flush();
-                                        thread::sleep(Duration::from_millis(500));
-                                        let _ = serial_port.write_all(
-                                            b"G91\nG0 Z15 F1000\nG90\nG0 X0 Y200 F5000\n",
+                                    PrinterCommand::Stop { park_x, park_y } => {
+                                        handle_stop(
+                                            &mut serial_port,
+                                            &status_arc2,
+                                            &app_handle,
+                                            &mut gcode_queue,
+                                            &mut dist_per_line,
+                                            &mut queue_idx,
+                                            &mut dist_sent,
+                                            &mut pause_start,
+                                            park_x,
+                                            park_y,
                                         );
-                                        let _ = serial_port.flush();
-                                        let mut status =
-                                            status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                                        status.is_printing = false;
-                                        status.is_paused = false;
-                                        status.progress = 0;
-                                        app_handle
-                                            .emit("printer-status-changed", status.clone())
-                                            .ok();
                                         stop_requested = true;
                                         break 'wait_ok;
                                     }
                                     PrinterCommand::Pause => {
-                                        let mut status =
-                                            status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                                        if !status.is_paused {
-                                            status.is_paused = true;
-                                            pause_start = Some(Instant::now());
-                                            let _ = serial_port.write_all(b"M601\n");
-                                            let _ = serial_port.flush();
-                                            app_handle
-                                                .emit("printer-status-changed", status.clone())
-                                                .ok();
+                                        if handle_pause(
+                                            &mut serial_port,
+                                            &status_arc2,
+                                            &app_handle,
+                                            &mut pause_start,
+                                        ) {
+                                            extra_oks_needed += 1;
                                         }
                                     }
                                     PrinterCommand::Resume => {
-                                        let mut status =
-                                            status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                                        if status.is_paused {
-                                            status.is_paused = false;
-                                            if let Some(ps) = pause_start.take() {
-                                                paused_duration += ps.elapsed();
-                                            }
-                                            let _ = serial_port.write_all(b"M602\n");
-                                            let _ = serial_port.flush();
-                                            app_handle
-                                                .emit("printer-status-changed", status.clone())
-                                                .ok();
+                                        if handle_resume(
+                                            &mut serial_port,
+                                            &status_arc2,
+                                            &app_handle,
+                                            &mut pause_start,
+                                            &mut paused_duration,
+                                            true,
+                                        ) {
+                                            extra_oks_needed += 1;
                                         }
                                     }
                                     PrinterCommand::AppResume => {
-                                        let mut status =
-                                            status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                                        if status.is_paused {
-                                            status.is_paused = false;
-                                            if let Some(ps) = pause_start.take() {
-                                                paused_duration += ps.elapsed();
-                                            }
-                                            app_handle
-                                                .emit("printer-status-changed", status.clone())
-                                                .ok();
-                                        }
+                                        handle_resume(
+                                            &mut serial_port,
+                                            &status_arc2,
+                                            &app_handle,
+                                            &mut pause_start,
+                                            &mut paused_duration,
+                                            false,
+                                        );
                                     }
                                     PrinterCommand::SendManual { gcode } => {
-                                        // Manuální příkazy během tisku povolíme
+                                        // Manuální příkazy během tisku povolíme — každý
+                                        // neprázdný řádek vyvolá vlastní "ok"
                                         let mut buf2 = gcode.clone();
                                         buf2.push('\n');
                                         let _ = serial_port.write_all(buf2.as_bytes());
                                         let _ = serial_port.flush();
+                                        extra_oks_needed +=
+                                            gcode.lines().filter(|l| !l.trim().is_empty()).count().max(1);
                                     }
                                     PrinterCommand::StartPrint { .. } => {
                                         // Nový tisk během tisku ignorujeme

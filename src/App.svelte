@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import LeftPanel from "./components/LeftPanel.svelte";
   import RightPanel from "./components/RightPanel.svelte";
   import GraphicsView from "./components/GraphicsView.svelte";
@@ -17,7 +17,6 @@
   import {
     parse_dxf,
     parse_svg,
-    calculate_slide_layout,
     generate_gcode,
     send_manual_command,
     submit_feedback,
@@ -37,10 +36,11 @@
   } from "./lib/tauri";
   import { projectStore, addRecentFile } from "./stores/projectStore";
   import { settingsStore } from "./stores/settingsStore";
+  import { toCanonicalExtrusionRate, type ExtUnit } from "./lib/extrusionUnits";
   import { selectedLiquidName } from "./stores/liquidStore";
   import { printerStore } from "./stores/printerStore";
-  import { Cpu, FileText, Keyboard, Save } from "lucide-svelte";
   import { save, ask, open } from "@tauri-apps/plugin-dialog";
+  import { getVersion } from "@tauri-apps/api/app";
   import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
   import { check } from "@tauri-apps/plugin-updater";
   import WelcomeModal from "./components/WelcomeModal.svelte";
@@ -60,19 +60,20 @@
   let showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
 
   let ws: WebSocket | null = null;
-  let wsUpdateInProgress = false;
+  let wsCleanup: (() => void) | null = null;
 
   // --- OPRÁVNĚNÝ A DIAGNOSTICKÝ FORMULÁŘ ZPĚTNÉ VAZBY ---
   let showFeedbackModal = false;
 
   let selectedGlass = "";
 
-  let globalBedX = 250.0;
-  let globalBedY = 210.0;
-  let globalStartOffsetX = 18.0;
-  let globalStartOffsetY = 11.0;
-  let globalMultiSpacing = 5.0;
-  let globalBlockHeight = 34.0;
+  // Konfigurace stroje — jediným zdrojem pravdy je settingsStore
+  $: globalBedX = $settingsStore.bed_max_x || 250.0;
+  $: globalBedY = $settingsStore.bed_max_y || 210.0;
+  $: globalStartOffsetX = $settingsStore.start_offset_x || 18.0;
+  $: globalStartOffsetY = $settingsStore.start_offset_y || 11.0;
+  $: globalMultiSpacing = $settingsStore.multi_spacing || 5.0;
+  $: globalBlockHeight = $settingsStore.block_height || 34.0;
 
   let generatedGCode = "";
   let totalDist = 0;
@@ -111,6 +112,14 @@
     }
     return -1;
   }
+
+  $: extrusionRateUl = $projectStore.params
+    ? toCanonicalExtrusionRate(
+        $projectStore.params.extrusion_rate,
+        $projectStore.params.extrusion_unit as ExtUnit,
+        $settingsStore?.calibration_factor ?? 0.323877
+      )
+    : 0;
 
   // Reaktivní re-parse SVG/DXF při změně jemnosti křivek
   let _prevFineness = 1.0;
@@ -168,7 +177,7 @@
       `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj substrátu\n` +
         `a tryska by se dotkla jeho stěny.\n\n` +
         `Chcete objekt automaticky zmenšit?`,
-      { title: "Varování — průměr trysky", type: "warning" }
+      { title: "Varování — průměr trysky", kind: "warning" }
     );
 
     if (confirmed) {
@@ -187,95 +196,10 @@
     }
   }
 
-  // Generuje automatický náhled drah na základě tiskového nastavení
-  function generatePreviewPaths(p: ProcessParams): SubstratePaths[] {
-    const pathsList: SubstratePaths[] = [];
-    const margin = 2.0;
-
-    for (let i = 0; i < p.sample_count; i++) {
-      const segments = [];
-      const w = p.slide_w;
-      const h = p.slide_h;
-
-      // 1. Okraje (Perimeter)
-      if (p.infill_style !== "Výplň" && p.infill_style !== "Tečky") {
-        segments.push({
-          points: [
-            { x: margin, y: margin },
-            { x: w - margin, y: margin },
-            { x: w - margin, y: h - margin },
-            { x: margin, y: h - margin },
-            { x: margin, y: margin },
-          ],
-        });
-      }
-
-      // 2. Výplň (Infill)
-      if (
-        p.infill_style === "Okraje + Výplň" ||
-        p.infill_style === "Výplň" ||
-        p.infill_style === "Had"
-      ) {
-        const infillSpacing = 3.0;
-        const points = [];
-        let direction = 1;
-        for (let y = margin + infillSpacing; y <= h - margin - infillSpacing; y += infillSpacing) {
-          if (direction > 0) {
-            points.push({ x: margin + infillSpacing, y });
-            points.push({ x: w - margin - infillSpacing, y });
-          } else {
-            points.push({ x: w - margin - infillSpacing, y });
-            points.push({ x: margin + infillSpacing, y });
-          }
-          direction *= -1;
-        }
-        if (points.length > 0) {
-          segments.push({ points });
-        }
-      } else if (p.infill_style === "Mřížka") {
-        const gridSpacing = 3.0;
-        for (let y = margin + gridSpacing; y <= h - margin - gridSpacing; y += gridSpacing) {
-          segments.push({
-            points: [
-              { x: margin + gridSpacing, y },
-              { x: w - margin - gridSpacing, y },
-            ],
-          });
-        }
-        for (let x = margin + gridSpacing; x <= w - margin - gridSpacing; x += gridSpacing) {
-          segments.push({
-            points: [
-              { x, y: margin + gridSpacing },
-              { x, y: h - margin - gridSpacing },
-            ],
-          });
-        }
-      } else if (p.infill_style === "Tečky") {
-        const dotSpacing = 6.0;
-        for (let y = margin + dotSpacing; y <= h - margin - dotSpacing; y += dotSpacing) {
-          for (let x = margin + dotSpacing; x <= w - margin - dotSpacing; x += dotSpacing) {
-            segments.push({
-              points: [
-                { x, y },
-                { x, y },
-              ],
-            });
-          }
-        }
-      }
-
-      pathsList.push({ segments });
-    }
-    return pathsList;
-  }
-
-  // Přepočítá rozložení sklíček a synchronizuje transformace
-  let layoutTimeout: ReturnType<typeof setTimeout>;
-
   // Spustí generování G-kódu na Rust backendu.
   // overrideStartGcode: pokud předáno, použije se místo start_gcode ze settings
   // (předej "" pokud byl start_gcode již odeslán v pre-kalibrační fázi)
-  async function triggerGCodeGeneration(overrideStartGcode?: string) {
+  async function triggerGCodeGeneration(overrideStartGcode?: string, silent = false) {
     gcodeError = "";
     try {
       const setts = await get_app_settings();
@@ -301,26 +225,25 @@
         ? { ...currentParams, z_offset: currentParams.z_offset / 1000.0 }
         : currentParams;
 
-      const res = await generate_gcode(
-        currentPaths,
-        paramsForRust,
-        currentTransforms,
-        currentOverrides,
-        startGcode,
-        endGcode,
-        loopStartGcode,
-        loopEndGcode,
-        globalBedX,
-        globalBedY,
-        globalStartOffsetX,
-        globalStartOffsetY,
-        globalMultiSpacing,
-        globalBlockHeight,
-        calFactor,
-        setts.bed_min_x ?? 0.0,
-        zHop,
-        safeZ
-      );
+      const res = await generate_gcode(currentPaths, paramsForRust, currentTransforms, currentOverrides, {
+        bed: {
+          max_x: globalBedX,
+          max_y: globalBedY,
+          min_x: setts.bed_min_x ?? 0.0,
+          offset_x: globalStartOffsetX,
+          offset_y: globalStartOffsetY,
+        },
+        start_gcode: startGcode,
+        end_gcode: endGcode,
+        loop_start_gcode: loopStartGcode,
+        loop_end_gcode: loopEndGcode,
+        multi_spacing: globalMultiSpacing,
+        block_height: globalBlockHeight,
+        calibration_factor: calFactor,
+        z_hop: zHop,
+        safe_z: safeZ,
+        bed_max_temp: setts.bed_max_temp ?? null,
+      });
 
       generatedGCode = res.gcode;
       totalDist = res.total_dist;
@@ -330,9 +253,28 @@
       return { gcode: generatedGCode, dist: totalDist, time: totalTime };
     } catch (e) {
       gcodeError = `Generování selhalo: ${e}`;
-      alert(gcodeError);
+      if (!silent) alert(gcodeError);
       throw e;
     }
+  }
+
+  // Tiché přepočítání statistik G-kódu (dráha, čas, objem) — odloženo, spouští se
+  // při jakékoliv změně parametrů/transformací/cest, aby statistiky v Canvasu byly vždy aktuální.
+  let statsRefreshTimer: ReturnType<typeof setTimeout>;
+  function scheduleStatsRefresh() {
+    clearTimeout(statsRefreshTimer);
+    statsRefreshTimer = setTimeout(() => {
+      triggerGCodeGeneration(undefined, true).catch(() => {});
+    }, 400);
+  }
+
+  $: {
+    $projectStore.params;
+    $projectStore.transforms;
+    $projectStore.overrides;
+    $projectStore.paths;
+    $projectStore.positions;
+    if ($projectStore.paths.length > 0) scheduleStatsRefresh();
   }
 
   export async function generateGCodeSilently(overrideStartGcode?: string) {
@@ -344,7 +286,7 @@
     if ($projectStore.isDirty) {
       return await ask("Máte neuložené změny. Opravdu chcete pokračovat a změny zahodit?", {
         title: "DPI",
-        type: "warning",
+        kind: "warning",
       });
     }
     return true;
@@ -482,13 +424,14 @@
 
   // Uložení protokolu tisku jako CSV pro chemiky a další zpracování
   async function exportCSVProtocol() {
+    const appVersion = await getVersion().catch(() => "");
     const csvContent = await generate_csv_protocol(
       $projectStore.params,
       $projectStore.overrides,
       $projectStore.totalDist,
       $projectStore.totalTime,
       selectedGlass || "",
-      "DPI 1.5.1",
+      `DPI ${appVersion}`,
       new Date().toLocaleString()
     );
     try {
@@ -506,6 +449,7 @@
 
   // Ukončení aplikace
   async function quitApp() {
+    if (!(await checkUnsavedChanges())) return;
     try {
       const { exit } = await import("@tauri-apps/plugin-process");
       await exit(0);
@@ -533,13 +477,6 @@
     if (leftPanelRef && leftPanelRef.loadSettings) {
       leftPanelRef.loadSettings();
     }
-    const setts = await get_app_settings();
-    globalBedX = setts.bed_max_x || 250.0;
-    globalBedY = setts.bed_max_y || 210.0;
-    globalStartOffsetX = setts.start_offset_x || 18.0;
-    globalStartOffsetY = setts.start_offset_y || 11.0;
-    globalMultiSpacing = setts.multi_spacing || 5.0;
-    globalBlockHeight = setts.block_height || 34.0;
     await settingsStore.load();
     projectStore.triggerLayoutUpdate();
     showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
@@ -588,28 +525,35 @@
     const loader = document.querySelector(".loading-screen");
     if (loader) loader.remove();
 
-    // WebSocket synchronizace stavu
+    // WebSocket synchronizace stavu — jednosměrná:
+    // Tauri host stav pouze publikuje (je zdrojem pravdy), webový klient
+    // na LAN pouze přijímá (server zprávy z LAN zahazuje, viz sync.rs).
     const host = isTauri ? "127.0.0.1" : window.location.hostname;
     ws = new WebSocket(`ws://${host}:5174`);
 
-    ws.onmessage = (event) => {
-      try {
-        const state = JSON.parse(event.data);
-        wsUpdateInProgress = true;
-        projectStore.set(state);
-        setTimeout(() => {
-          wsUpdateInProgress = false;
-        }, 50);
-      } catch (e) {
-        console.error("Failed to parse state from WS", e);
-      }
+    let unsubWs: (() => void) | null = null;
+    if (isTauri) {
+      unsubWs = projectStore.subscribe((state) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // Těžká pole (zdrojový soubor, vygenerovaný G-kód) vzdálený náhled
+          // nepotřebuje — neposíláme je při každé změně po síti.
+          const lean = { ...state, rawFileText: null, rawLoadedPaths: null, generatedGCode: "" };
+          ws.send(JSON.stringify(lean));
+        }
+      });
+    } else {
+      ws.onmessage = (event) => {
+        try {
+          projectStore.set(JSON.parse(event.data));
+        } catch (e) {
+          console.error("Failed to parse state from WS", e);
+        }
+      };
+    }
+    wsCleanup = () => {
+      unsubWs?.();
+      ws?.close();
     };
-
-    const unsubWs = projectStore.subscribe((state) => {
-      if (ws && ws.readyState === WebSocket.OPEN && !wsUpdateInProgress) {
-        ws.send(JSON.stringify(state));
-      }
-    });
 
     // Zobrazení okna (řeší bílé probliknutí na začátku)
     try {
@@ -628,7 +572,7 @@
           event.preventDefault();
           const confirmed = await ask("Máte neuložené změny. Opravdu chcete aplikaci zavřít?", {
             title: "DPI",
-            type: "warning",
+            kind: "warning",
           });
           if (confirmed) {
             closeConfirmed = true;
@@ -642,13 +586,6 @@
 
     // Fetch initial settings
     try {
-      const setts = await get_app_settings();
-      globalBedX = setts.bed_max_x || 250.0;
-      globalBedY = setts.bed_max_y || 210.0;
-      globalStartOffsetX = setts.start_offset_x || 18.0;
-      globalStartOffsetY = setts.start_offset_y || 11.0;
-      globalMultiSpacing = setts.multi_spacing || 5.0;
-      globalBlockHeight = setts.block_height || 34.0;
       await settingsStore.load();
     } catch (e) {
       console.warn("Nepodařilo se načíst nastavení z Tauri (Web Mode):", e);
@@ -660,12 +597,17 @@
       showFeedbackModal = true;
     };
     window.addEventListener("open-feedback-form", openFeedback);
-
-    return () => {
+    const prevCleanup = wsCleanup;
+    wsCleanup = () => {
+      prevCleanup?.();
       window.removeEventListener("open-feedback-form", openFeedback);
-      unsubWs();
-      if (ws) ws.close();
     };
+  });
+
+  // Cleanup nelze vracet z async onMount callbacku (Svelte ho ignoruje) —
+  // proto explicitní onDestroy.
+  onDestroy(() => {
+    wsCleanup?.();
   });
 
   // Auto-updater: tiše zkontroluje na pozadí, ukáže modal jen pokud je update
@@ -731,7 +673,7 @@
         on:loadFile={triggerLoadFileInput}
         on:saveFile={saveProject}
         on:exportCSV={exportCSVProtocol}
-        on:generateGCode={triggerGCodeGeneration}
+        on:generateGCode={() => triggerGCodeGeneration()}
         {generateGCodeSilently}
       />
     </div>
@@ -750,6 +692,8 @@
         overrides={$projectStore.overrides}
         externalSelectedIndex={canvasExternalSelected}
         totalPreviewTime={$projectStore.totalTime ?? 0}
+        {extrusionRateUl}
+        suspendAutoCenter={showWelcomeModal}
         on:transformChanged={handleTransformChanged}
         on:pathCleared={handlePathCleared}
         on:saveState={() => projectStore.pushState()}
@@ -786,105 +730,6 @@
   <!-- ADVANCED SETTINGS MODAL -->
   <SettingsModal bind:this={settingsModalRef} bind:isOpen={showSettingsModal} on:save={handleSettingsSave} />
 
-  <!-- SHORTCUTS DIALOG -->
-  {#if showShortcutsModal}
-    <div
-      class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-    >
-      <div
-        class="glass-panel max-w-md w-full rounded-xl p-5 flex flex-col gap-4 border border-slate-800 shadow-2xl"
-      >
-        <div
-          class="flex items-center gap-2.5 pb-2 border-b border-slate-800 text-labaccent font-bold"
-        >
-          <Keyboard class="w-5 h-5" />
-          <h3 class="text-sm font-bold uppercase tracking-wider">Klávesové zkratky</h3>
-        </div>
-
-        <div class="flex flex-col gap-2 max-h-[60vh] overflow-y-auto text-xs text-slate-300">
-          <table class="w-full text-left divide-y divide-slate-850">
-            <tbody class="divide-y divide-slate-850">
-              <tr
-                ><td class="py-1.5 font-bold text-slate-200">Ctrl + O</td><td class="py-1.5"
-                  >Načíst vzorek (G-code / SVG / DXF)</td
-                ></tr
-              >
-              <tr
-                ><td class="py-1.5 font-bold text-slate-200">Ctrl + S</td><td class="py-1.5"
-                  >Vygenerovat G-kód</td
-                ></tr
-              >
-              <tr
-                ><td class="py-1.5 font-bold text-slate-200">Ctrl + Q</td><td class="py-1.5"
-                  >Ukončit aplikaci</td
-                ></tr
-              >
-              <tr class="bg-slate-900/50"
-                ><td colspan="2" class="py-1.5 font-bold text-slate-400 pl-1">Práce s podložkou:</td
-                ></tr
-              >
-              <tr
-                ><td class="py-1.5 font-bold text-slate-200">Ctrl + Tažení</td><td class="py-1.5"
-                  >Přichytit k mřížce (Snap to Grid)</td
-                ></tr
-              >
-              <tr
-                ><td class="py-1.5 font-bold text-slate-200">Shift + Tažení</td><td class="py-1.5"
-                  >Synchronizovaný pohyb všech substrátů</td
-                ></tr
-              >
-            </tbody>
-          </table>
-        </div>
-
-        <div class="flex justify-end border-t border-slate-800 pt-3">
-          <button
-            on:click={() => (showShortcutsModal = false)}
-            class="bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs px-4 py-1.5 rounded-md transition-colors"
-          >
-            Zavřít
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- ABOUT DIALOG -->
-  {#if showAboutModal}
-    <div
-      class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-    >
-      <div
-        class="glass-panel max-w-sm w-full rounded-xl p-5 flex flex-col gap-4 border border-slate-800 shadow-2xl text-center items-center"
-      >
-        <div class="bg-labaccent/10 border border-labaccent/30 p-3 rounded-2xl mb-1">
-          <Cpu class="w-10 h-10 text-labaccent" />
-        </div>
-
-        <div>
-          <h3 class="text-md font-bold text-slate-200 tracking-wide uppercase">
-            Droplet Printing Interface
-          </h3>
-          <p class="text-xs text-slate-500 font-mono mt-0.5">Verze 1.5.0</p>
-        </div>
-
-        <p class="text-[11px] text-slate-400 leading-relaxed max-w-xs mt-1">
-          Specializovaná aplikace pro laboratorní výzkum a vývoj 2D tisku kapalin na podložní
-          sklíčka. Portováno do nativního systému Rust + Tauri.
-        </p>
-
-        <div class="text-[9px] text-slate-500 mt-2">© 2026 Sherlock3721 / VUT Brno</div>
-
-        <button
-          on:click={() => (showAboutModal = false)}
-          class="mt-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs px-6 py-1.5 rounded-md transition-colors"
-        >
-          Zavřít
-        </button>
-      </div>
-    </div>
-  {/if}
-
   <!-- FEEDBACK FORM MODAL -->
   <FeedbackModal bind:show={showFeedbackModal} />
 
@@ -910,6 +755,7 @@
   <WelcomeModal
     show={showWelcomeModal}
     on:newProject={triggerLoadFileInput}
+    on:close={() => (showWelcomeModal = false)}
     on:openRecent={async (e) => {
       showWelcomeModal = false;
       await loadFileFromPath(e.detail);

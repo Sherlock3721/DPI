@@ -19,6 +19,8 @@
   import { subscribe_printer_status, type SlideOverride, type PrinterStatus } from "../lib/tauri";
   import { liquidLimits } from "../stores/liquidStore";
   import { cameraAvailable } from "../stores/cameraStore";
+  import { settingsStore } from "../stores/settingsStore";
+  import { convertExtrusionRate, toCanonicalExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
 
   export let sampleCount = 1;
   export let primeActive = false;
@@ -132,23 +134,14 @@
   }
 
   function handlePrimeExtUnitChange(
-    newUnit: "µl/mm" | "nl/mm" | "kroky/mm",
-    oldUnit: "µl/mm" | "nl/mm" | "kroky/mm"
+    newUnit: ExtUnit,
+    oldUnit: ExtUnit
   ) {
     if (!primeSlide.extrusion_rate || oldUnit === newUnit) return;
-    let val = parseFloat(primeSlide.extrusion_rate);
+    const val = parseFloat(primeSlide.extrusion_rate);
     if (!isNaN(val)) {
-      const calFactor = 0.014108;
-      const extUnitOptions = { "µl/mm": 1.0, "nl/mm": 0.001, "kroky/mm": 1.0 };
-      let baseVal = val;
-      if (oldUnit === "kroky/mm") baseVal = val / calFactor;
-      else baseVal = val * extUnitOptions[oldUnit];
-
-      let newVal = baseVal;
-      if (newUnit === "kroky/mm") newVal = baseVal * calFactor;
-      else newVal = baseVal / extUnitOptions[newUnit];
-
-      primeSlide.extrusion_rate = newVal.toFixed(4);
+      const calFactor = $settingsStore.calibration_factor;
+      primeSlide.extrusion_rate = convertExtrusionRate(val, oldUnit, newUnit, calFactor).toFixed(4);
       handlePrimeInput();
     }
   }
@@ -258,39 +251,17 @@
   // Přepočet extruze při změně jednotek
   function handleExtUnitChange(
     idx: number,
-    newUnit: "µl/mm" | "nl/mm" | "kroky/mm",
-    oldUnit: "µl/mm" | "nl/mm" | "kroky/mm"
+    newUnit: ExtUnit,
+    oldUnit: ExtUnit
   ) {
     const slide = localSlides[idx];
     if (!slide || !slide.extrusion_rate || oldUnit === newUnit) return;
 
-    let val = parseFloat(slide.extrusion_rate);
+    const val = parseFloat(slide.extrusion_rate);
     if (!isNaN(val)) {
-      const calFactor = 0.014108; // default calibration factor
-      const extUnitOptions = {
-        "µl/mm": 1.0,
-        "nl/mm": 0.001,
-        "kroky/mm": 1.0,
-      };
-
-      // 1. Převod na µl/mm
-      let baseVal = val;
-      if (oldUnit === "kroky/mm") {
-        baseVal = val / calFactor;
-      } else {
-        baseVal = val * extUnitOptions[oldUnit];
-      }
-
-      // 2. Převod na novou jednotku
-      let newVal = 0.0;
-      if (newUnit === "kroky/mm") {
-        newVal = baseVal * calFactor;
-        slide.extrusion_rate = newVal.toFixed(1);
-      } else {
-        newVal = baseVal / extUnitOptions[newUnit];
-        slide.extrusion_rate = newVal.toFixed(4);
-      }
-
+      const calFactor = $settingsStore.calibration_factor;
+      const newVal = convertExtrusionRate(val, oldUnit, newUnit, calFactor);
+      slide.extrusion_rate = newUnit === "kroky/mm" ? newVal.toFixed(1) : newVal.toFixed(4);
       localSlides = [...localSlides];
       handleInput(idx, "extrusion_rate");
     }
@@ -319,21 +290,11 @@
 
       // Extruze
       if (slide.ext_modified && slide.extrusion_rate !== "") {
-        let ext = parseFloat(slide.extrusion_rate);
+        const ext = parseFloat(slide.extrusion_rate);
         if (!isNaN(ext)) {
-          const calFactor = 0.014108;
-          const extUnitOptions = {
-            "µl/mm": 1.0,
-            "nl/mm": 0.001,
-            "kroky/mm": 1.0,
-          };
-          let baseVal = ext;
-          if (slide.extrusion_unit === "kroky/mm") {
-            baseVal = ext / calFactor;
-          } else {
-            baseVal = ext * extUnitOptions[slide.extrusion_unit];
-          }
-          slide_data.extrusion_rate = baseVal;
+          slide_data.extrusion_rate = toCanonicalExtrusionRate(
+            ext, slide.extrusion_unit, $settingsStore.calibration_factor
+          );
           slide_data.extrusion_unit = "µl/mm";
         }
       }
@@ -390,17 +351,11 @@
       }
 
       if (primeSlide.extrusion_rate !== "") {
-        let ext = parseFloat(primeSlide.extrusion_rate);
+        const ext = parseFloat(primeSlide.extrusion_rate);
         if (!isNaN(ext)) {
-          const calFactor = 0.014108;
-          const extUnitOptions = { "µl/mm": 1.0, "nl/mm": 0.001, "kroky/mm": 1.0 };
-          let baseVal = ext;
-          if (primeSlide.extrusion_unit === "kroky/mm") {
-            baseVal = ext / calFactor;
-          } else {
-            baseVal = ext * extUnitOptions[primeSlide.extrusion_unit as "µl/mm" | "nl/mm"];
-          }
-          p_over.extrusion_rate = baseVal;
+          p_over.extrusion_rate = toCanonicalExtrusionRate(
+            ext, primeSlide.extrusion_unit, $settingsStore.calibration_factor
+          );
           p_over.extrusion_unit = "µl/mm";
         }
       }

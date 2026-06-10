@@ -49,12 +49,24 @@ export const TAURI_MOCK_SCRIPT = `
     send_manual_gcode:   () => null,
     get_startup_time:    () => 0,
     get_local_ip:        () => "127.0.0.1",
-    calculate_layout:    (args) => {
-      const { count = 1, slideW = 76, slideH = 26 } = args || {};
-      return Array.from({ length: count }, (_, i) => ({
-        x: 18 + i * (slideW + 5), y: 11,
-        width: slideW, height: slideH, is_prime: false,
+    update_layout:       (args) => {
+      const p = (args && args.params) || {};
+      const count = p.sample_count ?? 1;
+      const w = p.slide_w ?? 76, h = p.slide_h ?? 26;
+      const positions = Array.from({ length: count }, (_, i) => ({
+        x: 18 + i * (w + 5), y: 11,
+        width: w, height: h, is_prime: false,
       }));
+      return {
+        positions,
+        transforms: positions.map((pos) => ({
+          scale: 1, rotation: 0, gui_dx: pos.x, gui_dy: pos.y, cx: w / 2, cy: h / 2,
+        })),
+        paths: [],
+        prime_path: null,
+        final_sample_count: count,
+        baked_scales: positions.map(() => 1),
+      };
     },
     generate_gcode_job:  () => ({ gcode: "; test gcode\\n", total_dist: 10, total_time: 5 }),
     process_paths:       (args) => args?.rawPaths ?? { segments: [] },
@@ -63,9 +75,11 @@ export const TAURI_MOCK_SCRIPT = `
     build_gcode_metadata_header: () => "; meta\\n",
     parse_gcode_metadata: () => null,
     parse_gcode_file_paths: () => ({ segments: [] }),
-    get_prime_preview:   () => ({ segments: [] }),
     generate_csv_protocol: () => "",
     save_feedback:       () => null,
+    compute_preview_segments: () => ({ segs: [], total_dist: 0 }),
+    check_paths_overflow: () => false,
+    send_manual_gcode_blocking: () => null,
   };
 
   // Simulace Tauri event systému

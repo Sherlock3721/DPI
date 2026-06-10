@@ -51,7 +51,9 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
     let meta_start = gcode.find("; --- EDITOR METADATA ---")?;
     let meta_end = gcode.find("; --- END METADATA ---")?;
 
-    let block = &gcode[meta_start..meta_end];
+    // get() místo přímého slice — chrání proti panicu, pokud poškozený
+    // soubor obsahuje END marker před START markerem.
+    let block = gcode.get(meta_start..meta_end)?;
     let json_text: String = block
         .lines()
         .filter(|l| l.starts_with(';'))
@@ -120,6 +122,18 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
     })
 }
 
+/// Escapuje hodnotu pro CSV pole v uvozovkách: zdvojí vnitřní uvozovky
+/// a neutralizuje úvodní znaky, které by tabulkový procesor interpretoval
+/// jako vzorec (=, +, -, @) — ochrana proti CSV/formula injection.
+fn csv_quote(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    if escaped.starts_with(['=', '+', '-', '@']) {
+        format!("\"'{escaped}\"")
+    } else {
+        format!("\"{escaped}\"")
+    }
+}
+
 /// Sestaví CSV protokol tisku z parametrů projektu.
 /// `date_str` se předává z frontendu aby respektoval lokalizaci.
 pub fn build_csv_protocol(
@@ -146,7 +160,7 @@ pub fn build_csv_protocol(
             "\"Celkový počet vzorků\";\"{count}\"",
             count = params.sample_count
         ),
-        format!("\"Základní typ sklíčka\";\"{glass}\""),
+        format!("\"Základní typ sklíčka\";{}", csv_quote(glass)),
         format!(
             "\"Rozměry sklíčka (X x Y x Z)\";\"{w} x {h} x {z} mm\"",
             w = params.slide_w,
@@ -225,8 +239,8 @@ pub fn build_csv_protocol(
         rows.push(
             [
                 (i + 1).to_string(),
-                format!("\"{}\"", name),
-                format!("\"{}\"", note),
+                csv_quote(&name),
+                csv_quote(&note),
                 format!("{} {}", z_off, params.z_unit),
                 format!("{} {}", ext, params.extrusion_unit),
                 format!("\"{} {}\"", ext, params.extrusion_unit),

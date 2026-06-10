@@ -67,4 +67,14 @@ npm run tauri build -- --target x86_64-pc-windows-gnu --no-bundle
 ---
 
 ## 📜 Licence
-Tento projekt je uvolněn pod svobodnou licencí **GPLv2** (GNU General Public License v2.0). Můžete jej volně používat, upravovat i šířit, ovšem veškeré odvozené verze musí zůstat open-source pod stejnou licencí. Plné znění naleznete v souboru `LICENSE`.
+
+DPI je nabízeno pod **dvojí licencí** — zvolte si tu, která vyhovuje vašemu použití:
+
+| Licence | Pro koho | Podmínky |
+|---------|----------|----------|
+| **GPLv2** (zdarma) | Open-source projekty, interní laboratorní použití, výzkum | Software smíte volně používat, upravovat i šířit, ovšem veškerá odvozená díla musí zůstat open-source pod toutéž licencí. Plné znění: [`LICENSE`](LICENSE). |
+| **Komerční licence** (placená) | Uzavřené (proprietární) produkty, distribuce bez zveřejnění zdrojového kódu, nárok na podporu/SLA | Zbavuje vás copyleftových povinností GPLv2. Podmínky: [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md). |
+
+Pokud vám podmínky GPLv2 vyhovují (typicky provoz Softwaru ve vlastní laboratoři bez další distribuce), **žádnou komerční licenci nepotřebujete**. Komerční licence je určena subjektům, které chtějí Software začlenit do proprietárního produktu nebo potřebují záruky a podporu nad rámec open-source licence.
+
+Zájem o komerční licenci? Kontaktujte **cyrilveverka@email.cz**.
