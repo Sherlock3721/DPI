@@ -23,12 +23,14 @@
   const ARM_DELAY_MS = 400;
 
   function show(message: string) {
+    console.log("[PAUSE-DEBUG] show():", message);
     pauseMessage = message || FALLBACK_MSG;
     pauseShownAt = Date.now();
   }
 
   /** Pauza z tiskové fronty (APP_PAUSE event) — potvrzení volá resume_app_pause. */
   export function showFromPrintQueue(message: string) {
+    console.log("[PAUSE-DEBUG] showFromPrintQueue():", message);
     show(message || FALLBACK_MSG);
     pauseIsFromPrintQueue = true;
     pauseResolve = null;
@@ -36,6 +38,7 @@
 
   /** Programová pauza — Promise se resolvne po potvrzení uživatelem. */
   export function waitFor(message: string): Promise<void> {
+    console.log("[PAUSE-DEBUG] waitFor():", message);
     return new Promise((resolve) => {
       setTimeout(() => {
         show(message);
@@ -46,10 +49,12 @@
   }
 
   async function dismiss() {
+    console.log("[PAUSE-DEBUG] dismiss(), pauseIsFromPrintQueue =", pauseIsFromPrintQueue);
     pauseMessage = null;
     if (pauseIsFromPrintQueue) {
       pauseIsFromPrintQueue = false;
       await resume_app_pause();
+      console.log("[PAUSE-DEBUG] resume_app_pause() hotovo");
     } else if (pauseResolve) {
       pauseResolve();
       pauseResolve = null;
@@ -58,6 +63,15 @@
 
   async function handlePauseKeydown(event: KeyboardEvent) {
     if (pauseMessage === null) return;
+    console.log(
+      "[PAUSE-DEBUG] keydown:",
+      event.key,
+      "repeat =",
+      event.repeat,
+      "od zobrazení =",
+      Date.now() - pauseShownAt,
+      "ms",
+    );
     if (event.key !== "Enter") return;
     // Auto-repeat držené klávesy nesmí potvrdit dialog — klávesa musí být
     // stisknuta znovu až po jeho zobrazení.

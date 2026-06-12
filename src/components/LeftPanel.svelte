@@ -500,10 +500,14 @@
     });
 
     const unlistenPause = listen<string>("app-pause-requested", (event) => {
+      console.log("[PAUSE-DEBUG] app-pause-requested přijato:", event.payload, "isStarting =", isStarting);
       // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis interní Promise
       // by natrvalo zablokoval pauseModal.waitFor().
       if (isStarting) return;
-      setTimeout(() => pauseModal.showFromPrintQueue(event.payload || ""), 50);
+      setTimeout(() => {
+        console.log("[PAUSE-DEBUG] volám showFromPrintQueue");
+        pauseModal.showFromPrintQueue(event.payload || "");
+      }, 50);
     });
 
     return () => {

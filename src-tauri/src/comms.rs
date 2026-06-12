@@ -484,11 +484,17 @@ pub fn spawn_comms_loop(
                             if is_m0 || is_m1 || is_m601 {
                                 let msg = clean.split_once(' ').map(|x| x.1).unwrap_or("").trim();
                                 let msg = if msg.is_empty() { "Stiskněte pro pokračování" } else { msg };
+                                eprintln!("[PAUSE-DEBUG] StartPrint: nalezen pauzovací příkaz '{clean}', msg='{msg}'");
                                 gcode_queue.push(format!("; APP_PAUSE:{msg}"));
                             } else {
                                 gcode_queue.push(clean.to_string());
                             }
                         }
+                        eprintln!(
+                            "[PAUSE-DEBUG] StartPrint: fronta má {} řádků, z toho {} APP_PAUSE markerů",
+                            gcode_queue.len(),
+                            gcode_queue.iter().filter(|l| l.starts_with("; APP_PAUSE:")).count()
+                        );
 
                         // Pre-výpočet vzdálenosti extruze pro každý řádek fronty.
                         // Slouží k výpočtu progress% podle ujeté vzdálenosti tisku (ne počtu řádků).
@@ -754,7 +760,11 @@ pub fn spawn_comms_loop(
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_paused = true;
                         pause_start = Some(Instant::now());
-                        app_handle.emit("app-pause-requested", msg.to_string()).ok();
+                        let emit_result = app_handle.emit("app-pause-requested", msg.to_string());
+                        eprintln!(
+                            "[PAUSE-DEBUG] APP_PAUSE marker na queue_idx={queue_idx}, msg='{msg}', emit ok={}",
+                            emit_result.is_ok()
+                        );
                         app_handle
                             .emit("printer-status-changed", status.clone())
                             .ok();
