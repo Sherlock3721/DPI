@@ -100,6 +100,25 @@
     multiplyCount = Math.min(Math.max(1, multiplyCount), maxMultiply);
   });
 
+  // Rámeček desky kolem otvoru pro sklo má šířku = rozestup vzorků (spacing,
+  // Nastavení → multi_spacing) — to je nutné pro bezešvé navazování kopií.
+  // Zóna pružin je to, co z rámečku zbyde po odečtení ramene pevného L:
+  //   X pružiny (horní zóna):  spacing − fixedThickY
+  //   Y pružiny (pravá zóna):  spacing − fixedThickX
+  // Při spacing ≤ tloušťka ramene zóna zanikne a Rust pružiny tiše vypustí
+  // (deska pak sklo nijak nedrží). Tloušťku ramen proto omezujeme tak, aby
+  // zóna nikdy neklesla pod MIN_SPRING_ZONE; bez pružin na dané ose smí
+  // rameno vyplnit celý rámeček (víc ne — přesahovalo by do otvoru pro sklo).
+  const MIN_SPRING_ZONE = 1.5;
+  let maxFixedThickX = $derived(Math.max(0.5, springCountY > 0 ? spacing - MIN_SPRING_ZONE : spacing));
+  let maxFixedThickY = $derived(Math.max(0.5, springCountX > 0 ? spacing - MIN_SPRING_ZONE : spacing));
+  run(() => {
+    fixedThickX = Math.min(fixedThickX, maxFixedThickX);
+  });
+  run(() => {
+    fixedThickY = Math.min(fixedThickY, maxFixedThickY);
+  });
+
   // === GEOMETRIE (jediný zdroj pravdy — Rust, viz dpi-core/src/bracket.rs) ===
   // Veškerá geometrie sestavy (cesty, obdélníky, středy děr, layout kopií…) se
   // počítá v Rustu jedním voláním — náhled, SVG export i rasterizace pro STL
@@ -510,12 +529,17 @@
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[11px] text-slate-300 flex-1">Tloušťka ramene vpravo (mm)</span>
-                <div class="w-20"><NumberInput bind:value={fixedThickX} step={0.5} min={0.5} max={20}/></div>
+                <div class="w-20"><NumberInput bind:value={fixedThickX} step={0.5} min={0.5} max={Math.min(20, maxFixedThickX)}/></div>
               </div>
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[11px] text-slate-300 flex-1">Tloušťka ramene nahoře (mm)</span>
-                <div class="w-20"><NumberInput bind:value={fixedThickY} step={0.5} min={0.5} max={20}/></div>
+                <div class="w-20"><NumberInput bind:value={fixedThickY} step={0.5} min={0.5} max={Math.min(20, maxFixedThickY)}/></div>
               </div>
+              <p class="text-[9px] leading-snug text-slate-500">
+                Max. tloušťka ramene je omezena rozestupem vzorků ({spacing.toFixed(1)} mm, Nastavení → Rozestup)
+                {springCountX > 0 || springCountY > 0 ? `mínus ${MIN_SPRING_ZONE.toFixed(1)} mm zóna pro pružiny` : ""},
+                aby pružiny a otvor pro sklo zůstaly zachovány.
+              </p>
               <div class="pt-1.5 mt-0.5 border-t border-slate-800/60 flex flex-col gap-1.5">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-[11px] text-slate-300 flex-1">Tvar díry pro magnet</span>
