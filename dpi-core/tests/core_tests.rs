@@ -54,7 +54,7 @@ fn test_layout_calculation_basic() {
     // First slide: curr_x = min_x + offset_x = 0 + 18 = 18
     assert_eq!(positions[0].x, 18.0);
     assert_eq!(positions[0].y, 11.0);
-    assert_eq!(positions[0].is_prime, false);
+    assert!(!positions[0].is_prime);
 
     // Second slide: same column, y2 = 11.0 + 75.0 + 5.0 = 91.0
     assert_eq!(positions[1].x, 18.0);
@@ -224,6 +224,7 @@ fn test_gcode_generation_z_shift() {
         z_hop: 2.0,
         safe_z: 20.0,
         bed_max_temp: None,
+        skip_z_shift_setup: false,
     };
     let res = generate_gcode(
         &paths,
@@ -240,6 +241,28 @@ fn test_gcode_generation_z_shift() {
     assert!(gcode.contains("; --- VIRTUALNI POSUN Z (SHIFT 7.80mm) ---"));
     assert!(gcode.contains("G92 Z27.800"));
     assert!(dist > 0.0);
+
+    // Sdílená funkce musí vracet stejný shift jako generátor
+    let shift = compute_z_shift(&params, &std::collections::HashMap::new(), 34.0);
+    assert!((shift - 7.8).abs() < 1e-9);
+
+    // skip_z_shift_setup: G92 blok se negeneruje, ale tiskové výšky zůstávají posunuté
+    let machine_skip = MachineConfig {
+        skip_z_shift_setup: true,
+        ..machine.clone()
+    };
+    let (gcode_skip, _, _) = generate_gcode(
+        &paths,
+        &params,
+        &transforms,
+        &std::collections::HashMap::new(),
+        &machine_skip,
+    )
+    .unwrap();
+    assert!(!gcode_skip.contains("VIRTUALNI POSUN"));
+    assert!(!gcode_skip.contains("G92 Z27.800"));
+    // print_z = -6.8 + 7.8 = 1.0 → sjezd k povrchu na Z1.000 zůstává
+    assert!(gcode_skip.contains("Z1.000"));
 }
 
 #[test]
@@ -320,6 +343,7 @@ fn test_gcode_generation_with_overrides() {
         z_hop: 2.0,
         safe_z: 20.0,
         bed_max_temp: None,
+        skip_z_shift_setup: false,
     };
     let res = generate_gcode(&paths, &params, &transforms, &overrides, &machine);
 
@@ -331,6 +355,10 @@ fn test_gcode_generation_with_overrides() {
     // S overridem min_needed_z = -34.0 + 30.0 - 4.0 + 1.0 + 0.5 = -6.5
     // Z shift = 6.5 + 1.0 = 7.5
     assert!(gcode.contains("; --- VIRTUALNI POSUN Z (SHIFT 7.50mm) ---"));
+
+    // compute_z_shift musí zohlednit overrides stejně jako generátor
+    let shift = compute_z_shift(&params, &overrides, 34.0);
+    assert!((shift - 7.5).abs() < 1e-9);
 
     // Extruze: 2.0 (rate) * 0.014108 (cal_factor) = 0.028216 E na mm
     // Dráha je 10 mm, takže E = 10.0 * 0.028216 = 0.28216

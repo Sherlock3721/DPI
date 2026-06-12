@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from "svelte";
   import {
     RotateCw,
@@ -15,20 +17,30 @@
   import { writeFile } from "@tauri-apps/plugin-fs";
   import CustomSelect from "./CustomSelect.svelte";
   import { cameraStream, cameraAvailable } from "../stores/cameraStore";
+  import { settingsStore } from "../stores/settingsStore";
 
-  let videoElementInline: HTMLVideoElement;
-  let videoElementPopup: HTMLVideoElement;
-  let mediaStream: MediaStream | null = null;
-  let devices: MediaDeviceInfo[] = [];
-  let selectedDeviceId = localStorage.getItem("preferredCameraId") || "";
-  let isActive = false;
-  let rotation = parseInt(localStorage.getItem("preferredCameraRotation") || "0"); // 0, 90, 180, 270
-  let isMirrored = localStorage.getItem("preferredCameraMirror") === "true";
-  let errorMessage = "";
+  let videoElementInline: HTMLVideoElement = $state()!;
+  let videoElementPopup: HTMLVideoElement = $state()!;
+  let mediaStream: MediaStream | null = $state(null);
+  let devices: MediaDeviceInfo[] = $state([]);
+  let isActive = $state(false);
+  // Preference kamery žijí v settings.json — store je jediný zdroj pravdy,
+  // změny jdou výhradně přes settingsStore.persistPatch (viz handlery níže).
+  let rotation = $derived((($settingsStore.camera_rotation % 360) + 360) % 360); // 0, 90, 180, 270
+  let isMirrored = $derived($settingsStore.camera_mirror);
+  let selectedDeviceId = $state("");
+  let deviceIdInitDone = $state(false);
+  run(() => {
+    if (!deviceIdInitDone && $settingsStore.camera_device_id) {
+      selectedDeviceId = $settingsStore.camera_device_id;
+      deviceIdInitDone = true;
+    }
+  });
+  let errorMessage = $state("");
   let sessionSaveDir = "";
 
   // Nahrávání videa
-  let isRecording = false;
+  let isRecording = $state(false);
   let mediaRecorder: MediaRecorder | null = null;
   let recordedChunks: Blob[] = [];
   let recordingCanvas: HTMLCanvasElement;
@@ -36,11 +48,11 @@
   let recordingInterval: number;
 
   // Maximalizace okna
-  let isMaximized = false;
-  let popupX = 100;
-  let popupY = 100;
-  let popupW = 640;
-  let popupH = 480;
+  let isMaximized = $state(false);
+  let popupX = $state(100);
+  let popupY = $state(100);
+  let popupW = $state(640);
+  let popupH = $state(480);
   let isDragging = false;
   let isResizing = false;
   let startX = 0;
@@ -61,7 +73,7 @@
     };
   }
 
-  $: {
+  run(() => {
     if (mediaStream) {
       if (videoElementInline && videoElementInline.srcObject !== mediaStream) {
         videoElementInline.srcObject = mediaStream;
@@ -70,7 +82,7 @@
         videoElementPopup.srcObject = mediaStream;
       }
     }
-  }
+  });
 
   async function getDevices() {
     try {
@@ -108,7 +120,8 @@
               d.label.toLowerCase().includes("built-in")
           );
           selectedDeviceId = internal ? internal.deviceId : devices[0].deviceId;
-          localStorage.setItem("preferredCameraId", selectedDeviceId);
+          deviceIdInitDone = true;
+          settingsStore.persistPatch({ camera_device_id: selectedDeviceId });
         }
       }
     } catch (e) {
@@ -176,13 +189,11 @@
   }
 
   function rotateCamera() {
-    rotation = (rotation + 90) % 360;
-    localStorage.setItem("preferredCameraRotation", rotation.toString());
+    settingsStore.persistPatch({ camera_rotation: (rotation + 90) % 360 });
   }
 
   function toggleMirror() {
-    isMirrored = !isMirrored;
-    localStorage.setItem("preferredCameraMirror", isMirrored.toString());
+    settingsStore.persistPatch({ camera_mirror: !isMirrored });
   }
 
   async function takeScreenshot() {
@@ -385,7 +396,8 @@
 
   function handleSourceChange() {
     if (selectedDeviceId) {
-      localStorage.setItem("preferredCameraId", selectedDeviceId);
+      deviceIdInitDone = true;
+      settingsStore.persistPatch({ camera_device_id: selectedDeviceId });
     }
     if (isActive) {
       startCamera();
@@ -403,7 +415,7 @@
   });
 </script>
 
-<svelte:window on:mousemove={onMouseMoveWindow} on:mouseup={onMouseUpWindow} />
+<svelte:window onmousemove={onMouseMoveWindow} onmouseup={onMouseUpWindow} />
 
 <div class="flex flex-col gap-2 bg-slate-900/40 p-2.5 rounded-lg border border-slate-800/80">
   <!-- HEADLINE AND QUICK CONTROLS -->
@@ -418,7 +430,7 @@
       <div class="flex items-center gap-1 min-w-0">
         <!-- RECORD BUTTON -->
         <button
-          on:click={toggleRecording}
+          onclick={toggleRecording}
           disabled={!isActive}
           title={isRecording ? "Zastavit nahrávání a uložit" : "Začít nahrávat video"}
           class="p-1 rounded border transition-colors shrink-0 {isRecording
@@ -434,17 +446,17 @@
 
         <!-- ROTATE BUTTON -->
         <button
-          on:click={rotateCamera}
+          onclick={rotateCamera}
           disabled={!isActive}
           title="Otočit obraz o 90°"
-          class="p-1 rounded bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
+          class="p-1 rounded-sm bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
         >
           <RotateCw class="w-3.5 h-3.5" />
         </button>
 
         <!-- MIRROR BUTTON -->
         <button
-          on:click={toggleMirror}
+          onclick={toggleMirror}
           disabled={!isActive}
           title="Zrcadlově obrátit obraz"
           class="p-1 rounded border transition-colors shrink-0 {isMirrored && isActive
@@ -456,27 +468,27 @@
 
         <!-- SCREENSHOT BUTTON -->
         <button
-          on:click={takeScreenshot}
+          onclick={takeScreenshot}
           disabled={!isActive}
           title="Uložit snímek"
-          class="p-1 rounded bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
+          class="p-1 rounded-sm bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
         >
           <Camera class="w-3.5 h-3.5" />
         </button>
 
         <!-- MAXIMIZE BUTTON -->
         <button
-          on:click={toggleMaximize}
+          onclick={toggleMaximize}
           disabled={!isActive}
           title="Maximalizovat okno s videem"
-          class="p-1 rounded bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
+          class="p-1 rounded-sm bg-slate-850 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 transition-colors shrink-0"
         >
           <Maximize class="w-3.5 h-3.5" />
         </button>
 
         <!-- TOGGLE SWITCH BUTTON -->
         <button
-          on:click={toggleCamera}
+          onclick={toggleCamera}
           title={isActive ? "Vypnout kameru" : "Zapnout kameru"}
           class="text-[10px] font-bold px-2 py-1 rounded text-white flex items-center gap-1 transition-colors shrink-0 {isActive
             ? 'bg-labred hover:bg-red-600'
@@ -510,7 +522,7 @@
     <div
       class="relative w-full aspect-video bg-black overflow-hidden flex items-center justify-center"
     >
-      <!-- svelte-ignore a11y-media-has-caption -->
+      <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoElementInline}
         autoplay
@@ -539,7 +551,7 @@
 
       {#if isRecording}
         <div
-          class="absolute top-2 left-2 flex items-center gap-1 bg-black/60 px-2 py-1 rounded text-red-500 text-[10px] font-bold animate-pulse"
+          class="absolute top-2 left-2 flex items-center gap-1 bg-black/60 px-2 py-1 rounded-sm text-red-500 text-[10px] font-bold animate-pulse"
         >
           <CircleDot class="w-3 h-3" /> REC
         </div>
@@ -552,26 +564,26 @@
 {#if isMaximized}
   <div
     use:portal
-    class="fixed bg-black border border-slate-700 shadow-2xl rounded-lg overflow-hidden flex flex-col z-[999999]"
+    class="fixed bg-black border border-slate-700 shadow-2xl rounded-lg overflow-hidden flex flex-col z-999999"
     style="left: {popupX}px; top: {popupY}px; width: {popupW}px; height: {popupH}px;"
   >
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="h-8 bg-slate-800 flex items-center justify-between px-2 cursor-move shrink-0 select-none border-b border-slate-700"
-      on:mousedown={onMouseDownDrag}
+      onmousedown={onMouseDownDrag}
     >
       <span class="text-xs font-bold text-slate-300 flex items-center gap-1"
         ><Video class="w-3.5 h-3.5" /> Kamera (Náhled)</span
       >
       <button
-        on:click={() => (isMaximized = false)}
-        class="p-1 hover:bg-slate-700 rounded text-slate-300 transition-colors"
+        onclick={() => (isMaximized = false)}
+        class="p-1 hover:bg-slate-700 rounded-sm text-slate-300 transition-colors"
         ><X class="w-4 h-4" /></button
       >
     </div>
 
     <div class="relative flex-1 bg-black overflow-hidden flex items-center justify-center">
-      <!-- svelte-ignore a11y-media-has-caption -->
+      <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoElementPopup}
         autoplay
@@ -600,17 +612,17 @@
 
       {#if isRecording}
         <div
-          class="absolute top-2 left-2 flex items-center gap-1 bg-black/60 px-2 py-1 rounded text-red-500 text-[10px] font-bold animate-pulse"
+          class="absolute top-2 left-2 flex items-center gap-1 bg-black/60 px-2 py-1 rounded-sm text-red-500 text-[10px] font-bold animate-pulse"
         >
           <CircleDot class="w-3 h-3" /> REC
         </div>
       {/if}
     </div>
 
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-10"
-      on:mousedown={onMouseDownResize}
+      onmousedown={onMouseDownResize}
     >
       <svg
         class="w-full h-full text-slate-500"

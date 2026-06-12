@@ -1,5 +1,9 @@
 <script lang="ts">
-  export let settings: any;
+  interface Props {
+    settings: any;
+  }
+
+  let { settings = $bindable() }: Props = $props();
 </script>
 
 <div class="flex flex-col gap-4 text-xs h-full">

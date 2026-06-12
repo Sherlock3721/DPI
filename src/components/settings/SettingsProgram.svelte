@@ -1,13 +1,25 @@
 <script lang="ts">
   import { ShieldAlert, Moon, Sun } from "lucide-svelte";
 
-  export let expertModeActive: boolean;
-  export let snowSeason: boolean;
-  export let snowDisabled: boolean;
-  export let currentTheme: "dark" | "light";
-  export let onRequestExpertMode: () => void;
-  export let onDisableExpertMode: () => void;
-  export let onApplyTheme: (t: "dark" | "light") => void;
+  interface Props {
+    expertModeActive: boolean;
+    snowSeason: boolean;
+    snowDisabled: boolean;
+    currentTheme: "dark" | "light";
+    onRequestExpertMode: () => void;
+    onDisableExpertMode: () => void;
+    onApplyTheme: (t: "dark" | "light") => void;
+  }
+
+  let {
+    expertModeActive,
+    snowSeason,
+    snowDisabled = $bindable(),
+    currentTheme,
+    onRequestExpertMode,
+    onDisableExpertMode,
+    onApplyTheme
+  }: Props = $props();
 </script>
 
 <div class="flex flex-col gap-6">
@@ -29,11 +41,12 @@
           </div>
         </div>
         <button
-          on:click={expertModeActive ? onDisableExpertMode : onRequestExpertMode}
-          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
+          onclick={expertModeActive ? onDisableExpertMode : onRequestExpertMode}
+          aria-label="Aktivovat expertní režim"
+          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-hidden
                  {expertModeActive ? 'border-labred bg-labred/80' : 'border-slate-600 bg-slate-700'}"
         >
-          <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
+          <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-px
                        {expertModeActive ? 'translate-x-4' : 'translate-x-0.5'}"></span>
         </button>
       </div>
@@ -56,7 +69,7 @@
     <div class="grid grid-cols-2 gap-3">
       <!-- DARK -->
       <button
-        on:click={() => onApplyTheme("dark")}
+        onclick={() => onApplyTheme("dark")}
         class="relative flex flex-col gap-3 p-4 rounded-xl border-2 transition-all cursor-pointer
                {currentTheme === 'dark'
           ? 'border-labaccent bg-labaccent/10 shadow-lg shadow-labaccent/10'
@@ -72,9 +85,9 @@
             <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
           </div>
           <div class="flex-1 bg-slate-900 flex gap-1 p-1">
-            <div class="w-8 bg-slate-800 rounded"></div>
-            <div class="flex-1 bg-slate-950/50 rounded"></div>
-            <div class="w-8 bg-slate-800 rounded"></div>
+            <div class="w-8 bg-slate-800 rounded-sm"></div>
+            <div class="flex-1 bg-slate-950/50 rounded-sm"></div>
+            <div class="w-8 bg-slate-800 rounded-sm"></div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -88,7 +101,7 @@
 
       <!-- LIGHT -->
       <button
-        on:click={() => onApplyTheme("light")}
+        onclick={() => onApplyTheme("light")}
         class="relative flex flex-col gap-3 p-4 rounded-xl border-2 transition-all cursor-pointer
                {currentTheme === 'light'
           ? 'border-labaccent bg-labaccent/10 shadow-lg shadow-labaccent/10'
@@ -104,9 +117,9 @@
             <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
           </div>
           <div class="flex-1 bg-white flex gap-1 p-1">
-            <div class="w-8 bg-gray-100 rounded"></div>
-            <div class="flex-1 bg-gray-50 rounded"></div>
-            <div class="w-8 bg-gray-100 rounded"></div>
+            <div class="w-8 bg-gray-100 rounded-sm"></div>
+            <div class="flex-1 bg-gray-50 rounded-sm"></div>
+            <div class="w-8 bg-gray-100 rounded-sm"></div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -139,11 +152,12 @@
         </div>
         <button
           type="button"
-          on:click={() => (snowDisabled = !snowDisabled)}
-          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-none
+          onclick={() => (snowDisabled = !snowDisabled)}
+          aria-label="Vypnout sněžení"
+          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors focus:outline-hidden
                  {snowDisabled ? 'border-slate-600 bg-slate-700' : 'border-labaccent bg-labaccent/80'}"
         >
-          <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-[1px]
+          <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform mt-px
                        {snowDisabled ? 'translate-x-0.5' : 'translate-x-4'}"></span>
         </button>
       </div>

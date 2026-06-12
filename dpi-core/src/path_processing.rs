@@ -855,7 +855,7 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
                             if x_left < x_right {
                                 // Boustrofedon: sudé řady vlevo→vpravo, liché vpravo→vlevo
                                 let (xl, xr) =
-                                    if v_idx % 2 == 0 { (x_left, x_right) } else { (x_right, x_left) };
+                                    if v_idx.is_multiple_of(2) { (x_left, x_right) } else { (x_right, x_left) };
                                 // Z rotated_90 prostoru zpět do světa: R(+90°) pak R(+infill_angle)
                                 let r1 = rotate_pt(
                                     Point2D::new(xl, y_v),
@@ -966,8 +966,8 @@ fn nearest_neighbor_order(segs: Vec<PathSegment>) -> Vec<PathSegment> {
 
     // ── Sestavení gridu: buňka → indexy segmentů s endpointem v té buňce ─────
     let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-    for i in 0..n {
-        let pts = &segs[i].points;
+    for (i, seg) in segs.iter().enumerate().take(n) {
+        let pts = &seg.points;
         if pts.is_empty() {
             continue;
         }
@@ -1154,10 +1154,10 @@ fn two_opt_improve(segs: Vec<PathSegment>) -> Vec<PathSegment> {
                 if (d_old + d_old_j) - (d_new + d_new_j) > 1e-9 {
                     // Reverze pořadí bloku [i+1..=j] a překlop orientace reverzibilních segmentů
                     tour[i + 1..=j].reverse();
-                    for k in i + 1..=j {
-                        let (idx, rev) = tour[k];
+                    for entry in &mut tour[i + 1..=j] {
+                        let (idx, rev) = *entry;
                         if seg_can_rev(&segs, idx) {
-                            tour[k] = (idx, !rev);
+                            *entry = (idx, !rev);
                         }
                     }
                     improved = true;
@@ -1451,4 +1451,181 @@ pub fn parse_dxf(dxf_text: &str) -> SubstratePaths {
         }
     }
     SubstratePaths::new(segments)
+}
+
+// ─── Testy ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::SliceParams;
+
+    fn square_segment(size: f64) -> PathSegment {
+        PathSegment::new(vec![
+            Point2D::new(0.0, 0.0),
+            Point2D::new(size, 0.0),
+            Point2D::new(size, size),
+            Point2D::new(0.0, size),
+            Point2D::new(0.0, 0.0),
+        ])
+    }
+
+    fn default_params() -> SliceParams {
+        SliceParams {
+            slide_w: 25.0,
+            slide_h: 75.0,
+            margin: 2.0,
+            auto_scale: false,
+            infill_style: "Okraje".to_string(),
+            infill_val: 1.0,
+            infill_type: "mm".to_string(),
+            infill_angle: 0.0,
+            nozzle_diam: 0.4,
+            user_scale: 1.0,
+        }
+    }
+
+    fn bbox(paths: &SubstratePaths) -> (f64, f64, f64, f64) {
+        bbox_of_paths(&paths.segments).expect("neprázdné dráhy")
+    }
+
+    #[test]
+    fn test_is_path_closed() {
+        let closed = square_segment(10.0);
+        assert!(is_path_closed(&closed.points));
+
+        let open = vec![Point2D::new(0.0, 0.0), Point2D::new(10.0, 0.0)];
+        assert!(!is_path_closed(&open));
+    }
+
+    #[test]
+    fn test_point_in_polygon() {
+        let sq = square_segment(10.0).points;
+        assert!(point_in_polygon(Point2D::new(5.0, 5.0), &sq));
+        assert!(!point_in_polygon(Point2D::new(15.0, 5.0), &sq));
+        assert!(!point_in_polygon(Point2D::new(-1.0, -1.0), &sq));
+    }
+
+    #[test]
+    fn test_polygon_signed_area() {
+        // CCW čtverec 10×10 → +100, CW → −100
+        let ccw = square_segment(10.0).points;
+        assert!((polygon_signed_area(&ccw) - 100.0).abs() < 1e-9);
+        let cw: Vec<Point2D> = ccw.iter().rev().copied().collect();
+        assert!((polygon_signed_area(&cw) + 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_douglas_peucker_collinear() {
+        // Kolineární body se zjednoduší na koncové
+        let pts: Vec<Point2D> = (0..=10).map(|i| Point2D::new(i as f64, 0.0)).collect();
+        let simplified = douglas_peucker(&pts, 0.01);
+        assert_eq!(simplified.len(), 2);
+        assert_eq!(simplified[0].x, 0.0);
+        assert_eq!(simplified[1].x, 10.0);
+
+        // Výrazný roh musí zůstat
+        let corner = vec![
+            Point2D::new(0.0, 0.0),
+            Point2D::new(5.0, 5.0),
+            Point2D::new(10.0, 0.0),
+        ];
+        assert_eq!(douglas_peucker(&corner, 0.01).len(), 3);
+    }
+
+    #[test]
+    fn test_interpolate_along_path() {
+        // Úsečka 10 mm, rozestup 2 mm → body 0,2,4,6,8,10
+        let line = vec![Point2D::new(0.0, 0.0), Point2D::new(10.0, 0.0)];
+        let pts = interpolate_along_path(&line, 2.0);
+        assert_eq!(pts.len(), 6);
+        assert!((pts[1].x - 2.0).abs() < 1e-9);
+        assert!((pts.last().unwrap().x - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_process_empty_input() {
+        let out = process_substrate_paths(&SubstratePaths::new(vec![]), &default_params());
+        assert!(out.segments.is_empty());
+    }
+
+    #[test]
+    fn test_process_centers_on_slide() {
+        // Čtverec 10×10 bez auto-scale se vycentruje na sklíčku 25×75
+        let raw = SubstratePaths::new(vec![square_segment(10.0)]);
+        let out = process_substrate_paths(&raw, &default_params());
+        assert!(!out.segments.is_empty());
+        let (min_x, max_x, min_y, max_y) = bbox(&out);
+        assert!(((min_x + max_x) / 2.0 - 12.5).abs() < 1e-6, "střed X");
+        assert!(((min_y + max_y) / 2.0 - 37.5).abs() < 1e-6, "střed Y");
+        assert!((max_x - min_x - 10.0).abs() < 1e-6, "šířka beze změny");
+    }
+
+    #[test]
+    fn test_process_auto_scale_fits_margin() {
+        // Čtverec 100×100 s auto-scale se vejde do 25−2·2 = 21 mm
+        let raw = SubstratePaths::new(vec![square_segment(100.0)]);
+        let mut p = default_params();
+        p.auto_scale = true;
+        let out = process_substrate_paths(&raw, &p);
+        let (min_x, max_x, min_y, max_y) = bbox(&out);
+        assert!(max_x - min_x <= 21.0 + 1e-6);
+        assert!(min_x >= 2.0 - 1e-6 && max_x <= 23.0 + 1e-6);
+        assert!(min_y >= 2.0 - 1e-6 && max_y <= 73.0 + 1e-6);
+    }
+
+    #[test]
+    fn test_process_user_scale() {
+        // user_scale 0.5 zmenší objekt na polovinu
+        let raw = SubstratePaths::new(vec![square_segment(10.0)]);
+        let mut p = default_params();
+        p.user_scale = 0.5;
+        let out = process_substrate_paths(&raw, &p);
+        let (min_x, max_x, _, _) = bbox(&out);
+        assert!((max_x - min_x - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_process_fill_adds_paths() {
+        // "Okraje + Výplň" musí vygenerovat víc drah než samotné "Okraje"
+        let raw = SubstratePaths::new(vec![square_segment(20.0)]);
+        let mut edges = default_params();
+        edges.infill_style = "Okraje".to_string();
+        let out_edges = process_substrate_paths(&raw, &edges);
+
+        let mut fill = default_params();
+        fill.infill_style = "Okraje + Výplň".to_string();
+        let out_fill = process_substrate_paths(&raw, &fill);
+
+        let count_pts = |s: &SubstratePaths| -> usize {
+            s.segments.iter().map(|seg| seg.points.len()).sum()
+        };
+        assert!(count_pts(&out_fill) > count_pts(&out_edges));
+    }
+
+    #[test]
+    fn test_parse_dxf_line() {
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n10.0\n21\n5.0\n0\nENDSEC\n0\nEOF\n";
+        let out = parse_dxf(dxf);
+        assert_eq!(out.segments.len(), 1);
+        let pts = &out.segments[0].points;
+        assert_eq!(pts.len(), 2);
+        assert!((pts[0].x - 0.0).abs() < 1e-9 && (pts[1].x - 10.0).abs() < 1e-9);
+        assert!((pts[1].y - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_parse_dxf_insunits_inches() {
+        // $INSUNITS = 1 (palce) → souřadnice ×25.4
+        let dxf = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n1\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n1.0\n21\n0.0\n0\nENDSEC\n0\nEOF\n";
+        let out = parse_dxf(dxf);
+        assert_eq!(out.segments.len(), 1);
+        assert!((out.segments[0].points[1].x - 25.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_parse_dxf_garbage() {
+        assert!(parse_dxf("toto není dxf").segments.is_empty());
+        assert!(parse_dxf("").segments.is_empty());
+    }
 }

@@ -135,6 +135,8 @@ export interface AppSettings {
   // Výchozí procesní hodnoty
   default_z_offset: number;
   default_z_hop: number;
+  /** Bezpečná výška Z pro přejezdy a virtuální posun souřadnic (mm). */
+  safe_z: number;
   default_speed: number;
   default_infill: number;
   default_density: number;
@@ -151,6 +153,7 @@ export interface AppSettings {
   // Kamera
   camera_rotation: number;
   camera_mirror: boolean;
+  camera_device_id: string;
   // UI
   show_slide_grid: boolean;
   show_bed_axes: boolean;
@@ -166,8 +169,19 @@ export interface AppSettings {
     print_speed?: number; print_speed_min?: number | null; print_speed_max?: number | null;
     bed_temp?: number; bed_temp_min?: number | null; bed_temp_max?: number | null;
   }>;
+  // UI stav (dřív roztroušený v localStorage)
+  theme: string;
+  disable_snow: boolean;
+  recent_files: RecentFileEntry[];
   // Neznámá rozšíření z JSON souboru
   [key: string]: unknown;
+}
+
+/** Položka seznamu nedávno otevřených souborů. */
+export interface RecentFileEntry {
+  path: string;
+  name: string;
+  timestamp: number;
 }
 
 // --- TAURI COMMAND WRAPPERS ---
@@ -305,6 +319,9 @@ export interface MachineConfig {
   safe_z: number;
   /** Bezpečnostní strop teploty podložky (°C); null = konzervativní default v Rustu. */
   bed_max_temp: number | null;
+  /** Pokud true, negeneruje se blok virtuálního posunu Z (G1 safe_z + G92) —
+   * volající už virtuální souřadný systém nastavil sám (kalibrační tok). */
+  skip_z_shift_setup?: boolean;
 }
 
 export async function generate_gcode(
@@ -321,6 +338,38 @@ export async function generate_gcode(
     slideOverrides,
     machine,
   });
+}
+
+/** Výsledek `compute_z_calibration` — odpovídá ZCalibrationInfo v src-tauri. */
+export interface ZCalibrationInfo {
+  glass_z_theoretical: number;
+  z_shift: number;
+}
+
+/** Spočítá teoretickou Z povrchu sklíčka a virtuální posun Z stejným
+ * algoritmem jako generátor G-kódu (včetně per-slide overrides). */
+export async function compute_z_calibration(
+  params: ProcessParams,
+  slideOverrides: Record<string, SlideOverride>,
+  blockHeight: number
+): Promise<ZCalibrationInfo> {
+  return await invoke<ZCalibrationInfo>("compute_z_calibration", {
+    params,
+    slideOverrides,
+    blockHeight,
+  });
+}
+
+/** Segment G-kódu mezi pauzami — odpovídá dpi_core::GcodePauseSegment. */
+export interface GcodePauseSegment {
+  code: string;
+  /** Zpráva z pauzovacího příkazu; null u posledního segmentu (bez pauzy za ním). */
+  msg: string | null;
+}
+
+/** Rozdělí G-kód podle pauzovacích příkazů M0/M1/M601. */
+export async function split_gcode_pauses(gcode: string): Promise<GcodePauseSegment[]> {
+  return await invoke<GcodePauseSegment[]>("split_gcode_pauses", { gcode });
 }
 
 export async function start_print(
@@ -444,6 +493,13 @@ export async function submit_feedback(data: any): Promise<void> {
 
 export function subscribe_serial_rx(callback: (line: string) => void) {
   return listen<string>("serial-rx", (event: Event<string>) => {
+    callback(event.payload);
+  });
+}
+
+/** Chyby komunikace s tiskárnou (timeout potvrzení, chyba zápisu, ztráta spojení). */
+export function subscribe_print_error(callback: (message: string) => void) {
+  return listen<string>("print-error", (event: Event<string>) => {
     callback(event.payload);
   });
 }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onDestroy, onMount } from "svelte";
   import LeftPanel from "./components/LeftPanel.svelte";
   import RightPanel from "./components/RightPanel.svelte";
@@ -20,7 +22,6 @@
     generate_gcode,
     send_manual_command,
     submit_feedback,
-    get_app_settings,
     build_gcode_metadata_header,
     parse_gcode_metadata,
     parse_gcode_file_paths,
@@ -34,7 +35,7 @@
     type SlideOverride,
     type GCodeMetadata,
   } from "./lib/tauri";
-  import { projectStore, addRecentFile } from "./stores/projectStore";
+  import { projectStore, addRecentFile, type ProjectState } from "./stores/projectStore";
   import { settingsStore } from "./stores/settingsStore";
   import { toCanonicalExtrusionRate, type ExtUnit } from "./lib/extrusionUnits";
   import { selectedLiquidName } from "./stores/liquidStore";
@@ -48,7 +49,7 @@
 
   // --- STAV APLIKACE ---
   const isTauri = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
-  let showWelcomeModal = isTauri;
+  let showWelcomeModal = $state(isTauri);
 
   // Sněžení aktivní mezi 15. 11. a 30. 1.
   function isSnowSeason(): boolean {
@@ -57,23 +58,23 @@
     const d = now.getDate();
     return m === 12 || m === 1 || (m === 11 && d >= 15) || (m === 1 && d <= 30);
   }
-  let showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
+  let showSnow = $derived(isSnowSeason() && !$settingsStore.disable_snow);
 
   let ws: WebSocket | null = null;
   let wsCleanup: (() => void) | null = null;
 
   // --- OPRÁVNĚNÝ A DIAGNOSTICKÝ FORMULÁŘ ZPĚTNÉ VAZBY ---
-  let showFeedbackModal = false;
+  let showFeedbackModal = $state(false);
 
-  let selectedGlass = "";
+  let selectedGlass = $state("");
 
   // Konfigurace stroje — jediným zdrojem pravdy je settingsStore
-  $: globalBedX = $settingsStore.bed_max_x || 250.0;
-  $: globalBedY = $settingsStore.bed_max_y || 210.0;
-  $: globalStartOffsetX = $settingsStore.start_offset_x || 18.0;
-  $: globalStartOffsetY = $settingsStore.start_offset_y || 11.0;
-  $: globalMultiSpacing = $settingsStore.multi_spacing || 5.0;
-  $: globalBlockHeight = $settingsStore.block_height || 34.0;
+  let globalBedX = $derived($settingsStore.bed_max_x || 250.0);
+  let globalBedY = $derived($settingsStore.bed_max_y || 210.0);
+  let globalStartOffsetX = $derived($settingsStore.start_offset_x || 18.0);
+  let globalStartOffsetY = $derived($settingsStore.start_offset_y || 11.0);
+  let globalMultiSpacing = $derived($settingsStore.multi_spacing || 5.0);
+  let globalBlockHeight = $derived($settingsStore.block_height || 34.0);
 
   let generatedGCode = "";
   let totalDist = 0;
@@ -85,21 +86,21 @@
   let currentNozzle: Point2D | null = null;
 
   // Modály
-  let showSettingsModal = false;
-  let settingsModalRef: any;
-  let showDiagnosticsModal = false;
-  let showAboutModal = false;
-  let showShortcutsModal = false;
-  let showUpdateModal = false;
-  let updateModalAutoCheck = false;
-  let showBracketExportModal = false;
+  let showSettingsModal = $state(false);
+  let settingsModalRef: any = $state();
+  let showDiagnosticsModal = $state(false);
+  let showAboutModal = $state(false);
+  let showShortcutsModal = $state(false);
+  let showUpdateModal = $state(false);
+  let updateModalAutoCheck = $state(false);
+  let showBracketExportModal = $state(false);
 
-  let leftPanelRef: any;
+  let leftPanelRef: any = $state();
 
   // Canvas ↔ pravý panel
-  let canvasExternalSelected = -1; // posIdx → zvýrazní sklíčko v plátně
-  let rightPanelOpenIdx = -1; // sampleIdx → otevře accordion
-  let rightPanelTrigger = 0; // inkrementuje se při každém canvas kliku
+  let canvasExternalSelected = $state(-1); // posIdx → zvýrazní sklíčko v plátně
+  let rightPanelOpenIdx = $state(-1); // sampleIdx → otevře accordion
+  let rightPanelTrigger = $state(0); // inkrementuje se při každém canvas kliku
 
   function sampleToPositionIdx(sampleIdx: number): number {
     const positions = $projectStore.positions;
@@ -113,23 +114,23 @@
     return -1;
   }
 
-  $: extrusionRateUl = $projectStore.params
+  let extrusionRateUl = $derived($projectStore.params
     ? toCanonicalExtrusionRate(
         $projectStore.params.extrusion_rate,
         $projectStore.params.extrusion_unit as ExtUnit,
         $settingsStore?.calibration_factor ?? 0.323877
       )
-    : 0;
+    : 0);
 
   // Reaktivní re-parse SVG/DXF při změně jemnosti křivek
-  let _prevFineness = 1.0;
-  $: {
+  let _prevFineness = $state(1.0);
+  run(() => {
     const f = $settingsStore.path_fineness ?? 1.0;
     if (f !== _prevFineness && $projectStore.rawFileText !== null) {
       _prevFineness = f;
       projectStore.reparseRaw(f);
     }
-  }
+  });
 
   // Kontrola mezí s ohledem na průměr trysky
   function checkBoundsAgainstNozzle(paths: SubstratePaths, silent = false): boolean {
@@ -186,30 +187,34 @@
   }
 
   // Reaktivní kontrola při změně trysky — spustí se jen při zvětšení průměru
-  let _prevNozzleDiam = $projectStore.params.nozzle_diam;
-  $: {
+  let _prevNozzleDiam = $state($projectStore.params.nozzle_diam);
+  run(() => {
     const nd = $projectStore.params.nozzle_diam;
     if (nd !== _prevNozzleDiam) {
       const grew = nd > _prevNozzleDiam;
       _prevNozzleDiam = nd;
       if (grew) handleNozzleDiamGrew(nd);
     }
-  }
+  });
 
   // Spustí generování G-kódu na Rust backendu.
   // overrideStartGcode: pokud předáno, použije se místo start_gcode ze settings
   // (předej "" pokud byl start_gcode již odeslán v pre-kalibrační fázi)
-  async function triggerGCodeGeneration(overrideStartGcode?: string, silent = false) {
+  // skipZShiftSetup: true = generátor neemituje blok virtuálního posunu Z
+  // (kalibrační tok ho už nastavil sám přes G92)
+  async function triggerGCodeGeneration(overrideStartGcode?: string, silent = false, skipZShiftSetup = false) {
     gcodeError = "";
     try {
-      const setts = await get_app_settings();
+      // Settings čteme ze store (jediný zdroj pravdy v paměti) — žádné čtení
+      // z disku při každém debounced přepočtu statistik.
+      const setts = $settingsStore;
       let startGcode = overrideStartGcode !== undefined ? overrideStartGcode : (setts.start_gcode ?? "");
       const endGcode = setts.end_gcode ?? "";
       const loopStartGcode = setts.loop_start_gcode ?? "";
       const loopEndGcode = setts.loop_end_gcode ?? "";
       const calFactor = setts.calibration_factor ?? 0.0141;
       const zHop = setts.default_z_hop ?? 2.0;
-      const safeZ = (setts as any).safe_z ?? 20.0;
+      const safeZ = setts.safe_z ?? 20.0;
 
       const currentParams = $projectStore.params;
       if (!currentParams.bed_leveling) {
@@ -243,6 +248,7 @@
         z_hop: zHop,
         safe_z: safeZ,
         bed_max_temp: setts.bed_max_temp ?? null,
+        skip_z_shift_setup: skipZShiftSetup,
       });
 
       generatedGCode = res.gcode;
@@ -268,17 +274,17 @@
     }, 400);
   }
 
-  $: {
+  run(() => {
     $projectStore.params;
     $projectStore.transforms;
     $projectStore.overrides;
     $projectStore.paths;
     $projectStore.positions;
     if ($projectStore.paths.length > 0) scheduleStatsRefresh();
-  }
+  });
 
-  export async function generateGCodeSilently(overrideStartGcode?: string) {
-    return await triggerGCodeGeneration(overrideStartGcode);
+  export async function generateGCodeSilently(overrideStartGcode?: string, skipZShiftSetup = false) {
+    return await triggerGCodeGeneration(overrideStartGcode, false, skipZShiftSetup);
   }
 
   // Otevření dialogu souboru přes Tauri API
@@ -479,7 +485,6 @@
     }
     await settingsStore.load();
     projectStore.triggerLayoutUpdate();
-    showSnow = isSnowSeason() && localStorage.getItem("disable-snow") !== "1";
   }
 
   // Globální klávesové zkratky
@@ -529,28 +534,70 @@
     // Tauri host stav pouze publikuje (je zdrojem pravdy), webový klient
     // na LAN pouze přijímá (server zprávy z LAN zahazuje, viz sync.rs).
     const host = isTauri ? "127.0.0.1" : window.location.hostname;
-    ws = new WebSocket(`ws://${host}:5174`);
+
+    // Reconnect s exponenciálním backoffem — server může startovat později
+    // (obsazený port) nebo spojení může spadnout, náhled se pak sám obnoví.
+    const WS_RECONNECT_BASE_MS = 2000;
+    const WS_RECONNECT_MAX_MS = 30000;
+    let wsRetryDelay = WS_RECONNECT_BASE_MS;
+    let wsReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let wsStopped = false;
+
+    // Throttle publikace: stav se serializuje (JSON celých drah) nejvýš
+    // jednou za interval — tažení sklíčka jinak publikuje každý pohyb myši.
+    const WS_PUBLISH_INTERVAL_MS = 200;
+    let publishTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingState: ProjectState | null = null;
+
+    function publishState(state: ProjectState) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // Těžká pole (zdrojový soubor, vygenerovaný G-kód) vzdálený náhled
+      // nepotřebuje — neposíláme je při každé změně po síti.
+      const lean = { ...state, rawFileText: null, rawLoadedPaths: null, generatedGCode: "" };
+      ws.send(JSON.stringify(lean));
+    }
+
+    function connectWs() {
+      if (wsStopped) return;
+      ws = new WebSocket(`ws://${host}:5174`);
+      ws.onopen = () => {
+        wsRetryDelay = WS_RECONNECT_BASE_MS;
+        // Po (re)připojení hned publikuj aktuální stav, ať náhled nečeká na změnu
+        if (isTauri) publishState(pendingState ?? $projectStore);
+      };
+      ws.onclose = () => {
+        if (wsStopped) return;
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(connectWs, wsRetryDelay);
+        wsRetryDelay = Math.min(wsRetryDelay * 2, WS_RECONNECT_MAX_MS);
+      };
+      if (!isTauri) {
+        ws.onmessage = (event) => {
+          try {
+            projectStore.set(JSON.parse(event.data));
+          } catch (e) {
+            console.error("Failed to parse state from WS", e);
+          }
+        };
+      }
+    }
+    connectWs();
 
     let unsubWs: (() => void) | null = null;
     if (isTauri) {
       unsubWs = projectStore.subscribe((state) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          // Těžká pole (zdrojový soubor, vygenerovaný G-kód) vzdálený náhled
-          // nepotřebuje — neposíláme je při každé změně po síti.
-          const lean = { ...state, rawFileText: null, rawLoadedPaths: null, generatedGCode: "" };
-          ws.send(JSON.stringify(lean));
-        }
+        pendingState = state;
+        if (publishTimer) return;
+        publishTimer = setTimeout(() => {
+          publishTimer = undefined;
+          if (pendingState) publishState(pendingState);
+        }, WS_PUBLISH_INTERVAL_MS);
       });
-    } else {
-      ws.onmessage = (event) => {
-        try {
-          projectStore.set(JSON.parse(event.data));
-        } catch (e) {
-          console.error("Failed to parse state from WS", e);
-        }
-      };
     }
     wsCleanup = () => {
+      wsStopped = true;
+      clearTimeout(wsReconnectTimer);
+      clearTimeout(publishTimer);
       unsubWs?.();
       ws?.close();
     };
@@ -627,7 +674,7 @@
   });
 </script>
 
-<svelte:window on:keydown={handleKeyDown} />
+<svelte:window onkeydown={handleKeyDown} />
 
 <main
   class="w-screen h-screen flex flex-col bg-labdark text-slate-100 overflow-hidden font-sans p-3 gap-3"
@@ -662,7 +709,6 @@
     <div class="col-span-3 overflow-hidden h-full">
       <LeftPanel
         bind:this={leftPanelRef}
-        {isTauri}
         bind:params={$projectStore.params}
         bind:selectedGlass
         totalDist={$projectStore.totalDist}

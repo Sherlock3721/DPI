@@ -21,8 +21,9 @@ pub use geometry::{
     fit_transforms_to_layout,
 };
 pub use gcode::{
-    generate_gcode, generate_prime_preview, is_extrusion_move, is_linear_move, parse_axis_value,
-    parse_gcode_paths, parse_move_axes,
+    compute_z_shift, generate_gcode, generate_prime_preview, glass_z_theoretical,
+    is_extrusion_move, is_linear_move, parse_axis_value, parse_gcode_paths, parse_move_axes,
+    split_gcode_by_pauses, GcodePauseSegment,
 };
 pub use layout::{get_layout_positions, update_layout, LayoutUpdateResult};
 pub use metadata::{build_csv_protocol, deserialize_metadata, serialize_metadata, GCodeMetadata};

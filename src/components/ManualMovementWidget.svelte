@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { preventDefault } from 'svelte/legacy';
+
   import { onMount } from "svelte";
   import { send_manual_command, subscribe_printer_status, type PrinterStatus } from "../lib/tauri";
   import {
@@ -12,10 +14,10 @@
     Send,
   } from "lucide-svelte";
 
-  let currentStep = 10.0;
-  let customGCode = "";
+  let currentStep = $state(10.0);
+  let customGCode = $state("");
 
-  let status: PrinterStatus = {
+  let status: PrinterStatus = $state({
     is_connected: false,
     is_printing: false,
     is_paused: false,
@@ -27,10 +29,10 @@
     progress: 0,
     total_dist: 0.0,
     time_remaining: 0.0,
-  };
+  });
 
   // Ovládací prvky lze aktivovat pouze tehdy, když je tiskárna připojena a zrovna netiskne
-  $: canControl = status.is_connected && !status.is_printing;
+  let canControl = $derived(status.is_connected && !status.is_printing);
 
   function setStep(step: number) {
     if (!canControl) return;
@@ -102,7 +104,7 @@
       {#each [0.1, 1, 10, 50] as step}
         <button
           type="button"
-          on:click={() => setStep(step)}
+          onclick={() => setStep(step)}
           disabled={!canControl}
           class="py-1 rounded font-bold transition-all border {currentStep === step && canControl
             ? 'bg-orange-500 border-orange-500 text-black shadow-lg shadow-orange-500/10'
@@ -127,10 +129,10 @@
         <div></div>
         <button
           type="button"
-          on:click={() => move("Y", 1)}
+          onclick={() => move("Y", 1)}
           disabled={!canControl}
           title="Y+"
-          class="w-10 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-10 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ChevronUp class="w-4 h-4" />
         </button>
@@ -139,28 +141,28 @@
         <!-- R2: X-, Home XY, X+ -->
         <button
           type="button"
-          on:click={() => move("X", -1)}
+          onclick={() => move("X", -1)}
           disabled={!canControl}
           title="X-"
-          class="w-10 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-10 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ChevronLeft class="w-4 h-4" />
         </button>
         <button
           type="button"
-          on:click={homeXY}
+          onclick={homeXY}
           disabled={!canControl}
           title="Home X Y"
-          class="w-10 h-8 flex items-center justify-center rounded bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 text-orange-500 disabled:opacity-40 transition-colors"
+          class="w-10 h-8 flex items-center justify-center rounded-sm bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 text-orange-500 disabled:opacity-40 transition-colors"
         >
           <Home class="w-4 h-4" />
         </button>
         <button
           type="button"
-          on:click={() => move("X", 1)}
+          onclick={() => move("X", 1)}
           disabled={!canControl}
           title="X+"
-          class="w-10 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-10 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ChevronRight class="w-4 h-4" />
         </button>
@@ -169,10 +171,10 @@
         <div></div>
         <button
           type="button"
-          on:click={() => move("Y", -1)}
+          onclick={() => move("Y", -1)}
           disabled={!canControl}
           title="Y-"
-          class="w-10 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-10 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ChevronDown class="w-4 h-4" />
         </button>
@@ -189,28 +191,28 @@
       <div class="flex flex-col gap-1">
         <button
           type="button"
-          on:click={() => move("Z", 1)}
+          onclick={() => move("Z", 1)}
           disabled={!canControl}
           title="Z+"
-          class="w-12 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-12 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ArrowUp class="w-4 h-4 text-blue-400" />
         </button>
         <button
           type="button"
-          on:click={homeZ}
+          onclick={homeZ}
           disabled={!canControl}
           title="Home Z"
-          class="w-12 h-8 flex items-center justify-center rounded bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 disabled:opacity-40 transition-colors"
+          class="w-12 h-8 flex items-center justify-center rounded-sm bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 disabled:opacity-40 transition-colors"
         >
           <Home class="w-4 h-4 text-blue-400" />
         </button>
         <button
           type="button"
-          on:click={() => move("Z", -1)}
+          onclick={() => move("Z", -1)}
           disabled={!canControl}
           title="Z-"
-          class="w-12 h-8 flex items-center justify-center rounded bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
+          class="w-12 h-8 flex items-center justify-center rounded-sm bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-40 transition-colors"
         >
           <ArrowDown class="w-4 h-4 text-blue-400" />
         </button>
@@ -219,7 +221,7 @@
   </div>
 
   <!-- VLASTNÍ G-CODE -->
-  <form on:submit|preventDefault={handleSendCustom} class="flex gap-1">
+  <form onsubmit={preventDefault(handleSendCustom)} class="flex gap-1">
     <input
       type="text"
       bind:value={customGCode}
@@ -230,7 +232,7 @@
     <button
       type="submit"
       disabled={!canControl || !customGCode.trim()}
-      class="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-200 font-bold px-2 py-1 rounded flex items-center justify-center disabled:opacity-40 transition-colors"
+      class="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-200 font-bold px-2 py-1 rounded-sm flex items-center justify-center disabled:opacity-40 transition-colors"
     >
       <Send class="w-3.5 h-3.5" />
     </button>
@@ -240,28 +242,28 @@
   <div class="grid grid-cols-2 gap-2 mt-0.5">
     <button
       type="button"
-      on:click={runCalibration}
+      onclick={runCalibration}
       disabled={!canControl}
-      class="py-1.5 rounded font-bold text-center border bg-yellow-500/10 border-yellow-550/40 text-yellow-500 hover:bg-yellow-500/20 disabled:opacity-40 transition-colors"
+      class="py-1.5 rounded-sm font-bold text-center border bg-yellow-500/10 border-yellow-550/40 text-yellow-500 hover:bg-yellow-500/20 disabled:opacity-40 transition-colors"
     >
       KALIBRACE (G80)
     </button>
     <div class="grid grid-cols-2 gap-1">
       <button
         type="button"
-        on:click={() => { sendGCode("M17"); }}
+        onclick={() => { sendGCode("M17"); }}
         disabled={!canControl}
         title="Zapnout motory (M17)"
-        class="py-1.5 rounded font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+        class="py-1.5 rounded-sm font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
       >
         M17 ZAP
       </button>
       <button
         type="button"
-        on:click={() => { sendGCode("M84"); }}
+        onclick={() => { sendGCode("M84"); }}
         disabled={!canControl}
         title="Vypnout motory (M84)"
-        class="py-1.5 rounded font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+        class="py-1.5 rounded-sm font-bold text-center border transition-all bg-slate-850 border-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
       >
         M84 VYP
       </button>

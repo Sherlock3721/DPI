@@ -445,6 +445,9 @@ pub fn spawn_comms_loop(
         let mut paused_duration = Duration::ZERO;
         let mut pause_start: Option<Instant> = None;
         let mut last_temp_query = Instant::now();
+        // Počítadlo po sobě jdoucích chyb zápisu M105 — detekce vytaženého kabelu
+        // v klidovém stavu (zápisy při tisku chyby řeší vlastní větví).
+        let mut idle_write_failures = 0u32;
 
         loop {
             // 1. Zpracování příchozích příkazů z Tauri
@@ -479,7 +482,7 @@ pub fn spawn_comms_loop(
                             let is_m1 = upper == "M1" || upper.starts_with("M1 ");
                             let is_m601 = upper == "M601";
                             if is_m0 || is_m1 || is_m601 {
-                                let msg = clean.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                let msg = clean.split_once(' ').map(|x| x.1).unwrap_or("").trim();
                                 let msg = if msg.is_empty() { "Stiskněte pro pokračování" } else { msg };
                                 gcode_queue.push(format!("; APP_PAUSE:{msg}"));
                             } else {
@@ -935,7 +938,13 @@ pub fn spawn_comms_loop(
                                 .emit("printer-status-changed", status.clone())
                                 .ok();
                         } else {
-                            // Vypršel timeout 30 s — tisk přerušíme
+                            // Vypršel OK_TIMEOUT_SECS — tisk přerušíme a informujeme UI
+                            let _ = app_handle.emit(
+                                "print-error",
+                                format!(
+                                    "Tiskárna nepotvrdila příkaz do {OK_TIMEOUT_SECS} s — tisk byl přerušen."
+                                ),
+                            );
                             let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                             status.is_printing = false;
                             app_handle
@@ -943,7 +952,11 @@ pub fn spawn_comms_loop(
                                 .ok();
                         }
                     } else {
-                        // Chyba zápisu na sériový port — tisk přerušíme
+                        // Chyba zápisu na sériový port — tisk přerušíme a informujeme UI
+                        let _ = app_handle.emit(
+                            "print-error",
+                            "Chyba zápisu na sériový port — tisk byl přerušen.".to_string(),
+                        );
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_printing = false;
                         app_handle
@@ -964,9 +977,31 @@ pub fn spawn_comms_loop(
 
             // 5. Periodické dotazování na teploty v klidovém stavu (každé 2 sekundy)
             if !is_printing && last_temp_query.elapsed() > Duration::from_secs(2) {
-                let _ = serial_port.write_all(b"M105\n");
-                let _ = serial_port.flush();
+                let write_ok =
+                    serial_port.write_all(b"M105\n").is_ok() && serial_port.flush().is_ok();
                 last_temp_query = Instant::now();
+                if write_ok {
+                    idle_write_failures = 0;
+                } else {
+                    idle_write_failures += 1;
+                    // 3 selhání za sebou (~6 s) — port je mrtvý, ukončíme spojení,
+                    // aby UI neukazovalo „připojeno“ u vytaženého kabelu.
+                    if idle_write_failures >= 3 {
+                        let _ = app_handle.emit(
+                            "print-error",
+                            "Ztraceno spojení s tiskárnou (chyba zápisu na port) — odpojeno."
+                                .to_string(),
+                        );
+                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                        status.is_connected = false;
+                        status.is_printing = false;
+                        status.is_paused = false;
+                        app_handle
+                            .emit("printer-status-changed", status.clone())
+                            .ok();
+                        break;
+                    }
+                }
             }
 
             // Drobná úspora CPU

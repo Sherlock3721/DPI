@@ -137,6 +137,11 @@ pub struct MachineConfig {
     /// Maximální povolená teplota podložky (°C) — bezpečnostní strop pro M140/M190.
     #[serde(default)]
     pub bed_max_temp: Option<f64>,
+    /// Pokud true, negeneruje se blok virtuálního posunu Z (výjezd na safe_z + G92) —
+    /// volající už virtuální souřadný systém nastavil sám (kalibrační tok ve frontendu).
+    /// Samotný z_shift se na tiskové výšky aplikuje vždy.
+    #[serde(default)]
+    pub skip_z_shift_setup: bool,
 }
 
 /// Parametry pro slicování a zpracování vektorových drah do tiskového formátu.

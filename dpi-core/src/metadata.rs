@@ -59,11 +59,7 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
         .filter(|l| l.starts_with(';'))
         .map(|l| {
             let s = l.trim_start_matches(';');
-            if s.starts_with(' ') {
-                &s[1..]
-            } else {
-                s
-            }
+            s.strip_prefix(' ').unwrap_or(s)
         })
         .collect::<Vec<_>>()
         .join("\n");

@@ -8,13 +8,17 @@
   import QRCode from "qrcode";
   import iconImg from "../assets/icon.avif";
 
-  export let show: boolean = false;
+  interface Props {
+    show?: boolean;
+  }
+
+  let { show = false }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
-  let networkUrl = "";
-  let qrCodeDataUrl = "";
-  let appVersion = "";
+  let networkUrl = $state("");
+  let qrCodeDataUrl = $state("");
+  let appVersion = $state("");
 
   function handleClose() {
     dispatch("close");
@@ -57,13 +61,13 @@
 
 {#if show}
   <div
-    class="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 select-none"
+    class="fixed inset-0 bg-black/80 backdrop-blur-md z-100 flex items-center justify-center p-4 select-none"
   >
     <div
       class="bg-slate-900 border border-slate-700 shadow-2xl rounded-xl w-full max-w-2xl overflow-hidden flex flex-col relative animate-fade-in-up"
     >
       <button
-        on:click={handleClose}
+        onclick={handleClose}
         title="Přeskočit uvítací obrazovku"
         class="absolute top-3 right-3 z-10 p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
       >
@@ -72,7 +76,7 @@
 
       <!-- Hlavička s logem -->
       <div
-        class="p-8 flex flex-col items-center justify-center border-b border-slate-800 bg-gradient-to-b from-slate-800/50 to-slate-900"
+        class="p-8 flex flex-col items-center justify-center border-b border-slate-800 bg-linear-to-b from-slate-800/50 to-slate-900"
       >
         <div class="bg-labaccent/20 p-2 rounded-2xl mb-4 shadow-lg shadow-labaccent/10">
           <img src={iconImg} alt="DPI Icon" class="w-16 h-16 object-contain" />
@@ -92,7 +96,7 @@
           class="w-5/12 bg-slate-900/50 p-6 flex flex-col items-center justify-center border-r border-slate-800 gap-6"
         >
           <button
-            on:click={handleNewProject}
+            onclick={handleNewProject}
             class="w-full aspect-square max-w-[180px] bg-slate-800 hover:bg-labaccent hover:text-white text-labaccent border border-slate-700 hover:border-labaccent rounded-2xl flex flex-col items-center justify-center gap-4 transition-all duration-300 shadow-lg group"
           >
             <FolderOpen class="w-12 h-12 group-hover:scale-110 transition-transform duration-300" />
@@ -134,7 +138,7 @@
             {:else}
               {#each $recentFilesStore as file}
                 <button
-                  on:click={() => handleOpenRecent(file)}
+                  onclick={() => handleOpenRecent(file)}
                   class="w-full text-left bg-slate-900 border border-slate-800 hover:border-labaccent/50 rounded-lg p-3 group transition-all"
                 >
                   <div class="flex items-center justify-between">
@@ -169,7 +173,7 @@
           Autor: <span class="text-slate-300 font-medium">Cyril Veverka</span>
         </div>
         <button
-          on:click={openGithub}
+          onclick={openGithub}
           class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
         >
           <Code class="w-3.5 h-3.5" />

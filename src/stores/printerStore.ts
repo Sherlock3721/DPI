@@ -2,7 +2,6 @@ import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import {
   connect_to_printer,
-  auto_connect_printer,
   disconnect_from_printer,
   send_manual_command,
   start_print,
@@ -10,6 +9,7 @@ import {
   resume_print,
   stop_print,
   get_available_ports,
+  subscribe_print_error,
   type PrinterStatus,
 } from "../lib/tauri";
 
@@ -31,6 +31,7 @@ function createPrinterStore() {
   const { subscribe, set, update } = writable<PrinterStatus>(defaultStatus);
 
   let unlistenStatus: (() => void) | null = null;
+  let unlistenError: (() => void) | null = null;
 
   // Initialize event listener for backend status updates
   listen("printer-status-changed", (event) => {
@@ -39,11 +40,24 @@ function createPrinterStore() {
     .then((fn) => { unlistenStatus = fn; })
     .catch((err) => console.error("Failed to setup printer status listener:", err));
 
+  // Chyby komunikace (timeout, chyba zápisu, ztráta spojení) — zobrazíme uživateli
+  subscribe_print_error((message) => {
+    console.error("Printer error:", message);
+    alert(message);
+  })
+    .then((fn) => { unlistenError = fn; })
+    .catch((err) => console.error("Failed to setup print error listener:", err));
+
   return {
     subscribe,
     set,
     update,
-    unlisten: () => { unlistenStatus?.(); unlistenStatus = null; },
+    unlisten: () => {
+      unlistenStatus?.();
+      unlistenStatus = null;
+      unlistenError?.();
+      unlistenError = null;
+    },
     connect: async (portName: string, baudrate: number) => {
       try {
         const status = await connect_to_printer(portName, baudrate);

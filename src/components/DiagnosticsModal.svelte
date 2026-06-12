@@ -5,7 +5,11 @@
   import Terminal from "./Terminal.svelte";
   import { printerStore } from "../stores/printerStore";
 
-  export let isOpen = false;
+  interface Props {
+    isOpen?: boolean;
+  }
+
+  let { isOpen = $bindable(false) }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
@@ -145,11 +149,11 @@
 </script>
 
 {#if isOpen}
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-6"
-    on:click={handleBackdropClick}
+    class="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-100 flex items-center justify-center p-4 sm:p-6"
+    onclick={handleBackdropClick}
   >
     <div
       class="bg-slate-900 border border-slate-700/50 shadow-2xl rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
@@ -172,8 +176,8 @@
           </div>
         </div>
         <button
-          on:click={close}
-          class="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors outline-none"
+          onclick={close}
+          class="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors outline-hidden"
         >
           <X class="w-5 h-5" />
         </button>
@@ -202,7 +206,7 @@
               {#each commandGroups as group}
                 <div class="flex flex-col gap-3">
                   <div class="flex items-center gap-2 border-b border-slate-800/50 pb-2">
-                    <svelte:component this={group.icon} class="w-4 h-4 {group.color}" />
+                    <group.icon class="w-4 h-4 {group.color}" />
                     <h3 class="font-bold text-sm text-slate-300 uppercase tracking-wider">
                       {group.title}
                     </h3>
@@ -233,7 +237,7 @@
                         </div>
 
                         <button
-                          on:click={() => sendCommand(cmd.code)}
+                          onclick={() => sendCommand(cmd.code)}
                           class="shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border font-mono text-xs font-bold transition-colors shadow-lg {cmd.danger
                             ? 'bg-red-600 border-red-500 text-white hover:bg-red-500 shadow-red-900/20'
                             : 'bg-slate-950 border-slate-700 text-labaccent hover:border-labaccent hover:bg-slate-900 shadow-black/20'}"

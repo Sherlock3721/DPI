@@ -3,11 +3,15 @@
   import { Terminal as TerminalIcon, Send } from "lucide-svelte";
   import { onMount, onDestroy } from "svelte";
 
-  export let compact = false;
+  interface Props {
+    compact?: boolean;
+  }
 
-  let manualCommand = "";
-  let logs: string[] = ["Terminál připraven. Zadejte G-kód (např. G28, G0 X10 Y10)..."];
-  let consoleContainer: HTMLDivElement;
+  let { compact = false }: Props = $props();
+
+  let manualCommand = $state("");
+  let logs: string[] = $state(["Terminál připraven. Zadejte G-kód (např. G28, G0 X10 Y10)..."]);
+  let consoleContainer: HTMLDivElement = $state()!;
   let unsub: () => void;
 
   // Historie příkazů pro šipky nahoru/dolů
@@ -133,13 +137,13 @@
     <input
       type="text"
       bind:value={manualCommand}
-      on:keydown={handleKeyDown}
+      onkeydown={handleKeyDown}
       placeholder="G-code..."
       class="input-premium py-0.5 text-xs flex-1"
     />
     <button
-      on:click={handleSend}
-      class="bg-labaccent hover:bg-blue-600 text-white p-1 rounded flex items-center justify-center transition-colors duration-200"
+      onclick={handleSend}
+      class="bg-labaccent hover:bg-blue-600 text-white p-1 rounded-sm flex items-center justify-center transition-colors duration-200"
     >
       <Send class="w-3.5 h-3.5" />
     </button>

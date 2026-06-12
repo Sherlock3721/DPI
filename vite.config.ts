@@ -1,10 +1,9 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import wasm from "vite-plugin-wasm";
-import topLevelAwait from "vite-plugin-top-level-await";
 
 export default defineConfig({
-  plugins: [wasm(), topLevelAwait(), svelte()],
+  plugins: [wasm(), svelte()],
   clearScreen: false,
   server: {
     port: 5173,
@@ -15,18 +14,15 @@ export default defineConfig({
     },
   },
   build: {
+    // esnext: WebView2 i WebKitGTK podporují top-level await nativně —
+    // nahrazuje dřívější vite-plugin-top-level-await (WASM ESM integrace).
+    target: "esnext",
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-tauri": [
-            "@tauri-apps/api",
-            "@tauri-apps/plugin-dialog",
-            "@tauri-apps/plugin-fs",
-            "@tauri-apps/plugin-process",
-            "@tauri-apps/plugin-shell",
-            "@tauri-apps/plugin-updater",
-          ],
-          "vendor-icons": ["lucide-svelte"],
+        // Rolldown (Vite 8) podporuje jen funkční formu manualChunks
+        manualChunks(id) {
+          if (id.includes("node_modules/lucide-svelte")) return "vendor-icons";
+          if (id.includes("node_modules/@tauri-apps")) return "vendor-tauri";
         },
       },
     },

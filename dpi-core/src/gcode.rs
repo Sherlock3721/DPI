@@ -4,6 +4,7 @@ use crate::types::{
     LayoutPosition, MachineConfig, PathSegment, Point2D, ProcessParams, SlideOverride,
     SubstratePaths, Transform,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Společný generátor cik-cak bodů odplivového (prime) vzoru.
@@ -121,7 +122,7 @@ pub fn is_extrusion_move(line: &str) -> bool {
 pub fn parse_axis_value(line: &str, axis: char) -> Option<f64> {
     let upper = axis.to_ascii_uppercase();
     let lower = axis.to_ascii_lowercase();
-    let idx = line.find(|c: char| c == upper || c == lower)?;
+    let idx = line.find([upper, lower])?;
     let sub = &line[idx + 1..];
     let end = sub
         .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
@@ -140,6 +141,47 @@ pub fn parse_move_axes(line: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
         parse_axis_value(line, 'Y'),
         parse_axis_value(line, 'Z'),
     )
+}
+
+/// Jeden úsek G-kódu mezi pauzovacími příkazy (M0/M1/M601).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GcodePauseSegment {
+    pub code: String,
+    /// Text pauzy z M0/M1 řádku (prázdný řetězec pokud bez textu);
+    /// `None` značí poslední úsek za poslední pauzou.
+    pub msg: Option<String>,
+}
+
+/// Rozdělí G-kód na úseky oddělené pauzovacími příkazy M0/M1/M601.
+/// Komentáře (`;…`) se před detekcí odstraňují; M104/M117 apod. pauzy nejsou.
+pub fn split_gcode_by_pauses(gcode: &str) -> Vec<GcodePauseSegment> {
+    let mut segments: Vec<GcodePauseSegment> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+
+    for line in gcode.split('\n') {
+        let cmd = line.split(';').next().unwrap_or("").trim();
+        let is_pause = starts_with_cmd(cmd, "M0")
+            || starts_with_cmd(cmd, "M1")
+            || cmd.eq_ignore_ascii_case("M601");
+        if is_pause {
+            let msg = cmd[1..]
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim();
+            segments.push(GcodePauseSegment {
+                code: current.join("\n"),
+                msg: Some(msg.to_string()),
+            });
+            current.clear();
+        } else {
+            current.push(line);
+        }
+    }
+
+    segments.push(GcodePauseSegment {
+        code: current.join("\n"),
+        msg: None,
+    });
+    segments
 }
 
 /// Extrahuje tiskové dráhy z G-kód textu (G0/G1 příkazy) pro vizualizaci.
@@ -271,6 +313,52 @@ fn push_gcode_block(out: &mut String, block: &str) {
     }
 }
 
+/// Teoretická Z výška povrchu skla bez uživatelského z_offsetu (mm).
+/// Jediný zdroj pravdy pro generátor i kalibrační tok ve frontendu (LeftPanel).
+pub fn glass_z_theoretical(
+    block_height: f64,
+    nozzle_height: f64,
+    nozzle_hidden: f64,
+    slide_z: f64,
+) -> f64 {
+    -block_height + nozzle_height - nozzle_hidden + slide_z
+}
+
+/// Virtuální posun Z souřadného systému: pokud nejnižší potřebná výška trysky
+/// (minimum přes globální parametry i per-slide overrides) klesá pod fyzickou
+/// nulu tiskárny, posune se vše o |minimum| + 1 mm.
+/// Jediný zdroj pravdy pro `generate_gcode` i kalibrační G92 ve frontendu —
+/// `params.z_offset` se očekává v mm.
+pub fn compute_z_shift(
+    params: &ProcessParams,
+    slide_overrides: &HashMap<String, SlideOverride>,
+    block_height: f64,
+) -> f64 {
+    // Absolutní výška trysky včetně tloušťky skla a lokálního Z-offsetu
+    let abs_z = |z_off: f64, nz_h: f64| -> f64 {
+        glass_z_theoretical(block_height, nz_h, params.nozzle_hidden, params.slide_z) + z_off
+    };
+
+    let mut min_needed_z = abs_z(params.z_offset, params.nozzle_height);
+    for m_idx in 0..params.sample_count {
+        if let Some(ovr) = slide_overrides.get(&m_idx.to_string()) {
+            let val = abs_z(
+                ovr.z_offset.unwrap_or(params.z_offset),
+                ovr.nozzle_height.unwrap_or(params.nozzle_height),
+            );
+            if val < min_needed_z {
+                min_needed_z = val;
+            }
+        }
+    }
+
+    if min_needed_z < 0.0 {
+        min_needed_z.abs() + 1.0
+    } else {
+        0.0
+    }
+}
+
 /// Hlavní generátor G-kódu pro laboratorní 2D tisk.
 /// Vrací trojici: (obsah G-kódu, celková tisková dráha v mm, odhadovaný čas v sekundách).
 pub fn generate_gcode(
@@ -286,36 +374,8 @@ pub fn generate_gcode(
         Some(machine.calibration_factor),
     );
 
-    // Spočítáme absolutní výšku trysky (včetně tloušťky skla a lokálního Z-offsetu)
-    let get_abs_z = |z_off: f64, nz_h: f64, nz_hid: f64, sl_z: f64| -> f64 {
-        -machine.block_height + nz_h - nz_hid + sl_z + z_off
-    };
-
-    // Najdeme nejnižší potřebnou Z-výšku přes všechna sklíčka a jejich override
-    let mut min_needed_z = get_abs_z(
-        params.z_offset,
-        params.nozzle_height,
-        params.nozzle_hidden,
-        params.slide_z,
-    );
-
-    for m_idx in 0..params.sample_count {
-        if let Some(ovr) = slide_overrides.get(&m_idx.to_string()) {
-            let loc_z = ovr.z_offset.unwrap_or(params.z_offset);
-            let loc_nz_h = ovr.nozzle_height.unwrap_or(params.nozzle_height);
-            let val = get_abs_z(loc_z, loc_nz_h, params.nozzle_hidden, params.slide_z);
-            if val < min_needed_z {
-                min_needed_z = val;
-            }
-        }
-    }
-
     // Pokud tryska potřebuje jet pod fyzický limit tiskárny (Z < 0), posuneme vše o z_shift
-    let z_shift = if min_needed_z < 0.0 {
-        min_needed_z.abs() + 1.0
-    } else {
-        0.0
-    };
+    let z_shift = compute_z_shift(params, slide_overrides, machine.block_height);
 
     // Předalokujeme buffer — průměrný G-kód tiskové dráhy bývá desítky až stovky kB
     let mut result = String::with_capacity(64 * 1024);
@@ -323,7 +383,7 @@ pub fn generate_gcode(
     result.push_str("G21 ; Nastaveni jednotek na milimetry\n");
     push_gcode_block(&mut result, &machine.start_gcode);
 
-    if z_shift > 0.0 {
+    if z_shift > 0.0 && !machine.skip_z_shift_setup {
         result.push_str(&format!(
             "; --- VIRTUALNI POSUN Z (SHIFT {z_shift:.2}mm) ---\n\
              G1 Z{:.3} F1000 ; Vyjezd do bezpecne vysky\n\
@@ -634,5 +694,39 @@ mod tests {
         assert!(is_linear_move("  g1 x1"));
         assert!(!is_linear_move("G10"));
         assert!(!is_linear_move("G28"));
+    }
+
+    #[test]
+    fn test_split_gcode_by_pauses_basic() {
+        let segs =
+            split_gcode_by_pauses("G28\nM1 Vloz sklicko\nG0 X5\nM601\nG1 X10\n; konec");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].code, "G28");
+        assert_eq!(segs[0].msg.as_deref(), Some("Vloz sklicko"));
+        assert_eq!(segs[1].code, "G0 X5");
+        assert_eq!(segs[1].msg.as_deref(), Some(""));
+        assert_eq!(segs[2].code, "G1 X10\n; konec");
+        assert_eq!(segs[2].msg, None);
+    }
+
+    #[test]
+    fn test_split_gcode_by_pauses_ignores_lookalikes() {
+        // M104/M117/M01 nejsou pauzy; M0 s komentářem ano
+        let segs = split_gcode_by_pauses("G28\nM104 S200\nM117 hlaska\nM01");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].msg, None);
+
+        let segs2 = split_gcode_by_pauses("m0 ; jen komentar\nG1 X1");
+        assert_eq!(segs2.len(), 2);
+        assert_eq!(segs2[0].msg.as_deref(), Some(""));
+        assert_eq!(segs2[1].code, "G1 X1");
+    }
+
+    #[test]
+    fn test_split_gcode_by_pauses_no_pauses() {
+        let segs = split_gcode_by_pauses("G28\nG1 X5");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].code, "G28\nG1 X5");
+        assert_eq!(segs[0].msg, None);
     }
 }

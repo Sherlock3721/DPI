@@ -1,8 +1,15 @@
 <script lang="ts">
+  import { createBubbler, stopPropagation } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { createEventDispatcher } from "svelte";
   import { X, Keyboard } from "lucide-svelte";
 
-  export let show: boolean = false;
+  interface Props {
+    show?: boolean;
+  }
+
+  let { show = false }: Props = $props();
   const dispatch = createEventDispatcher();
 
   function close() {
@@ -53,15 +60,15 @@
 </script>
 
 {#if show}
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-fade-in"
-    on:click={close}
+    class="fixed inset-0 bg-black/80 backdrop-blur-xs z-200 flex items-center justify-center p-4 animate-fade-in"
+    onclick={close}
   >
     <div
       class="bg-slate-900 border border-slate-700 shadow-2xl rounded-xl w-full max-w-lg overflow-hidden flex flex-col relative animate-fade-in-up"
-      on:click|stopPropagation
+      onclick={stopPropagation(bubble('click'))}
     >
       <!-- Hlavička -->
       <div class="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-950/50">
@@ -69,7 +76,7 @@
           <Keyboard class="w-5 h-5 text-labaccent" />
           Klávesové zkratky
         </h2>
-        <button on:click={close} class="text-slate-400 hover:text-white transition-colors">
+        <button onclick={close} class="text-slate-400 hover:text-white transition-colors">
           <X class="w-5 h-5" />
         </button>
       </div>
@@ -92,7 +99,7 @@
                 <div class="flex items-center gap-1 shrink-0 ml-3">
                   {#each entry.keys as k, i}
                     <kbd
-                      class="px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-xs text-slate-200 font-mono shadow-sm whitespace-nowrap"
+                      class="px-2 py-0.5 bg-slate-800 border border-slate-600 rounded-sm text-xs text-slate-200 font-mono shadow-xs whitespace-nowrap"
                     >
                       {k}
                     </kbd>
@@ -110,8 +117,8 @@
       <!-- Patička -->
       <div class="p-4 border-t border-slate-800 bg-slate-950/50 flex justify-end">
         <button
-          on:click={close}
-          class="px-6 py-2 bg-labaccent hover:bg-blue-600 text-white rounded transition-colors text-sm font-medium"
+          onclick={close}
+          class="px-6 py-2 bg-labaccent hover:bg-blue-600 text-white rounded-sm transition-colors text-sm font-medium"
         >
           Zavřít
         </button>

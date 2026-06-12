@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, afterUpdate } from "svelte";
+  import { run } from 'svelte/legacy';
+
+  import { createEventDispatcher, onMount } from "svelte";
   import CameraWidget from "./CameraWidget.svelte";
   import ManualMovementWidget from "./ManualMovementWidget.svelte";
   import CollapsibleBox from "./CollapsibleBox.svelte";
@@ -22,13 +24,23 @@
   import { settingsStore } from "../stores/settingsStore";
   import { convertExtrusionRate, toCanonicalExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
 
-  export let sampleCount = 1;
-  export let primeActive = false;
-  export let overrides: Record<string, SlideOverride> = {};
-  // openSlideIdx + openTrigger: canvas → panel. Trigger se inkrementuje i při
-  // opakovaném výběru stejného sklíčka, aby se reactive blok vždy spustil.
-  export let openSlideIdx = -1;
-  export let openTrigger = 0;
+  interface Props {
+    sampleCount?: number;
+    primeActive?: boolean;
+    overrides?: Record<string, SlideOverride>;
+    /** openSlideIdx + openTrigger: canvas → panel. Trigger se inkrementuje i při
+     *  opakovaném výběru stejného sklíčka, aby se reactive blok vždy spustil. */
+    openSlideIdx?: number;
+    openTrigger?: number;
+  }
+
+  let {
+    sampleCount = 1,
+    primeActive = false,
+    overrides = $bindable({}),
+    openSlideIdx = -1,
+    openTrigger = 0
+  }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
@@ -54,23 +66,26 @@
     infill_style_modified: boolean;
   }
 
-  let localSlides: LocalSlideData[] = [];
-  let openSlides: boolean[] = [];
+  let localSlides: LocalSlideData[] = $state([]);
+  let openSlides: boolean[] = $state([]);
 
   // ─── Limity aktivní kapaliny pro override vstupy ──────────────────────────
-  $: liqExtMin = $liquidLimits?.extrusion_min ?? 0;
-  $: liqExtMax = $liquidLimits?.extrusion_max ?? 1000;
-  $: liqSpeedMin = $liquidLimits?.print_speed_min ?? 50;
-  $: liqSpeedMax = $liquidLimits?.print_speed_max ?? 1500;
+  let liqExtMin = $derived($liquidLimits?.extrusion_min ?? 0);
+  let liqExtMax = $derived($liquidLimits?.extrusion_max ?? 1000);
+  let liqSpeedMin = $derived($liquidLimits?.print_speed_min ?? 50);
+  let liqSpeedMax = $derived($liquidLimits?.print_speed_max ?? 1500);
 
   // Udržuje openSlides v souladu s počtem sklíček
-  $: if (openSlides.length !== sampleCount) {
-    openSlides = Array(Math.max(sampleCount, 0)).fill(false);
-  }
+  run(() => {
+    if (openSlides.length !== sampleCount) {
+      openSlides = Array(Math.max(sampleCount, 0)).fill(false);
+    }
+  });
 
-  // Otevření accordionu z plátna — afterUpdate vyhne reaktivním smyčkám
-  let _lastHandledTrigger = -1;
-  afterUpdate(() => {
+  // Otevření accordionu z plátna — _lastHandledTrigger brání reaktivní smyčce
+  // (dřív afterUpdate; reaktivní blok se stejnou strážní podmínkou je ekvivalentní)
+  let _lastHandledTrigger = $state(-1);
+  run(() => {
     if (openTrigger !== _lastHandledTrigger && openTrigger > 0) {
       _lastHandledTrigger = openTrigger;
       if (openSlideIdx >= 0 && openSlideIdx < sampleCount) {
@@ -88,7 +103,7 @@
     }
   }
 
-  let primeSlide = {
+  let primeSlide = $state({
     width: "15",
     infill_val: "1.5",
     infill_type: "mm" as "mm" | "%" | "počet",
@@ -96,14 +111,14 @@
     extrusion_unit: "nl/mm" as "µl/mm" | "nl/mm" | "kroky/mm",
     glass_type: "laboratorní" as "laboratorní" | "vzorkové",
     modified: true,
-  };
+  });
 
   function handlePrimeInput() {
     primeSlide.modified = true;
     updateParentOverrides();
   }
 
-  let isManualMovementOpen = false;
+  let isManualMovementOpen = $state(false);
   let lastCanControl = false;
 
   onMount(() => {
@@ -147,7 +162,7 @@
   }
 
   // Inicializujeme místní strukturu pro všechna sklíčka
-  $: {
+  run(() => {
     let changed = false;
     for (let i = 0; i < sampleCount; i++) {
       if (!localSlides[i]) {
@@ -183,7 +198,7 @@
     if (changed) {
       localSlides = [...localSlides];
     }
-  }
+  });
 
   // Přepočet a odeslání do parenta při změně vstupu
   function handleInput(idx: number, field: keyof LocalSlideData) {
@@ -535,8 +550,8 @@
               <!-- RESET BUTTON -->
               <button
                 type="button"
-                on:click={() => resetSlide(idx)}
-                class="w-full bg-slate-900 border border-slate-700 hover:bg-slate-800 text-[10px] text-slate-300 font-semibold py-1 rounded flex items-center justify-center gap-1 transition-colors"
+                onclick={() => resetSlide(idx)}
+                class="w-full bg-slate-900 border border-slate-700 hover:bg-slate-800 text-[10px] text-slate-300 font-semibold py-1 rounded-sm flex items-center justify-center gap-1 transition-colors"
               >
                 <RotateCcw class="w-3 h-3 text-slate-400" /> Zrušit lokální změny
               </button>
@@ -550,7 +565,7 @@
                 <input
                   type="text"
                   bind:value={localSlides[idx].name}
-                  on:input={() => handleInput(idx, "name")}
+                  oninput={() => handleInput(idx, "name")}
                   placeholder={`Substrát ${idx + 1}`}
                   class="col-span-2 input-premium py-0.5 text-[11px]"
                 />
@@ -565,7 +580,7 @@
                 <input
                   type="text"
                   bind:value={localSlides[idx].note}
-                  on:input={() => handleInput(idx, "note")}
+                  oninput={() => handleInput(idx, "note")}
                   placeholder="Poznámka..."
                   class="col-span-2 input-premium py-0.5 text-[11px]"
                 />

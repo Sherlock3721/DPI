@@ -36,6 +36,10 @@
     "camera_rotation": 180,
     "z_step": 0.0025,
     "camera_mirror": false,
+    "camera_device_id": "",
     "show_bed_axes": true,
-    "liquid_density": 1.0
+    "liquid_density": 1.0,
+    "theme": "dark",
+    "disable_snow": false,
+    "recent_files": []
 }

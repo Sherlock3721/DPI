@@ -100,8 +100,8 @@ pub struct LayoutUpdateResult {
 /// Kompletní přepočet layoutu: kapacita podložky → zpracování drah všech
 /// sklíček → pozice → přizpůsobení transformací → náhled odplivu.
 ///
-/// Nahrazuje sekvenci `calculate_slide_layout(100…)` + N× `process_paths`
-/// + `recalculate_layout` + `get_prime_preview` v `projectStore.doUpdateLayout`,
+/// Nahrazuje sekvenci `calculate_slide_layout(100…)` + N× `process_paths` +
+/// `recalculate_layout` + `get_prime_preview` v `projectStore.doUpdateLayout`,
 /// tedy jediný IPC roundtrip místo 3 + N.
 #[allow(clippy::too_many_arguments)]
 pub fn update_layout(

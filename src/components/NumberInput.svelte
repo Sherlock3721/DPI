@@ -2,13 +2,24 @@
   import { createEventDispatcher } from "svelte";
   import { Minus, Plus } from "lucide-svelte";
 
-  export let value: number | string;
-  export let step: number = 1;
-  export let min: number = -Infinity;
-  export let max: number = Infinity;
-  export let placeholder: string = "";
-  let className: string = "";
-  export { className as class };
+  interface Props {
+    value: number | string;
+    step?: number;
+    min?: number;
+    max?: number;
+    placeholder?: string;
+    class?: string;
+  }
+
+  let {
+    value = $bindable(),
+    step = 1,
+    min = -Infinity,
+    max = Infinity,
+    placeholder = "",
+    class: className = ""
+  }: Props = $props();
+  
 
   const dispatch = createEventDispatcher();
 
@@ -38,7 +49,7 @@
 </script>
 
 <div
-  class="flex items-center {className} h-full bg-slate-950 border border-slate-700/50 rounded overflow-hidden"
+  class="flex items-center {className} h-full bg-slate-950 border border-slate-700/50 rounded-sm overflow-hidden"
 >
   <input
     type="number"
@@ -46,23 +57,23 @@
     {max}
     {step}
     bind:value
-    on:input={handleInput}
+    oninput={handleInput}
     {placeholder}
-    class="flex-1 bg-transparent border-none text-left pl-2 pr-1 outline-none text-slate-200 w-full min-w-0 py-0.5 text-[11px]"
+    class="flex-1 bg-transparent border-none text-left pl-2 pr-1 outline-hidden text-slate-200 w-full min-w-0 py-0.5 text-[11px]"
     style="-moz-appearance: textfield;"
   />
 
   <div class="flex h-full border-l border-slate-700/50 shrink-0">
     <button
       type="button"
-      on:click={decrement}
+      onclick={decrement}
       class="h-full px-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border-r border-slate-700/50 flex items-center justify-center"
     >
       <Minus class="w-3 h-3" />
     </button>
     <button
       type="button"
-      on:click={increment}
+      onclick={increment}
       class="h-full px-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors flex items-center justify-center"
     >
       <Plus class="w-3 h-3" />

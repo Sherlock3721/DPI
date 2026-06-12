@@ -6,12 +6,12 @@
     "resolveJsonModule": true,
     "allowJs": true,
     "checkJs": true,
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
     "isolatedModules": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
 }

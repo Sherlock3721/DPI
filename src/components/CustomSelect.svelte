@@ -1,25 +1,36 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from "svelte";
   import { ChevronDown, ChevronUp } from "lucide-svelte";
   import type { ComponentType } from "svelte";
 
-  export let value: string | number;
-  export let options: {
+  interface Props {
+    value: string | number;
+    options?: {
     value: string | number;
     label: string;
     color?: string;
     cssStyle?: string;
     icon?: ComponentType;
-  }[] = [];
-  export let placeholder: string = "Vyberte...";
-  export let cssStyle: string = "";
+  }[];
+    placeholder?: string;
+    cssStyle?: string;
+  }
 
-  let isOpen = false;
-  let wrapperRef: HTMLDivElement;
+  let {
+    value = $bindable(),
+    options = [],
+    placeholder = "Vyberte...",
+    cssStyle = ""
+  }: Props = $props();
+
+  let isOpen = $state(false);
+  let wrapperRef: HTMLDivElement = $state()!;
 
   const dispatch = createEventDispatcher();
 
-  let dropdownEl: HTMLUListElement;
+  let dropdownEl: HTMLUListElement = $state()!;
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -63,9 +74,11 @@
     }
   }
 
-  $: if (isOpen) {
-    setTimeout(updatePosition, 0);
-  }
+  run(() => {
+    if (isOpen) {
+      setTimeout(updatePosition, 0);
+    }
+  });
 
   function toggle() {
     isOpen = !isOpen;
@@ -83,22 +96,22 @@
     }
   }
 
-  $: selectedOption = options.find((o) => o.value === value) || null;
+  let selectedOption = $derived(options.find((o) => o.value === value) || null);
 </script>
 
-<svelte:window on:click={handleClickOutside} />
+<svelte:window onclick={handleClickOutside} />
 
 <div bind:this={wrapperRef} class="relative w-full text-[11px]" style={cssStyle}>
   <button
     type="button"
-    on:click={toggle}
+    onclick={toggle}
     class="w-full flex items-center justify-between input-premium"
   >
     <div class="flex items-center gap-2 overflow-hidden">
       {#if selectedOption}
         {#if selectedOption.color}
           <div
-            class="w-4 h-4 shrink-0 rounded border border-slate-700/50 shadow-inner"
+            class="w-4 h-4 shrink-0 rounded-sm border border-slate-700/50 shadow-inner"
             style={selectedOption.cssStyle
               ? selectedOption.cssStyle
               : `background-color: ${selectedOption.color}`}
@@ -106,7 +119,7 @@
         {/if}
         {#if selectedOption.icon}
           <div class="w-4 h-4 shrink-0 flex items-center justify-center text-slate-400">
-            <svelte:component this={selectedOption.icon} class="w-4 h-4" />
+            <selectedOption.icon class="w-4 h-4" />
           </div>
         {/if}
         <span class="truncate">{selectedOption.label}</span>
@@ -125,24 +138,24 @@
     <ul
       use:portal
       bind:this={dropdownEl}
-      class="fixed z-[9999] max-h-60 overflow-y-auto bg-slate-800 border border-slate-700 rounded shadow-xl text-slate-300 divide-y divide-slate-700/50 custom-scrollbar text-[11px]"
+      class="fixed z-9999 max-h-60 overflow-y-auto bg-slate-800 border border-slate-700 rounded-sm shadow-xl text-slate-300 divide-y divide-slate-700/50 custom-scrollbar text-[11px]"
     >
       {#each options as option}
         <li>
           <button
             type="button"
-            on:click={() => selectOption(option)}
+            onclick={() => selectOption(option)}
             class="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-labaccent/20 hover:text-white transition-colors text-left"
           >
             {#if option.color}
               <div
-                class="w-4 h-4 shrink-0 rounded border border-slate-700/50 shadow-inner"
+                class="w-4 h-4 shrink-0 rounded-sm border border-slate-700/50 shadow-inner"
                 style={option.cssStyle ? option.cssStyle : `background-color: ${option.color}`}
               ></div>
             {/if}
             {#if option.icon}
               <div class="w-4 h-4 shrink-0 flex items-center justify-center text-slate-400">
-                <svelte:component this={option.icon} class="w-4 h-4" />
+                <option.icon class="w-4 h-4" />
               </div>
             {/if}
             <span class="truncate">{option.label}</span>

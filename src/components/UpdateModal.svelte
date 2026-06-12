@@ -5,7 +5,11 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { Download, RefreshCw, CheckCircle, XCircle, X } from "lucide-svelte";
 
-  export let autoCheck = false;
+  interface Props {
+    autoCheck?: boolean;
+  }
+
+  let { autoCheck = false }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
@@ -17,15 +21,15 @@
     | "ready"
     | "error";
 
-  let phase: Phase = "checking";
-  let updateInfo: Update | null = null;
-  let errorMsg = "";
-  let downloaded = 0;
-  let total = 0;
-  let currentVersion = "";
+  let phase: Phase = $state("checking");
+  let updateInfo: Update | null = $state(null);
+  let errorMsg = $state("");
+  let downloaded = $state(0);
+  let total = $state(0);
+  let currentVersion = $state("");
   getVersion().then((v) => (currentVersion = v));
 
-  $: progress = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+  let progress = $derived(total > 0 ? Math.round((downloaded / total) * 100) : 0);
 
   async function runCheck() {
     phase = "checking";
@@ -90,14 +94,14 @@
   runCheck();
 </script>
 
-<div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200] p-4">
+<div class="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-200 p-4">
   <div class="glass-panel w-full max-w-md rounded-xl border border-slate-700 shadow-2xl overflow-hidden">
     <!-- HEADER -->
     <div class="flex items-center justify-between px-5 py-3 border-b border-slate-700">
       <h3 class="text-sm font-bold text-slate-200">Aktualizace aplikace</h3>
       {#if phase !== "downloading"}
         <button
-          on:click={() => dispatch("close")}
+          onclick={() => dispatch("close")}
           class="text-slate-400 hover:text-slate-200 transition-colors"
         >
           <X class="w-4 h-4" />
@@ -163,52 +167,52 @@
     <div class="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-700">
       {#if phase === "available"}
         <button
-          on:click={() => dispatch("close")}
-          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+          onclick={() => dispatch("close")}
+          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-sm transition-colors"
         >
           Přeskočit
         </button>
         <button
-          on:click={startDownload}
-          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded transition-colors flex items-center gap-1.5"
+          onclick={startDownload}
+          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded-sm transition-colors flex items-center gap-1.5"
         >
           <Download class="w-3.5 h-3.5" /> Stáhnout a nainstalovat
         </button>
 
       {:else if phase === "ready"}
         <button
-          on:click={doRelaunch}
-          class="px-4 py-1.5 text-xs bg-labgreen hover:bg-green-600 text-white font-bold rounded transition-colors flex items-center gap-1.5"
+          onclick={doRelaunch}
+          class="px-4 py-1.5 text-xs bg-labgreen hover:bg-green-600 text-white font-bold rounded-sm transition-colors flex items-center gap-1.5"
         >
           <RefreshCw class="w-3.5 h-3.5" /> Restartovat aplikaci
         </button>
 
       {:else if phase === "error"}
         <button
-          on:click={() => dispatch("close")}
-          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+          onclick={() => dispatch("close")}
+          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-sm transition-colors"
         >
           Zavřít
         </button>
         <button
-          on:click={runCheck}
-          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded transition-colors"
+          onclick={runCheck}
+          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded-sm transition-colors"
         >
           Zkusit znovu
         </button>
 
       {:else if phase === "up-to-date"}
         <button
-          on:click={() => dispatch("close")}
-          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded transition-colors"
+          onclick={() => dispatch("close")}
+          class="px-4 py-1.5 text-xs bg-labaccent hover:bg-blue-600 text-white font-bold rounded-sm transition-colors"
         >
           Zavřít
         </button>
 
       {:else if phase !== "downloading"}
         <button
-          on:click={() => dispatch("close")}
-          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+          onclick={() => dispatch("close")}
+          class="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-sm transition-colors"
         >
           Zavřít
         </button>

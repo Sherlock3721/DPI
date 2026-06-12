@@ -4,23 +4,29 @@
   import { send_manual_command } from "../lib/tauri";
   import { ArrowUp, ArrowDown, Check, CameraOff, Info } from "lucide-svelte";
   import { cameraStream } from "../stores/cameraStore";
+  import { settingsStore } from "../stores/settingsStore";
 
-  export let glassZTheoretical: number;
+  interface Props {
+    glassZTheoretical: number;
+  }
+
+  let { glassZTheoretical }: Props = $props();
 
   const dispatch = createEventDispatcher();
-  let calibrationShift = 0.0;
-  let isMoving = false;
-  let selectedStep = 0.1;
+  let calibrationShift = $state(0.0);
+  let isMoving = $state(false);
+  let selectedStep = $state(0.1);
 
   const steps = [0.5, 0.1, 0.05, 0.01];
 
   // Camera
-  let videoElement: HTMLVideoElement;
+  let videoElement: HTMLVideoElement = $state()!;
   let ownStream: MediaStream | null = null;  // pouze pokud jsme stream vytvořili sami
-  let cameraError = false;
+  let cameraError = $state(false);
 
-  const rotation = parseInt(localStorage.getItem("preferredCameraRotation") || "0");
-  const isMirrored = localStorage.getItem("preferredCameraMirror") === "true";
+  // Preference kamery ze settings.json (sdílené s CameraWidget)
+  const rotation = ((get(settingsStore).camera_rotation % 360) + 360) % 360;
+  const isMirrored = get(settingsStore).camera_mirror;
 
   async function moveZ(direction: 1 | -1) {
     if (isMoving) return;
@@ -47,7 +53,7 @@
     }
     // Fallback: vlastní stream (CameraWidget není aktivní)
     try {
-      const savedDeviceId = localStorage.getItem("preferredCameraId") || "";
+      const savedDeviceId = get(settingsStore).camera_device_id || "";
       const constraints = { video: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true };
       ownStream = await navigator.mediaDevices.getUserMedia(constraints);
       videoElement.srcObject = ownStream;
@@ -94,7 +100,7 @@
   });
 </script>
 
-<div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+<div class="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 p-4">
   <div
     class="glass-panel w-full max-w-4xl rounded-xl flex flex-col border border-labaccent shadow-2xl overflow-hidden"
   >
@@ -128,7 +134,7 @@
         <span class="text-xs text-slate-400 shrink-0">Krok:</span>
         {#each steps as step}
           <button
-            on:click={() => (selectedStep = step)}
+            onclick={() => (selectedStep = step)}
             class="px-3 py-1 text-xs font-mono rounded transition-colors {selectedStep === step
               ? 'bg-labaccent text-white'
               : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}"
@@ -146,7 +152,7 @@
         class="relative bg-black overflow-hidden flex items-center justify-center"
         style="flex: 9;"
       >
-        <!-- svelte-ignore a11y-media-has-caption -->
+        <!-- svelte-ignore a11y_media_has_caption -->
         <video
           bind:this={videoElement}
           autoplay
@@ -170,7 +176,7 @@
         style="flex: 1;"
       >
         <button
-          on:click={() => moveZ(1)}
+          onclick={() => moveZ(1)}
           disabled={isMoving}
           title="Nahoru +{selectedStep} mm"
           class="w-full aspect-square flex items-center justify-center rounded-xl border-2 border-slate-600 bg-slate-800 hover:bg-slate-700 hover:border-labaccent text-slate-200 hover:text-labaccent transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg active:scale-95"
@@ -178,7 +184,7 @@
           <ArrowUp class="w-8 h-8" />
         </button>
         <button
-          on:click={() => moveZ(-1)}
+          onclick={() => moveZ(-1)}
           disabled={isMoving}
           title="Dolů -{selectedStep} mm"
           class="w-full aspect-square flex items-center justify-center rounded-xl border-2 border-slate-600 bg-slate-800 hover:bg-slate-700 hover:border-labaccent text-slate-200 hover:text-labaccent transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg active:scale-95"
@@ -191,13 +197,13 @@
     <!-- FOOTER -->
     <div class="flex items-center justify-end gap-3 px-5 py-3 border-t border-slate-700">
       <button
-        on:click={cancel}
-        class="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors"
+        onclick={cancel}
+        class="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800 rounded-sm transition-colors"
       >
         Zrušit
       </button>
       <button
-        on:click={confirm}
+        onclick={confirm}
         class="bg-labaccent hover:bg-opacity-80 text-white text-sm font-bold px-6 py-2 rounded-lg transition-colors flex items-center gap-2"
       >
         <Check class="w-4 h-4" /> Potvrdit a Tisknout

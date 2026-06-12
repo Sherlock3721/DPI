@@ -1,17 +1,23 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { Target } from "lucide-svelte";
 
-  export let settings: any;
-  export let glassList: { name: string; w: number; h: number; z: number }[];
-  export let onGoToLeveling: () => void;
+  interface Props {
+    settings: any;
+    glassList: { name: string; w: number; h: number; z: number }[];
+    onGoToLeveling: () => void;
+  }
 
-  let minBedMaxX = 0, minBedMaxY = 0;
-  $: {
+  let { settings = $bindable(), glassList, onGoToLeveling }: Props = $props();
+
+  let minBedMaxX = $state(0), minBedMaxY = $state(0);
+  run(() => {
     const maxW = glassList.length > 0 ? Math.max(...glassList.map((g) => g.w)) : 0;
     const maxH = glassList.length > 0 ? Math.max(...glassList.map((g) => g.h)) : 0;
     minBedMaxX = Math.ceil((settings?.start_offset_x ?? 18) + Math.max(76, maxW));
     minBedMaxY = Math.ceil((settings?.start_offset_y ?? 11) + 26 + (settings?.multi_spacing ?? 5) + maxH);
-  }
+  });
 </script>
 
 <div class="flex flex-col gap-5">
@@ -147,7 +153,7 @@
       </div>
     </div>
     <button
-      on:click={onGoToLeveling}
+      onclick={onGoToLeveling}
       class="flex items-center gap-1.5 text-[10px] text-labaccent hover:text-blue-300 transition-colors mt-0.5 w-fit"
     >
       <Target class="w-3 h-3" /> Upravit kalibrační body bed levelingu →

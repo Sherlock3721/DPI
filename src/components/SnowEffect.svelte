@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
 
-  let canvas: HTMLCanvasElement;
+  let canvas: HTMLCanvasElement = $state()!;
   let animFrameId: number;
   let resizeObserver: ResizeObserver;
 
@@ -100,11 +100,7 @@
   });
 </script>
 
-<canvas
-  bind:this={canvas}
-  class="snow-canvas"
-  aria-hidden="true"
-/>
+<canvas bind:this={canvas} class="snow-canvas" aria-hidden="true"></canvas>
 
 <style>
   .snow-canvas {

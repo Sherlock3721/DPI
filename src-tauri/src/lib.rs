@@ -1,4 +1,5 @@
 pub mod comms;
+pub mod settings;
 pub mod sync;
 
 use comms::{
@@ -26,6 +27,12 @@ struct GCodeResponse {
     total_time: f64,
 }
 
+#[derive(Serialize)]
+struct ZCalibrationInfo {
+    glass_z_theoretical: f64,
+    z_shift: f64,
+}
+
 // ─── G-kód příkazy ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -48,6 +55,32 @@ fn generate_gcode_job(
         total_dist,
         total_time,
     })
+}
+
+/// Z-kalibrační hodnoty sdílené s generátorem G-kódu (jediný zdroj pravdy
+/// v dpi_core::gcode). `params.z_offset` se očekává v mm — frontend převádí µm.
+#[tauri::command]
+fn compute_z_calibration(
+    params: dpi_core::ProcessParams,
+    slide_overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
+    block_height: f64,
+) -> ZCalibrationInfo {
+    ZCalibrationInfo {
+        glass_z_theoretical: dpi_core::glass_z_theoretical(
+            block_height,
+            params.nozzle_height,
+            params.nozzle_hidden,
+            params.slide_z,
+        ),
+        z_shift: dpi_core::compute_z_shift(&params, &slide_overrides, block_height),
+    }
+}
+
+/// Rozdělí G-kód na úseky oddělené pauzovacími příkazy M0/M1/M601.
+/// Nahrazuje `splitGcodeByPauses` v LeftPanel.svelte.
+#[tauri::command]
+fn split_gcode_pauses(gcode: String) -> Vec<dpi_core::GcodePauseSegment> {
+    dpi_core::split_gcode_by_pauses(&gcode)
 }
 
 // ─── Tiskové příkazy (COMMS) ──────────────────────────────────────────────────
@@ -159,21 +192,10 @@ fn resume_app_pause_job(manager: State<'_, Arc<PrinterManager>>) -> Result<(), S
 }
 
 /// Odvodí bezpečnou parkovací pozici po nouzovém zastavení z uložené
-/// konfigurace podložky. Při chybě čtení nastavení vrací konzervativní default.
+/// konfigurace podložky. Při chybě čtení nastavení platí vestavěné defaulty.
 fn read_park_position(app_handle: &AppHandle) -> (f64, f64) {
-    const DEFAULT: (f64, f64) = (0.0, 200.0);
-    let Ok(dir) = get_app_config_dir(app_handle) else {
-        return DEFAULT;
-    };
-    let Ok(content) = std::fs::read_to_string(dir.join("settings.json")) else {
-        return DEFAULT;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return DEFAULT;
-    };
-    let min_x = v.get("bed_min_x").and_then(|x| x.as_f64()).unwrap_or(0.0);
-    let max_y = v.get("bed_max_y").and_then(|x| x.as_f64()).unwrap_or(210.0);
-    (min_x.max(0.0), (max_y - 10.0).max(0.0))
+    let s = load_settings(app_handle);
+    (s.bed_min_x.max(0.0), (s.bed_max_y - 10.0).max(0.0))
 }
 
 #[tauri::command]
@@ -321,11 +343,6 @@ fn parse_svg_file(svg_text: String, fineness: f64) -> dpi_core::SubstratePaths {
 
 // ─── Nastavení ───────────────────────────────────────────────────────────────
 
-/// Výchozí nastavení vestavěné do binárky — viz src-tauri/default_settings.json.
-/// include_str! zaručí, že se soubor zvaliduje při kompilaci (existence)
-/// a nemíchá se JSON s Rust kódem.
-const DEFAULT_SETTINGS_JSON: &str = include_str!("../default_settings.json");
-
 /// Vrátí cestu ke konfiguračnímu adresáři aplikace (dle platformy).
 /// Pokud adresář neexistuje, vytvoří ho.
 fn get_app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -340,26 +357,43 @@ fn get_app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-#[tauri::command]
-fn get_settings(app_handle: AppHandle) -> Result<serde_json::Value, String> {
-    let config_dir = get_app_config_dir(&app_handle)?;
-    let settings_path = config_dir.join("settings.json");
+/// Atomický zápis souboru: zápis do dočasného souboru ve stejném adresáři
+/// a následný rename. Pád aplikace uprostřed zápisu tak nemůže poškodit
+/// existující soubor (settings.json, feedback_log.json).
+fn write_file_atomic(path: &std::path::Path, content: &str) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
 
-    if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        return serde_json::from_str(&content).map_err(|e| e.to_string());
-    }
-
-    // Záložní výchozí nastavení vestavěné v binárce
-    serde_json::from_str(DEFAULT_SETTINGS_JSON).map_err(|e| e.to_string())
+/// Načte typované settings: soubor z disku merge s defaulty, validace typů.
+/// Při nečitelném/nevalidním souboru vrací vestavěné defaulty (s logem),
+/// aby rozbitý settings.json neshodil celou aplikaci.
+fn load_settings(app_handle: &AppHandle) -> settings::AppSettings {
+    let path = match get_app_config_dir(app_handle) {
+        Ok(dir) => dir.join("settings.json"),
+        Err(_) => return settings::default_settings(),
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return settings::default_settings();
+    };
+    settings::parse_settings(&content).unwrap_or_else(|e| {
+        eprintln!("Nastavení: {e} — používám výchozí hodnoty.");
+        settings::default_settings()
+    })
 }
 
 #[tauri::command]
-fn save_settings(settings: serde_json::Value, app_handle: AppHandle) -> Result<(), String> {
+fn get_settings(app_handle: AppHandle) -> settings::AppSettings {
+    load_settings(&app_handle)
+}
+
+#[tauri::command]
+fn save_settings(settings: settings::AppSettings, app_handle: AppHandle) -> Result<(), String> {
     let config_dir = get_app_config_dir(&app_handle)?;
     let path = config_dir.join("settings.json");
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    write_file_atomic(&path, &content)
 }
 
 #[tauri::command]
@@ -376,7 +410,7 @@ fn save_feedback(data: serde_json::Value, app_handle: AppHandle) -> Result<(), S
 
     logs.push(data);
     let content = serde_json::to_string_pretty(&logs).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    write_file_atomic(&path, &content)
 }
 
 // ─── Vstupní bod Tauri ───────────────────────────────────────────────────────
@@ -424,6 +458,8 @@ pub fn run() {
             check_paths_overflow,
             update_layout,
             generate_gcode_job,
+            compute_z_calibration,
+            split_gcode_pauses,
             process_paths,
             parse_dxf_file,
             parse_svg_file,

@@ -312,7 +312,7 @@ fn has_stroke(node: &roxmltree::Node) -> bool {
             let part = part.trim().to_lowercase();
             // Jen "stroke:" — ne "stroke-width:", "stroke-dasharray:" apod.
             if part.starts_with("stroke:") || part.starts_with("stroke :") {
-                if let Some(val) = part.splitn(2, ':').nth(1) {
+                if let Some(val) = part.split_once(':').map(|x| x.1) {
                     let val = val.trim();
                     if !val.is_empty() {
                         return val != "none";
@@ -784,4 +784,119 @@ fn approximate_arc(
             )
         })
         .collect()
+}
+
+// ─── Testy ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Point2D;
+
+    fn bbox(paths: &SubstratePaths) -> (f64, f64, f64, f64) {
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for seg in &paths.segments {
+            for p in &seg.points {
+                min_x = min_x.min(p.x);
+                max_x = max_x.max(p.x);
+                min_y = min_y.min(p.y);
+                max_y = max_y.max(p.y);
+            }
+        }
+        (min_x, max_x, min_y, max_y)
+    }
+
+    fn is_closed(pts: &[Point2D]) -> bool {
+        let a = pts.first().unwrap();
+        let b = pts.last().unwrap();
+        (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6
+    }
+
+    #[test]
+    fn test_parse_invalid_svg() {
+        assert!(parse_svg("tohle není xml", 1.0).segments.is_empty());
+        assert!(parse_svg("<svg></svg>", 1.0).segments.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rect() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="10" height="20" fill="black"/></svg>"#;
+        let out = parse_svg(svg, 1.0);
+        assert_eq!(out.segments.len(), 1);
+        let seg = &out.segments[0];
+        assert!(is_closed(&seg.points));
+        assert_eq!(seg.is_filled, Some(true));
+        let (min_x, max_x, min_y, max_y) = bbox(&out);
+        assert!((max_x - min_x - 10.0).abs() < 1e-6);
+        assert!((max_y - min_y - 20.0).abs() < 1e-6);
+        assert!((min_x - 5.0).abs() < 1e-6 && (min_y - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_rect_fill_none() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10" fill="none" stroke="black"/></svg>"#;
+        let out = parse_svg(svg, 1.0);
+        assert_eq!(out.segments.len(), 1);
+        assert_eq!(out.segments[0].is_filled, Some(false));
+    }
+
+    #[test]
+    fn test_parse_path_closed_triangle() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L10 0 L5 8 Z"/></svg>"#;
+        let out = parse_svg(svg, 1.0);
+        assert_eq!(out.segments.len(), 1);
+        let pts = &out.segments[0].points;
+        assert!(pts.len() >= 4);
+        assert!(is_closed(pts));
+    }
+
+    #[test]
+    fn test_parse_circle_fineness() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="10" r="5"/></svg>"#;
+        let coarse = parse_svg(svg, 0.5);
+        let fine = parse_svg(svg, 2.0);
+        assert_eq!(coarse.segments.len(), 1);
+        assert_eq!(fine.segments.len(), 1);
+        // Vyšší jemnost → více bodů na oblouku
+        assert!(fine.segments[0].points.len() > coarse.segments[0].points.len());
+        // Průměr 10 v obou osách
+        let (min_x, max_x, min_y, max_y) = bbox(&fine);
+        assert!((max_x - min_x - 10.0).abs() < 0.1);
+        assert!((max_y - min_y - 10.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_parse_polyline_open_polygon_closed() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg">
+            <polyline points="0,0 10,0 10,10"/>
+            <polygon points="20,0 30,0 25,8"/>
+        </svg>"#;
+        let out = parse_svg(svg, 1.0);
+        assert_eq!(out.segments.len(), 2);
+        assert!(!is_closed(&out.segments[0].points), "polyline je otevřená");
+        assert!(is_closed(&out.segments[1].points), "polygon je uzavřený");
+        assert_eq!(out.segments[0].is_filled, Some(false));
+    }
+
+    #[test]
+    fn test_viewbox_mm_scaling() {
+        // width=50mm, viewBox 0 0 100 100 → 1 jednotka = 0.5 mm
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm" viewBox="0 0 100 100"><rect width="100" height="100"/></svg>"#;
+        let out = parse_svg(svg, 1.0);
+        let (min_x, max_x, _, _) = bbox(&out);
+        assert!((max_x - min_x - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_path_curve_fineness() {
+        // Kubická Bézier křivka — jemnost zvyšuje počet bodů
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 C 0 10, 10 10, 10 0"/></svg>"#;
+        let coarse = parse_svg(svg, 0.5);
+        let fine = parse_svg(svg, 3.0);
+        assert!(!coarse.segments.is_empty() && !fine.segments.is_empty());
+        assert!(fine.segments[0].points.len() > coarse.segments[0].points.len());
+    }
 }

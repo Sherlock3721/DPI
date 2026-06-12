@@ -3,26 +3,51 @@
   import { FileText, Save, FolderOpen, Sliders } from "lucide-svelte";
   import { projectStore, recentFilesStore } from "../stores/projectStore";
 
-  export let onResetProject: () => void;
-  export let isTauri: boolean = true;
-  export let onTriggerLoadFileInput: () => void;
-  export let onLoadRecentFile: (path: string) => void;
-  export let onSaveProject: () => void;
-  export let onSaveProjectAs: () => void;
-  export let onExportCSVProtocol: () => void;
-  export let onQuitApp: () => void;
-  export let onOpenSettings: () => void;
-  export let liquidNames: string[] = [];
-  export let activeLiquid: string | null = null;
-  export let activeLiquidColor: string | null = null;
-  export let onSelectLiquid: (name: string | null) => void = () => {};
-  export let onOpenLiquidDefinition: () => void;
-  export let onOpenDiagnostics: () => void;
-  export let onOpenFeedback: () => void;
-  export let onOpenShortcuts: () => void;
-  export let onOpenAbout: () => void;
-  export let onCheckForUpdates: () => void;
-  export let onOpenBracketExport: () => void;
+  interface Props {
+    onResetProject: () => void;
+    isTauri?: boolean;
+    onTriggerLoadFileInput: () => void;
+    onLoadRecentFile: (path: string) => void;
+    onSaveProject: () => void;
+    onSaveProjectAs: () => void;
+    onExportCSVProtocol: () => void;
+    onQuitApp: () => void;
+    onOpenSettings: () => void;
+    liquidNames?: string[];
+    activeLiquid?: string | null;
+    activeLiquidColor?: string | null;
+    onSelectLiquid?: (name: string | null) => void;
+    onOpenLiquidDefinition: () => void;
+    onOpenDiagnostics: () => void;
+    onOpenFeedback: () => void;
+    onOpenShortcuts: () => void;
+    onOpenAbout: () => void;
+    onCheckForUpdates: () => void;
+    onOpenBracketExport: () => void;
+  }
+
+  let {
+    onResetProject,
+    isTauri = true,
+    onTriggerLoadFileInput,
+    onLoadRecentFile,
+    onSaveProject,
+    onSaveProjectAs,
+    onExportCSVProtocol,
+    onQuitApp,
+    onOpenSettings,
+    liquidNames = [],
+    activeLiquid = null,
+    activeLiquidColor = null,
+    onSelectLiquid = () => {},
+    onOpenLiquidDefinition,
+    onOpenDiagnostics,
+    onOpenFeedback,
+    onOpenShortcuts,
+    onOpenAbout,
+    onCheckForUpdates,
+    onOpenBracketExport
+  }: Props = $props();
 
   const dispatch = createEventDispatcher();
 </script>
@@ -36,34 +61,34 @@
       <!-- SOUBOR -->
       {#if isTauri}
         <div class="relative group py-1">
-          <button class="hover:text-slate-100 transition-colors outline-none select-none"
+          <button class="hover:text-slate-100 transition-colors outline-hidden select-none"
             >Soubor</button
           >
           <div
             class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 transition-all duration-200"
           >
             <button
-              on:click={onResetProject}
+              onclick={onResetProject}
               class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
             >
               <span>Nový projekt</span>
             </button>
             <button
-              on:click={onTriggerLoadFileInput}
+              onclick={onTriggerLoadFileInput}
               class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
             >
               <span>Načíst vzorek</span>
               <span class="text-[9px] text-slate-500 font-mono">Ctrl+O</span>
             </button>
             <button
-              on:click={onSaveProject}
+              onclick={onSaveProject}
               class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
             >
               <span>Uložit</span>
               <span class="text-[9px] text-slate-500 font-mono">Ctrl+S</span>
             </button>
             <button
-              on:click={onSaveProjectAs}
+              onclick={onSaveProjectAs}
               class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
             >
               <span>Uložit jako...</span>
@@ -84,7 +109,7 @@
                 {:else}
                   {#each $recentFilesStore as file}
                     <button
-                      on:click={() => onLoadRecentFile(file.path)}
+                      onclick={() => onLoadRecentFile(file.path)}
                       class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex flex-col transition-all duration-150 truncate"
                     >
                       <span class="truncate w-full">{file.name}</span>
@@ -95,14 +120,14 @@
               </div>
             </div>
             <button
-              on:click={onExportCSVProtocol}
+              onclick={onExportCSVProtocol}
               class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
             >
               <span>Uložit protokol (CSV)</span>
             </button>
             <div class="border-t border-slate-800 my-1"></div>
             <button
-              on:click={onQuitApp}
+              onclick={onQuitApp}
               class="px-3 py-1.5 text-left hover:bg-labred/20 hover:text-labred text-slate-200 border-l-2 border-transparent hover:border-labred flex items-center justify-between transition-all duration-150"
             >
               <span>Ukončit</span>
@@ -115,15 +140,22 @@
       <!-- NASTAVENÍ -->
       <div class="py-1">
         <button
-          on:click={() => onOpenSettings()}
-          class="hover:text-slate-100 transition-colors outline-none select-none">Nastavení</button
+          onclick={() => onOpenSettings()}
+          class="hover:text-slate-100 transition-colors outline-hidden select-none">Nastavení</button
         >
       </div>
 
       <!-- KAPALINY -->
       <div class="relative group py-1">
-        <button class="hover:text-slate-100 transition-colors outline-none select-none">
+        <button class="hover:text-slate-100 transition-colors outline-hidden select-none flex items-center gap-1.5">
           Kapaliny
+          {#if activeLiquid && activeLiquidColor}
+            <span
+              class="w-2 h-2 rounded-full inline-block border border-slate-600"
+              style="background-color: {activeLiquidColor}"
+              title={activeLiquid}
+            ></span>
+          {/if}
         </button>
         <div
           class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-52 z-50 transition-all duration-200"
@@ -144,7 +176,7 @@
               {:else}
                 {#each liquidNames as name}
                   <button
-                    on:click={() => onSelectLiquid(name)}
+                    onclick={() => onSelectLiquid(name)}
                     class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent border-l-2 flex items-center gap-2 transition-all duration-150 text-[11px] {activeLiquid === name ? 'text-labaccent border-labaccent bg-labaccent/10 font-semibold' : 'text-slate-200 border-transparent hover:border-labaccent'}"
                   >
                     <span class="w-3 text-center text-labaccent">{activeLiquid === name ? "✓" : ""}</span>
@@ -156,7 +188,7 @@
           </div>
 
           <button
-            on:click={onOpenLiquidDefinition}
+            onclick={onOpenLiquidDefinition}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
           >
             <span>Definice kapaliny</span>
@@ -166,20 +198,20 @@
 
       <!-- NÁSTROJE -->
       <div class="relative group py-1">
-        <button class="hover:text-slate-100 transition-colors outline-none select-none"
+        <button class="hover:text-slate-100 transition-colors outline-hidden select-none"
           >Nástroje</button
         >
         <div
           class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 overflow-hidden transition-all duration-200"
         >
           <button
-            on:click={onOpenBracketExport}
+            onclick={onOpenBracketExport}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Export držáku</span>
           </button>
           <button
-            on:click={onOpenDiagnostics}
+            onclick={onOpenDiagnostics}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Diagnostika tiskárny</span>
@@ -189,33 +221,33 @@
 
       <!-- NÁPOVĚDA -->
       <div class="relative group py-1">
-        <button class="hover:text-slate-100 transition-colors outline-none select-none"
+        <button class="hover:text-slate-100 transition-colors outline-hidden select-none"
           >Nápověda</button
         >
         <div
           class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 overflow-hidden transition-all duration-200"
         >
           <button
-            on:click={() => onOpenFeedback()}
+            onclick={() => onOpenFeedback()}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Feedback</span>
           </button>
           <button
-            on:click={() => onOpenShortcuts()}
+            onclick={() => onOpenShortcuts()}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Seznam zkratek</span>
           </button>
           <button
-            on:click={() => onCheckForUpdates()}
+            onclick={() => onCheckForUpdates()}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>Vyhledat aktualizace</span>
           </button>
           <div class="border-t border-slate-800 my-1"></div>
           <button
-            on:click={() => onOpenAbout()}
+            onclick={() => onOpenAbout()}
             class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150"
           >
             <span>O programu</span>

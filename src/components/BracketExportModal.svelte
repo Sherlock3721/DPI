@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from "svelte";
   import { X, Download } from "lucide-svelte";
   import NumberInput from "./NumberInput.svelte";
@@ -9,56 +11,64 @@
   import { wasm_bracket_geometry, wasm_bracket_svg, wasm_bracket_stl } from "../lib/dpiWasm";
   import type { LayoutPosition } from "../lib/tauri";
 
-  export let isOpen = false;
+  interface Props {
+    isOpen?: boolean;
+  }
+
+  let { isOpen = false }: Props = $props();
   const dispatch = createEventDispatcher();
   function close() { dispatch("close"); }
 
   // === PARAMETRY ===
-  let leftBorderW   = 18.0;  // tloušťka levé pevné stěny (jen u prvního sloupce sestavy)
-  let bottomBorderH = 24.0;  // tloušťka spodní pevné stěny (jen u posledního řádku sestavy)
-  let extendWalls   = false; // rozšířit pevné stěny o extendAmount doleva a dolů
-  let extendAmount  = 2.0;   // velikost rozšíření stěn (mm)
-  let fixedThickX   = 5.0;   // tloušťka pravého ramene pevného L (směrem doleva)
-  let fixedThickY   = 5.0;   // tloušťka horního ramene pevného L (směrem dolů)
-  let flexThick     = 2.0;   // tloušťka ramen flexibilního L
-  let flexGap       = 1.0;   // mezera od levé a spodní stěny skla
-  let springCountX  = 2;     // počet pružin v ose X (horní zóna)
-  let springCountY  = 1;     // počet pružin v ose Y (pravá zóna)
-  let springWidth   = 10.0;  // šířka/výška jednoho pružinového prvku (mm)
-  let springBends   = 6;     // počet ohybů jedné pružiny
-  let springGapMod  = 0.2;   // modifikátor mezery řezu (mm) – kompenzace tolerancí tiskárny
-  let cornerR       = 1.5;   // poloměr rohových výsečí (mm)
-  let magnetSize    = 3.0;   // průměr (kružnice) / strana (čtverec) díry pro magnet (mm)
-  let magnetShape: "circle" | "square" = "circle"; // tvar díry pro magnet
+  let leftBorderW   = $state(18.0);  // tloušťka levé pevné stěny (jen u prvního sloupce sestavy)
+  let bottomBorderH = $state(24.0);  // tloušťka spodní pevné stěny (jen u posledního řádku sestavy)
+  let extendWalls   = $state(false); // rozšířit pevné stěny o extendAmount doleva a dolů
+  let extendAmount  = $state(2.0);   // velikost rozšíření stěn (mm)
+  let fixedThickX   = $state(5.0);   // tloušťka pravého ramene pevného L (směrem doleva)
+  let fixedThickY   = $state(5.0);   // tloušťka horního ramene pevného L (směrem dolů)
+  let flexThick     = $state(2.0);   // tloušťka ramen flexibilního L
+  let flexGap       = $state(1.0);   // mezera od levé a spodní stěny skla
+  let springCountX  = $state(2);     // počet pružin v ose X (horní zóna)
+  let springCountY  = $state(1);     // počet pružin v ose Y (pravá zóna)
+  let springWidth   = $state(10.0);  // šířka/výška jednoho pružinového prvku (mm)
+  let springBends   = $state(6);     // počet ohybů jedné pružiny
+  let springGapMod  = $state(0.2);   // modifikátor mezery řezu (mm) – kompenzace tolerancí tiskárny
+  let cornerR       = $state(1.5);   // poloměr rohových výsečí (mm)
+  let magnetSize    = $state(3.0);   // průměr (kružnice) / strana (čtverec) díry pro magnet (mm)
+  let magnetShape: "circle" | "square" = $state("circle"); // tvar díry pro magnet
 
   // === 3D TISK (STL) ===
   // Tloušťka držáku (výška v ose Z) — nikdy nesmí přesáhnout tloušťku skla
   // (jinak by deska vyčnívala nad/pod sklo a bránila jeho usazení), proto je
   // vždy ořízlá na glassThickness — viz reaktivní clamp níže.
-  let bracketThickness = 1.0;
+  let bracketThickness = $state(1.0);
   // Dodatečná výška ROZŠÍŘENÉ ČÁSTI pevných stěn (viz extendWalls/extendAmount)
   // nad rámec bracketThickness — tato část tak vyčnívá nad desku a tvoří
   // "zarážku" držící sklo na místě. Má smysl jen když je rozšíření aktivní.
-  let wallExtraHeight  = 5.0;
+  let wallExtraHeight  = $state(5.0);
 
   // === SUBSTRÁTY ===
-  $: substrateOptions = Object.entries($settingsStore.sklo_dims || {}).map(([name, dims]: [string, any]) => ({
+  let substrateOptions = $derived(Object.entries($settingsStore.sklo_dims || {}).map(([name, dims]: [string, any]) => ({
     value: name,
     label: `${name}  (${Number(dims[0]).toFixed(1)} × ${Number(dims[1]).toFixed(1)} mm)`,
     w: Number(dims[0]),
     h: Number(dims[1]),
     thickness: Number(dims[2]),
-  }));
-  let selectedSubstrateId: string = "";
-  $: if (!selectedSubstrateId && substrateOptions.length > 0) selectedSubstrateId = substrateOptions[0].value;
-  $: selectedSubstrate = substrateOptions.find(s => s.value === selectedSubstrateId) ?? null;
-  $: glassW = selectedSubstrate?.w ?? 25.0;
-  $: glassH = selectedSubstrate?.h ?? 75.0;
-  $: glassThickness = selectedSubstrate?.thickness ?? 1.0;
+  })));
+  let selectedSubstrateId: string = $state("");
+  run(() => {
+    if (!selectedSubstrateId && substrateOptions.length > 0) selectedSubstrateId = substrateOptions[0].value;
+  });
+  let selectedSubstrate = $derived(substrateOptions.find(s => s.value === selectedSubstrateId) ?? null);
+  let glassW = $derived(selectedSubstrate?.w ?? 25.0);
+  let glassH = $derived(selectedSubstrate?.h ?? 75.0);
+  let glassThickness = $derived(selectedSubstrate?.thickness ?? 1.0);
 
   // Tloušťka držáku nesmí nikdy přesáhnout tloušťku skla — jinak by deska
   // vyčnívala nad jeho povrch a bránila jeho usazení do sestavy.
-  $: bracketThickness = Math.min(Math.max(0.2, bracketThickness), glassThickness);
+  run(() => {
+    bracketThickness = Math.min(Math.max(0.2, bracketThickness), glassThickness);
+  });
 
   // === MULTIPLIKACE ===
   // Skutečné rozložení kopií na podložce počítá Rust (compute_bracket_geometry,
@@ -68,25 +78,27 @@
   //   bracketParams → geometry → maxMultiply → multiplyCount → bracketParams.
   // Algoritmus zrcadlí `grid_max_capacity` v bracket.rs (závisí jen na glass_w/h,
   // spacing a bed — nikoli na multiply_count).
-  let multiplyCount = 1;
-  let maxMultiply   = 1;
-  $: spacing = $settingsStore.multi_spacing || 5.0;
-  $: bedConfig = {
+  let multiplyCount = $state(1);
+  let maxMultiply   = $state(1);
+  let spacing = $derived($settingsStore.multi_spacing || 5.0);
+  let bedConfig = $derived({
     min_x:    $settingsStore.bed_min_x ?? 0.0,
     max_x:    $settingsStore.bed_max_x || 250.0,
     max_y:    $settingsStore.bed_max_y || 250.0,
     offset_x: $settingsStore.start_offset_x || 18.0,
     offset_y: $settingsStore.start_offset_y || 18.0,
-  };
-  $: {
+  });
+  run(() => {
     const colTop     = bedConfig.offset_y;
     const rowsPerCol = Math.max(0, Math.floor((bedConfig.max_y - colTop + spacing) / (glassH + spacing)));
     let currX = bedConfig.min_x + bedConfig.offset_x;
     let total = 0;
     while (currX + glassW <= bedConfig.max_x) { total += rowsPerCol; currX += glassW + spacing; }
     maxMultiply = Math.max(1, total);
-  }
-  $: multiplyCount = Math.min(Math.max(1, multiplyCount), maxMultiply);
+  });
+  run(() => {
+    multiplyCount = Math.min(Math.max(1, multiplyCount), maxMultiply);
+  });
 
   // === GEOMETRIE (jediný zdroj pravdy — Rust, viz dpi-core/src/bracket.rs) ===
   // Veškerá geometrie sestavy (cesty, obdélníky, středy děr, layout kopií…) se
@@ -111,7 +123,7 @@
     max_multiply: number;
   }
 
-  $: bracketParams = {
+  let bracketParams = $derived({
     glass_w: glassW, glass_h: glassH, glass_label: selectedSubstrate?.label ?? "—",
     left_border_w: leftBorderW, bottom_border_h: bottomBorderH,
     extend_walls: extendWalls, extend_amount: extendAmount,
@@ -122,15 +134,15 @@
     corner_r: cornerR, magnet_size: magnetSize, magnet_shape: magnetShape,
     multiply_count: multiplyCount, spacing,
     bed: bedConfig,
-  };
+  });
 
-  let geometry: BracketGeometry | null = null;
-  let geometryError: string | null = null;
+  let geometry: BracketGeometry | null = $state(null);
+  let geometryError: string | null = $state(null);
 
   // Výpočet geometrie proběhne synchronně — WASM je rychlý (<5 ms) a geometrie
   // musí být vždy aktuální: slouží jako validační základ pro max_multiply/clampy
   // i pro export. Debounce slouží jen pro vykreslení SVG náhledu (viz renderedPreview).
-  $: {
+  run(() => {
     try {
       geometry      = JSON.parse(wasm_bracket_geometry(JSON.stringify(bracketParams))) as BracketGeometry;
       geometryError = null;
@@ -138,7 +150,7 @@
       geometry      = null;
       geometryError = String(e);
     }
-  }
+  });
 
   // === EXPORT SVG ===
   async function handleExportSVG() {
@@ -280,16 +292,21 @@
   // zpožděním po poslední změně — vstupní pole i export zůstávají navázané
   // na živé (nedebouncované) hodnoty.
   type PreviewModel = BracketGeometry & { magnetShape: "circle" | "square"; cornerR: number; glassW: number; glassH: number };
-  $: previewModel = geometry ? { ...geometry, magnetShape, cornerR, glassW, glassH } as PreviewModel : null;
-  let renderedPreview: PreviewModel | undefined;
-  let previewDebounce: ReturnType<typeof setTimeout> | undefined;
+  // $derived.by: inline výraz by TS zúžil geometry na null z inicializace $state(null)
+  let previewModel = $derived.by(() =>
+    geometry ? ({ ...geometry, magnetShape, cornerR, glassW, glassH } as PreviewModel) : null
+  );
+  let renderedPreview: PreviewModel | undefined = $state();
+  let previewDebounce: ReturnType<typeof setTimeout> | undefined = $state();
 
   // Reset stale preview při zavření/znovuotevření modalu — bez toho by se
   // zobrazila stará geometrie, dokud nepřijde nový model.
-  $: if (!isOpen) {
-    renderedPreview = undefined;
-    clearTimeout(previewDebounce);
-  }
+  run(() => {
+    if (!isOpen) {
+      renderedPreview = undefined;
+      clearTimeout(previewDebounce);
+    }
+  });
 
   // Pozn.: záměrně obyčejná funkce volaná z reaktivního výrazu (ne `$: { ... }` blok) —
   // ten by četl i zapisoval `renderedPreview`, čímž by se sám stal na sobě závislým
@@ -303,8 +320,10 @@
     clearTimeout(previewDebounce);
     previewDebounce = setTimeout(() => { renderedPreview = model; }, 120);
   }
-  $: schedulePreviewUpdate(previewModel);
-  $: rp = renderedPreview ?? previewModel;
+  run(() => {
+    schedulePreviewUpdate(previewModel);
+  });
+  let rp = $derived(renderedPreview ?? previewModel);
 </script>
 
 {#if isOpen}
@@ -320,7 +339,7 @@
           {/if}
         </p>
       </div>
-      <button on:click={close} class="p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-slate-100">
+      <button onclick={close} class="p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-slate-100">
         <X class="w-4 h-4" />
       </button>
     </div>
@@ -428,7 +447,7 @@
       <div class="w-[272px] shrink-0 flex flex-col border-l border-slate-800 overflow-y-auto">
         <div class="flex flex-col gap-4 p-4">
 
-          <section class="rounded-lg p-2.5 border-l-2 border-slate-600 bg-[#0b0f19]/60">
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-600 bg-labdark/60">
             <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Substrát</div>
             {#if substrateOptions.length > 0}
               <CustomSelect bind:value={selectedSubstrateId} options={substrateOptions} placeholder="Vyberte substrát..."/>
@@ -450,7 +469,7 @@
             </div>
           </section>
 
-          <section class="rounded-lg p-2.5 border-l-2 border-[#3b82f6] bg-[#3b82f6]/20">
+          <section class="rounded-lg p-2.5 border-l-2 border-labaccent bg-labaccent/20">
             <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Pevné stěny</div>
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between gap-2">
@@ -464,7 +483,7 @@
               <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/60">
                 <label class="flex items-center gap-1.5 text-[11px] text-slate-300 flex-1 cursor-pointer">
                   <input type="checkbox" bind:checked={extendWalls}
-                    class="w-3.5 h-3.5 rounded accent-[#3b82f6] cursor-pointer"/>
+                    class="w-3.5 h-3.5 rounded-sm accent-labaccent cursor-pointer"/>
                   Rozšířit doleva a dolů (mm)
                 </label>
                 <div class="w-20 transition-opacity {extendWalls ? '' : 'opacity-40'}">
@@ -500,10 +519,10 @@
               <div class="pt-1.5 mt-0.5 border-t border-slate-800/60 flex flex-col gap-1.5">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-[11px] text-slate-300 flex-1">Tvar díry pro magnet</span>
-                  <div class="flex rounded overflow-hidden border border-slate-700/50 shrink-0">
-                    <button type="button" on:click={() => magnetShape = "circle"}
+                  <div class="flex rounded-sm overflow-hidden border border-slate-700/50 shrink-0">
+                    <button type="button" onclick={() => magnetShape = "circle"}
                       class="px-2 py-1 text-[10px] transition-colors {magnetShape === 'circle' ? 'bg-[#f59e0b] text-slate-900 font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}">Kruh</button>
-                    <button type="button" on:click={() => magnetShape = "square"}
+                    <button type="button" onclick={() => magnetShape = "square"}
                       class="px-2 py-1 text-[10px] transition-colors border-l border-slate-700/50 {magnetShape === 'square' ? 'bg-[#f59e0b] text-slate-900 font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}">Čtverec</button>
                   </div>
                 </div>
@@ -535,7 +554,7 @@
             </div>
           </section>
 
-          <section class="rounded-lg p-2.5 border-l-2 border-slate-500 bg-[#0b0f19]/60">
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-500 bg-labdark/60">
             <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Rohové výseče</div>
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between gap-2">
@@ -571,7 +590,7 @@
             </div>
           </section>
 
-          <section class="rounded-lg p-2.5 border-l-2 border-slate-400 bg-[#0b0f19]/60">
+          <section class="rounded-lg p-2.5 border-l-2 border-slate-400 bg-labdark/60">
             <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">3D tisk (STL)</div>
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between gap-2">
@@ -588,27 +607,27 @@
             <div class="text-[9px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1 mb-2">Legenda</div>
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#3b82f6] shrink-0"></div>
+                <div class="w-3 h-3 rounded-xs bg-labaccent shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Pevné stěny</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#f59e0b] shrink-0"></div>
+                <div class="w-3 h-3 rounded-xs bg-[#f59e0b] shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Pevný L roh</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#a855f7] shrink-0"></div>
+                <div class="w-3 h-3 rounded-xs bg-[#a855f7] shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Pružiny</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#22c55e] shrink-0"></div>
+                <div class="w-3 h-3 rounded-xs bg-[#22c55e] shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Flexibilní L roh</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-sm bg-[#0b0f19] border border-slate-700 shrink-0"></div>
+                <div class="w-3 h-3 rounded-xs bg-labdark border border-slate-700 shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Díra (otevřeno)</span>
               </div>
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-full bg-[#0b0f19] border border-slate-600 shrink-0"></div>
+                <div class="w-3 h-3 rounded-full bg-labdark border border-slate-600 shrink-0"></div>
                 <span class="text-[10px] text-slate-400">Rohová výseč (díra)</span>
               </div>
             </div>
@@ -627,15 +646,15 @@
         {/if}
       </div>
       <div class="flex items-center gap-2">
-        <button on:click={handleExportSVG} disabled={!geometry}
+        <button onclick={handleExportSVG} disabled={!geometry}
           class="flex items-center gap-1.5 bg-labaccent hover:bg-blue-600 text-white text-xs font-medium px-4 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
           <Download class="w-3.5 h-3.5" /> Export SVG
         </button>
-        <button on:click={handleExportSTL} disabled={!geometry}
+        <button onclick={handleExportSTL} disabled={!geometry}
           class="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 border border-slate-600 text-white text-xs font-medium px-4 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
           <Download class="w-3.5 h-3.5" /> Export STL
         </button>
-        <button on:click={close}
+        <button onclick={close}
           class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs px-4 py-1.5 rounded-md transition-colors">
           Zavřít
         </button>

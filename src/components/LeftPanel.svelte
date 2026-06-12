@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, createEventDispatcher } from "svelte";
   import {
     get_available_ports,
@@ -14,16 +16,19 @@
     save_app_settings,
     send_manual_command,
     send_manual_blocking,
-    resume_app_pause,
+    split_gcode_pauses,
+    compute_z_calibration,
     type PrinterStatus,
     type ProcessParams,
     type AppSettings,
     type LayoutPosition,
   } from "../lib/tauri";
+  import { projectStore } from "../stores/projectStore";
   import { listen } from "@tauri-apps/api/event";
   import CustomSelect from "./CustomSelect.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
+  import PrintPauseModal from "./PrintPauseModal.svelte";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
   import { settingsStore } from "../stores/settingsStore";
@@ -48,9 +53,54 @@
 
   const dispatch = createEventDispatcher();
 
-  // --- GLOBÁLNÍ PARAMETRY TISKU (Matching Python schema) ---
-  export const isTauri: boolean = true;
-  export let params: ProcessParams = {
+  // --- PARAMETRY PŘIPOJENÍ ---
+  let ports: string[] = $state([]);
+  let selectedPort = $state("");
+  let baudrate = $state(115200);
+  let status: PrinterStatus = $state({
+    is_connected: false,
+    is_printing: false,
+    is_paused: false,
+    current_x: 0.0,
+    current_y: 0.0,
+    current_z: 0.0,
+    temp_extruder: 0.0,
+    temp_bed: 0.0,
+    progress: 0,
+    total_dist: 0.0,
+    time_remaining: 0.0,
+  });
+
+  // Presety načítané z nastavení
+  let sklo_dims: Record<string, number[]> = {
+    "Laboratorní Sklo (76 x 26 x 1 mm)": [76.0, 26.0, 1.0],
+    "FTO (76 x 50 x 1 mm)": [50.0, 76.0, 1.0],
+  };
+  let nozzle_defs: Record<string, [number, number, number, string]> = {
+    Červená: [31.1, 0.3, 4.0, "#ef4444"],
+    Modrá: [31.0, 0.41, 4.0, "#3b82f6"],
+  };
+  let glassPresets: string[] = $state([
+    "Laboratorní Sklo (76 x 26 x 1 mm)",
+    "FTO (76 x 50 x 1 mm)",
+    "Vlastní",
+  ]);
+  let nozzlePresets: string[] = $state(["Červená", "Modrá", "Vlastní"]);
+
+  interface Props {
+    params?: ProcessParams;
+    totalDist?: number;
+    totalTime?: number;
+    generatedGCode?: string;
+    generateGCodeSilently?: 
+    | ((overrideStartGcode?: string, skipZShiftSetup?: boolean) => Promise<{ gcode: string; dist: number; time: number }>)
+    | undefined;
+    positions?: LayoutPosition[];
+    selectedGlass?: any;
+  }
+
+  let {
+    params = $bindable({
     sample_count: 1,
     prime_active: true,
     slide_w: 25.0,
@@ -73,159 +123,52 @@
     print_speed: 600.0,
     bed_leveling: true,
     nozzle_type: "Modrá",
-  };
+  }),
+    totalDist = 0,
+    totalTime = 0,
+    generatedGCode = "",
+    generateGCodeSilently = undefined,
+    positions = [],
+    selectedGlass = $bindable(glassPresets[0])
+  }: Props = $props();
+  // svelte-ignore state_referenced_locally -- záměrně jen výchozí volba trysky
+  let selectedNozzle = $state(nozzlePresets[1]);
 
-  export let totalDist = 0;
-  export let totalTime: number = 0;
-  export let generatedGCode: string = "";
-  export let generateGCodeSilently:
-    | ((overrideStartGcode?: string) => Promise<{ gcode: string; dist: number; time: number }>)
-    | undefined = undefined;
-  export let positions: LayoutPosition[] = [];
-
-  // --- PARAMETRY PŘIPOJENÍ ---
-  let ports: string[] = [];
-  let selectedPort = "";
-  let baudrate = 115200;
-  let status: PrinterStatus = {
-    is_connected: false,
-    is_printing: false,
-    is_paused: false,
-    current_x: 0.0,
-    current_y: 0.0,
-    current_z: 0.0,
-    temp_extruder: 0.0,
-    temp_bed: 0.0,
-    progress: 0,
-    total_dist: 0.0,
-    time_remaining: 0.0,
-  };
-
-  // Presety načítané z nastavení
-  let sklo_dims: Record<string, number[]> = {
-    "Laboratorní Sklo (76 x 26 x 1 mm)": [76.0, 26.0, 1.0],
-    "FTO (76 x 50 x 1 mm)": [50.0, 76.0, 1.0],
-  };
-  let nozzle_defs: Record<string, [number, number, number, string]> = {
-    Červená: [31.1, 0.3, 4.0, "#ef4444"],
-    Modrá: [31.0, 0.41, 4.0, "#3b82f6"],
-  };
-  let glassPresets: string[] = [
-    "Laboratorní Sklo (76 x 26 x 1 mm)",
-    "FTO (76 x 50 x 1 mm)",
-    "Vlastní",
-  ];
-  let nozzlePresets: string[] = ["Červená", "Modrá", "Vlastní"];
-
-  export let selectedGlass = glassPresets[0];
-  let selectedNozzle = nozzlePresets[1];
-
-  let bed_max_x = 200.0;
-  let bed_max_y = 200.0;
-  let bed_max_temp = 100.0;
+  let bed_max_x = $state(200.0);
+  let bed_max_y = $state(200.0);
+  let bed_max_temp = $state(100.0);
   let bed_min_temp = 30; // Min. teplota při zapnutí (konfigurovatelno v nastavení)
 
   // ─── Limity aktivní kapaliny (null = bez limitu, použij globální) ─────────
-  $: liqZMin = $liquidLimits?.z_offset_min != null
+  let liqZMin = $derived($liquidLimits?.z_offset_min != null
     ? (params.z_unit === "µm" ? $liquidLimits.z_offset_min * 1000 : $liquidLimits.z_offset_min)
-    : 0;
-  $: liqZMax = $liquidLimits?.z_offset_max != null
+    : 0);
+  let liqZMax = $derived($liquidLimits?.z_offset_max != null
     ? (params.z_unit === "µm" ? $liquidLimits.z_offset_max * 1000 : $liquidLimits.z_offset_max)
-    : (params.z_unit === "µm" ? 2000 : 2.0);
-  $: liqExtMin = $liquidLimits?.extrusion_min ?? 0;
-  $: liqExtMax = $liquidLimits?.extrusion_max ?? 1000;
-  $: liqSpeedMin = $liquidLimits?.print_speed_min ?? 50;
-  $: liqSpeedMax = $liquidLimits?.print_speed_max ?? 1500;
-  $: liqBedTempMax = $liquidLimits?.bed_temp_max ?? (bed_max_temp > 0 ? bed_max_temp : undefined);
-  $: filteredNozzlePresets = $liquidLimits?.forbidden_nozzles?.length
+    : (params.z_unit === "µm" ? 2000 : 2.0));
+  let liqExtMin = $derived($liquidLimits?.extrusion_min ?? 0);
+  let liqExtMax = $derived($liquidLimits?.extrusion_max ?? 1000);
+  let liqSpeedMin = $derived($liquidLimits?.print_speed_min ?? 50);
+  let liqSpeedMax = $derived($liquidLimits?.print_speed_max ?? 1500);
+  let liqBedTempMax = $derived($liquidLimits?.bed_temp_max ?? (bed_max_temp > 0 ? bed_max_temp : undefined));
+  let filteredNozzlePresets = $derived($liquidLimits?.forbidden_nozzles?.length
     ? nozzlePresets.filter((n) => n === "Vlastní" || !$liquidLimits!.forbidden_nozzles.includes(n))
-    : nozzlePresets;
-  let firstPrintCompleted = false;
-  let calibrationDone = false;
-  let calibrationShift = 0.0;
+    : nozzlePresets);
+  let firstPrintCompleted = $state(false);
+  let calibrationDone = $state(false);
+  let calibrationShift = $state(0.0);
 
   // Kalibrace
-  let showZCalibrationModal = false;
-  let glassZTheoretical = 0.0;
+  let showZCalibrationModal = $state(false);
+  let glassZTheoretical = $state(0.0);
+  let machineBlockHeight = 34.0;
   let settingsCache: AppSettings | null = null;
 
   // Ochrana proti double-click / re-kliku během blokující fáze 1
-  let isStarting = false;
+  let isStarting = $state(false);
 
-  // Pauza (M1 / M0 / M601 příkazy v start_gcode)
-  let pauseMessage: string | null = null;
-  let pauseResolve: (() => void) | null = null;
-  let pauseIsFromPrintQueue = false;
-  // pauseShownAt: kdy dialog vznikl (filtruje zbytkové keydown eventy ze spouštěcí akce)
-  // backdropPointerDownAt: kdy padl pointerdown přímo na backdrop — musí být >= pauseShownAt,
-  //   jinak jde o click-through z tlačítka, které dialog otevřelo
-  let pauseShownAt = 0;
-  let backdropPointerDownAt = 0;
-
-  function showPause(message: string) {
-    pauseMessage = message || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování";
-    pauseShownAt = Date.now();
-    backdropPointerDownAt = 0;
-  }
-
-  function waitForPause(message: string): Promise<void> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        showPause(message);
-        pauseIsFromPrintQueue = false;
-        pauseResolve = resolve;
-      }, 50);
-    });
-  }
-
-  async function dismissPause() {
-    pauseMessage = null;
-    if (pauseIsFromPrintQueue) {
-      pauseIsFromPrintQueue = false;
-      await resume_app_pause();
-    } else if (pauseResolve) {
-      pauseResolve();
-      pauseResolve = null;
-    }
-  }
-
-  function handleBackdropPointerDown() {
-    backdropPointerDownAt = Date.now();
-  }
-
-  async function handleBackdropClick() {
-    // Akceptovat pouze klik, jehož pointerdown nastal AŽ PO zobrazení dialogu.
-    // Tím se eliminuje "click-through" — mouseup z tlačítka, které dialog spustilo.
-    if (backdropPointerDownAt >= pauseShownAt) {
-      await dismissPause();
-    }
-  }
-
-  // Rozdělí gcode na segmenty oddělené pausovacími příkazy (M0/M1/M601).
-  // Vrací pole [{code, msg}] kde msg je text z M1 příkazu nebo null pro poslední segment.
-  function splitGcodeByPauses(gcode: string): Array<{ code: string; msg: string | null }> {
-    const segments: Array<{ code: string; msg: string | null }> = [];
-    const lines = gcode.split("\n");
-    let current: string[] = [];
-
-    for (const line of lines) {
-      const cmdPart = line.split(";")[0].trim();
-      const cmdUpper = cmdPart.toUpperCase();
-      const isM0 = cmdUpper === "M0" || cmdUpper.startsWith("M0 ");
-      const isM1 = cmdUpper === "M1" || cmdUpper.startsWith("M1 ");
-      const isM601 = cmdUpper === "M601";
-
-      if (isM0 || isM1 || isM601) {
-        const msg = cmdPart.replace(/^M\d+\s*/i, "").trim() || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování";
-        segments.push({ code: current.join("\n"), msg });
-        current = [];
-      } else {
-        current.push(line);
-      }
-    }
-    segments.push({ code: current.join("\n"), msg: null });
-    return segments;
-  }
+  // Pauza (M1 / M0 / M601 příkazy v start_gcode) — UI a logika v PrintPauseModal
+  let pauseModal: PrintPauseModal;
 
   // Výhřev podložky: sleduje poslední platnou hodnotu pro správný skok přes šedou zónu
   let lastBedTemp = 0;
@@ -252,10 +195,12 @@
     return "#3b82f6"; // výchozí modrá
   }
 
-  $: maxSamples =
-    Math.floor(bed_max_x / (params.slide_w + 5.0)) *
-      Math.floor(bed_max_y / (params.slide_h + 5.0)) || 1;
-  $: if (!firstPrintCompleted) params.bed_leveling = true;
+  let maxSamples =
+    $derived(Math.floor(bed_max_x / (params.slide_w + 5.0)) *
+      Math.floor(bed_max_y / (params.slide_h + 5.0)) || 1);
+  run(() => {
+    if (!firstPrintCompleted) params.bed_leveling = true;
+  });
 
   // --- UNIT CONVERSIONS LOGIC (Strictly mirrored from Python LeftPanel) ---
   let lastZUnit = "µm";
@@ -380,8 +325,16 @@
 
     const setts = await get_app_settings();
     const blockH = setts.block_height || 34.0;
-    const safeZ: number = (setts as any).safe_z ?? 20.0;
-    glassZTheoretical = -blockH + params.nozzle_height - params.nozzle_hidden + params.slide_z;
+    machineBlockHeight = blockH;
+    const safeZ: number = setts.safe_z ?? 20.0;
+    // Teoretická Z povrchu sklíčka — stejný výpočet jako generátor (dpi-core)
+    const z_offset_mm = params.z_unit === "µm" ? params.z_offset / 1000.0 : params.z_offset;
+    const calibInfo = await compute_z_calibration(
+      { ...params, z_offset: z_offset_mm },
+      $projectStore.overrides,
+      blockH
+    );
+    glassZTheoretical = calibInfo.glass_z_theoretical;
 
     const firstPos = positions[0];
     const targetX = firstPos
@@ -403,7 +356,7 @@
     if (!params.bed_leveling) {
       initGcode = initGcode.replace(/\bG28\b(?!\s*[XYZW])/g, "G28 W");
     }
-    const initSegments = splitGcodeByPauses(initGcode);
+    const initSegments = await split_gcode_pauses(initGcode);
 
     try {
       // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí modal)
@@ -414,7 +367,7 @@
           await send_manual_blocking(prefix + gcode);
         }
         if (initSegments[i].msg !== null) {
-          await waitForPause(initSegments[i].msg!);
+          await pauseModal.waitFor(initSegments[i].msg!);
         }
       }
 
@@ -431,27 +384,20 @@
         const calibShiftInUnit = params.z_unit === "µm" ? calibrationShift * 1000.0 : calibrationShift;
         params.z_offset = origOffset + calibShiftInUnit;
         await send_manual_blocking(shiftCmd + `G0 X${targetX} Y${targetY} F3000\nM400`);
-        // G92 Z{safeZ} nastaví virtuální systém (≈ machine + z_shift_gen_prev).
-        // Generátorův G1 Z{safeZ}+G92 blok pak vystripujeme — tryska je tam zbytek
-        // safe-pohybu shiftCmd a G-kód by ji jinak poslal ještě jednou nahoru.
+        // Virtuální posun Z nastavíme zde přes G92 (tryska už je na safeZ po shiftCmd);
+        // generátor pak blok výjezdu na safe_z + G92 vynechá (skip_z_shift_setup).
+        // z_shift se počítá v Rustu stejně jako v generátoru — včetně per-slide overrides.
         const z_offset_mm_calib = params.z_unit === "µm" ? params.z_offset / 1000.0 : params.z_offset;
-        const z_shift_gen_calib = (glassZTheoretical + z_offset_mm_calib) < 0
-          ? Math.abs(glassZTheoretical + z_offset_mm_calib) + 1.0
-          : 0.0;
+        const { z_shift: z_shift_gen_calib } = await compute_z_calibration(
+          { ...params, z_offset: z_offset_mm_calib },
+          $projectStore.overrides,
+          machineBlockHeight
+        );
         const startOverride = `G92 Z${(safeZ + z_shift_gen_calib).toFixed(3)}\nG92 E0.0`;
         try {
-          let res = generateGCodeSilently
-            ? await generateGCodeSilently(startOverride)
+          const res = generateGCodeSilently
+            ? await generateGCodeSilently(startOverride, true)
             : { gcode: generatedGCode, dist: totalDist, time: totalTime };
-          if (z_shift_gen_calib > 0) {
-            res = {
-              ...res,
-              gcode: res.gcode.replace(
-                /; --- VIRTUALNI POSUN Z[^\n]*\nG1 Z[^\n]*\nG92 Z[^\n]*\n\n?/,
-                ''
-              ),
-            };
-          }
           await start_print(res.gcode, res.dist, res.time);
           dispatch("paramsChanged", params);
         } finally {
@@ -482,24 +428,19 @@
     try {
       await send_manual_blocking("M211 S1\nG91\nG0 Z5 F1000\nG90");
       params.z_offset = pendingZOffset;
+      // z_shift z Rustu (stejný algoritmus jako generátor, včetně overrides);
+      // G92 nastaví virtuální systém zde, generátor svůj blok vynechá (skip flag).
       const pendingZOffset_mm = params.z_unit === "µm" ? pendingZOffset / 1000.0 : pendingZOffset;
-      const z_shift_gen = (glassZTheoretical + pendingZOffset_mm) < 0
-        ? Math.abs(glassZTheoretical + pendingZOffset_mm) + 1.0
-        : 0.0;
+      const { z_shift: z_shift_gen } = await compute_z_calibration(
+        { ...params, z_offset: pendingZOffset_mm },
+        $projectStore.overrides,
+        machineBlockHeight
+      );
       const currentMachineZ = glassZTheoretical + calibrationShift + 5.0;
       const startOverride = `G92 Z${(currentMachineZ + z_shift_gen).toFixed(3)}\nG92 E0.0`;
-      let res = generateGCodeSilently
-        ? await generateGCodeSilently(startOverride)
+      const res = generateGCodeSilently
+        ? await generateGCodeSilently(startOverride, true)
         : { gcode: generatedGCode, dist: totalDist, time: totalTime };
-      if (z_shift_gen > 0) {
-        res = {
-          ...res,
-          gcode: res.gcode.replace(
-            /; --- VIRTUALNI POSUN Z[^\n]*\nG1 Z[^\n]*\nG92 Z[^\n]*\n\n?/,
-            ''
-          ),
-        };
-      }
       await start_print(res.gcode, res.dist, res.time);
       firstPrintCompleted = true;
       calibrationDone = true;
@@ -559,14 +500,10 @@
     });
 
     const unlistenPause = listen<string>("app-pause-requested", (event) => {
-      // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis pauseResolve = null
-      // by natrvalo zablokoval waitForPause() promise.
+      // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis interní Promise
+      // by natrvalo zablokoval pauseModal.waitFor().
       if (isStarting) return;
-      setTimeout(() => {
-        showPause(event.payload || "Stiskněte Enter, Mezerník nebo klikněte pro pokračování");
-        pauseIsFromPrintQueue = true;
-        pauseResolve = null;
-      }, 50);
+      setTimeout(() => pauseModal.showFromPrintQueue(event.payload || ""), 50);
     });
 
     return () => {
@@ -623,7 +560,7 @@
       <!-- VLASTNÍ ROZMĚRY SKLA (Visible if custom selected) -->
       {#if selectedGlass === "Vlastní"}
         <div
-          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded border border-slate-850"
+          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded-sm border border-slate-850"
         >
           <div class="flex flex-col gap-0.5">
             <span class="text-[9px] text-slate-500">Šířka (mm)</span>
@@ -700,7 +637,7 @@
         <span class="col-span-1 text-slate-400">Příprava podložky:</span>
         <button
           disabled={!firstPrintCompleted}
-          on:click={() => {
+          onclick={() => {
             if (firstPrintCompleted) {
               params.bed_leveling = !params.bed_leveling;
               dispatch("paramsChanged", params);
@@ -723,7 +660,7 @@
       >
         <span class="col-span-1 text-slate-400">Příprava trysky:</span>
         <button
-          on:click={() => {
+          onclick={() => {
             params.prime_active = !params.prime_active;
             dispatch("paramsChanged", params);
           }}
@@ -742,7 +679,7 @@
         >
           <span class="col-span-1 text-slate-400">Kalibrace Z:</span>
           <button
-            on:click={() => {
+            onclick={() => {
               calibrationDone = calibrationDone ? false : true;
               if (!calibrationDone) calibrationShift = 0.0;
             }}
@@ -847,7 +784,7 @@
       <!-- VLASTNÍ ROZMĚRY TRYSKY -->
       {#if selectedNozzle === "Vlastní"}
         <div
-          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded border border-slate-850"
+          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded-sm border border-slate-850"
         >
           <div class="flex flex-col gap-0.5">
             <span class="text-[9px] text-slate-500">Výška (mm)</span>
@@ -1032,8 +969,8 @@
             />
           </div>
           <button
-            on:click={refreshPorts}
-            class="bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-400 p-1.5 rounded"
+            onclick={refreshPorts}
+            class="bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-400 p-1.5 rounded-sm"
           >
             <RefreshCw class="w-3.5 h-3.5" />
           </button>
@@ -1055,7 +992,7 @@
 
       <!-- Tlačítko Připojit / Odpojit -->
       <button
-        on:click={toggleConnection}
+        onclick={toggleConnection}
         class="w-full font-bold py-1 rounded text-white transition-colors {status.is_connected
           ? 'bg-labred hover:bg-red-600'
           : 'bg-labaccent hover:bg-blue-600'}"
@@ -1067,9 +1004,9 @@
         <!-- Tlačítko Start Tisku -->
         {#if !status.is_printing}
           <button
-            on:click={handleStart}
+            onclick={handleStart}
             disabled={isStarting}
-            class="w-full bg-labgreen hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-1 rounded transition-colors flex items-center justify-center gap-1.5"
+            class="w-full bg-labgreen hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-1 rounded-sm transition-colors flex items-center justify-center gap-1.5"
           >
             {#if isStarting}
               <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -1085,15 +1022,15 @@
           <!-- Ovládání za běhu (Pauza, Stop) -->
           <div class="grid grid-cols-2 gap-2">
             <button
-              on:click={handlePause}
-              class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded transition-colors flex items-center justify-center gap-1"
+              onclick={handlePause}
+              class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded-sm transition-colors flex items-center justify-center gap-1"
             >
               <Pause class="w-3.5 h-3.5" />
               {status.is_paused ? "Pokračovat" : "Pozastavit"}
             </button>
             <button
-              on:click={handleStop}
-              class="bg-labred hover:bg-red-600 text-white font-bold py-1 rounded transition-colors flex items-center justify-center gap-1"
+              onclick={handleStop}
+              class="bg-labred hover:bg-red-600 text-white font-bold py-1 rounded-sm transition-colors flex items-center justify-center gap-1"
             >
               <Square class="w-3.5 h-3.5" /> Zastavit
             </button>
@@ -1122,39 +1059,15 @@
 
   <!-- TLAČÍTKO FEEDBACK (NAHLÁSIT CHYBU) -->
   <button
-    on:click={() => window.dispatchEvent(new CustomEvent("open-feedback-form"))}
-    class="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded transition-colors text-xs"
+    onclick={() => window.dispatchEvent(new CustomEvent("open-feedback-form"))}
+    class="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-1 rounded-sm transition-colors text-xs"
   >
     Nahlásit chybu / Nápad
   </button>
 </div>
 
 
-{#if pauseMessage !== null}
-  <div
-    class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]"
-    on:pointerdown={handleBackdropPointerDown}
-    on:click={handleBackdropClick}
-    role="dialog"
-    aria-modal="true"
-  >
-    <div
-      class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600"
-      role="presentation"
-      on:pointerdown|stopPropagation
-      on:click|stopPropagation
-    >
-      <p class="text-slate-100 font-semibold text-sm mb-3">{pauseMessage}</p>
-      <p class="text-slate-400 text-xs mb-4">Stiskněte Enter, Mezerník nebo klikněte pro pokračování</p>
-      <button
-        on:click={dismissPause}
-        class="px-5 py-2 bg-labaccent hover:bg-blue-600 text-white rounded-lg font-bold text-sm transition-colors"
-      >
-        Pokračovat →
-      </button>
-    </div>
-  </div>
-{/if}
+<PrintPauseModal bind:this={pauseModal} />
 
 {#if showZCalibrationModal}
   <ZCalibrationModal
