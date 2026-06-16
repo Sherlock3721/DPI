@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "dpi-app"
-version = "2.0.4"
+version = "2.0.5"
 dependencies = [
  "dpi-core",
  "futures-util",

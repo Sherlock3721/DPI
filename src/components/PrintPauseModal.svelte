@@ -13,12 +13,13 @@
   let pauseMessage: string | null = $state(null);
   let pauseResolve: (() => void) | null = null;
   let pauseIsFromPrintQueue = false;
-  // pauseShownAt: kdy dialog vznikl — filtruje zbytkový Enter ze spouštěcí akce
+  // pauseShownAt: kdy dialog vznikl — filtruje zbytkový vstup ze spouštěcí akce
   let pauseShownAt = 0;
+  let isReady = $state(false);
 
-  const FALLBACK_MSG = "Stiskněte Enter pro pokračování";
+  const FALLBACK_MSG = "Tisk pozastaven";
 
-  // Enter stisknutý v prvních ARM_DELAY_MS po zobrazení dialog neukončí —
+  // Klik stisknutý v prvních ARM_DELAY_MS po zobrazení dialog neukončí —
   // jde o zbytkový vstup z akce, která dialog otevřela/potvrdila předchozí.
   const ARM_DELAY_MS = 400;
 
@@ -26,6 +27,10 @@
     console.log("[PAUSE-DEBUG] show():", message);
     pauseMessage = message || FALLBACK_MSG;
     pauseShownAt = Date.now();
+    isReady = false;
+    setTimeout(() => {
+      isReady = true;
+    }, ARM_DELAY_MS);
   }
 
   /** Pauza z tiskové fronty (APP_PAUSE event) — potvrzení volá resume_app_pause. */
@@ -49,6 +54,7 @@
   }
 
   async function dismiss() {
+    if (!isReady) return;
     console.log("[PAUSE-DEBUG] dismiss(), pauseIsFromPrintQueue =", pauseIsFromPrintQueue);
     pauseMessage = null;
     if (pauseIsFromPrintQueue) {
@@ -60,29 +66,7 @@
       pauseResolve = null;
     }
   }
-
-  async function handlePauseKeydown(event: KeyboardEvent) {
-    if (pauseMessage === null) return;
-    console.log(
-      "[PAUSE-DEBUG] keydown:",
-      event.key,
-      "repeat =",
-      event.repeat,
-      "od zobrazení =",
-      Date.now() - pauseShownAt,
-      "ms",
-    );
-    if (event.key !== "Enter") return;
-    // Auto-repeat držené klávesy nesmí potvrdit dialog — klávesa musí být
-    // stisknuta znovu až po jeho zobrazení.
-    if (event.repeat) return;
-    if (Date.now() - pauseShownAt < ARM_DELAY_MS) return;
-    event.preventDefault();
-    await dismiss();
-  }
 </script>
-
-<svelte:window onkeydown={handlePauseKeydown} />
 
 {#if pauseMessage !== null}
   <div
@@ -90,12 +74,18 @@
     role="presentation"
   >
     <div
-      class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600"
+      class="glass-panel rounded-xl p-6 max-w-sm w-full mx-4 text-center shadow-2xl border border-slate-600 flex flex-col items-center gap-4"
       role="dialog"
       aria-modal="true"
     >
-      <p class="text-slate-100 font-semibold text-sm mb-3">{pauseMessage}</p>
-      <p class="text-slate-400 text-xs">{FALLBACK_MSG}</p>
+      <p class="text-slate-100 font-semibold text-sm">{pauseMessage}</p>
+      <button
+        onclick={dismiss}
+        disabled={!isReady}
+        class="w-full px-4 py-2 rounded-lg bg-labaccent hover:bg-blue-600 text-white font-medium transition-colors disabled:opacity-50"
+      >
+        Pokračovat
+      </button>
     </div>
   </div>
 {/if}
