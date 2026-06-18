@@ -29,6 +29,7 @@
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
   import type PrintPauseModal from "./PrintPauseModal.svelte";
+  import { ask } from "@tauri-apps/plugin-dialog";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
   import { settingsStore } from "../stores/settingsStore";
@@ -360,7 +361,7 @@
     const initSegments = await split_gcode_pauses(initGcode);
 
     try {
-      // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí modal)
+      // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí nativní OS dialog)
       for (let i = 0; i < initSegments.length; i++) {
         const gcode = initSegments[i].code.trim();
         const prefix = i === 0 ? "M410\n" : "";
@@ -368,7 +369,7 @@
           await send_manual_blocking(prefix + gcode);
         }
         if (initSegments[i].msg !== null) {
-          const confirmed = await pauseModal.confirmOrCancel(initSegments[i].msg!);
+          const confirmed = await ask(initSegments[i].msg!, { title: "DPI — Potvrzení", kind: "warning", okLabel: "Pokračovat", cancelLabel: "Zrušit" });
           if (!confirmed) {
             isStarting = false;
             return;
