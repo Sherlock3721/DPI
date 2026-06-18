@@ -28,7 +28,7 @@
   import CustomSelect from "./CustomSelect.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
-  import PrintPauseModal from "./PrintPauseModal.svelte";
+  import type PrintPauseModal from "./PrintPauseModal.svelte";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
   import { settingsStore } from "../stores/settingsStore";
@@ -97,6 +97,7 @@
     | undefined;
     positions?: LayoutPosition[];
     selectedGlass?: any;
+    pauseModal: PrintPauseModal;
   }
 
   let {
@@ -129,7 +130,8 @@
     generatedGCode = "",
     generateGCodeSilently = undefined,
     positions = [],
-    selectedGlass = $bindable(glassPresets[0])
+    selectedGlass = $bindable(glassPresets[0]),
+    pauseModal,
   }: Props = $props();
   // svelte-ignore state_referenced_locally -- záměrně jen výchozí volba trysky
   let selectedNozzle = $state(nozzlePresets[1]);
@@ -168,7 +170,6 @@
   let isStarting = $state(false);
 
   // Pauza (M1 / M0 / M601 příkazy v start_gcode) — UI a logika v PrintPauseModal
-  let pauseModal: PrintPauseModal;
 
   // Výhřev podložky: sleduje poslední platnou hodnotu pro správný skok přes šedou zónu
   let lastBedTemp = 0;
@@ -1070,8 +1071,6 @@
   </button>
 </div>
 
-
-<PrintPauseModal bind:this={pauseModal} />
 
 {#if showZCalibrationModal}
   <ZCalibrationModal

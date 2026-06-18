@@ -46,6 +46,7 @@
   import { check } from "@tauri-apps/plugin-updater";
   import WelcomeModal from "./components/WelcomeModal.svelte";
   import BracketExportModal from "./components/BracketExportModal.svelte";
+  import PrintPauseModal from "./components/PrintPauseModal.svelte";
 
   // --- STAV APLIKACE ---
   const isTauri = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
@@ -96,6 +97,7 @@
   let showBracketExportModal = $state(false);
 
   let leftPanelRef: any = $state();
+  let pauseModalRef: PrintPauseModal = $state() as any;
 
   // Canvas ↔ pravý panel
   let canvasExternalSelected = $state(-1); // posIdx → zvýrazní sklíčko v plátně
@@ -721,6 +723,7 @@
         on:exportCSV={exportCSVProtocol}
         on:generateGCode={() => triggerGCodeGeneration()}
         {generateGCodeSilently}
+        pauseModal={pauseModalRef}
       />
     </div>
 
@@ -811,4 +814,6 @@
   {#if showSnow}
     <SnowEffect />
   {/if}
+
+  <PrintPauseModal bind:this={pauseModalRef} />
 </main>
