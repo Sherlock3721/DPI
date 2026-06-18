@@ -12,9 +12,9 @@
 
   let pauseMessage: string | null = $state(null);
   let pauseResolve: (() => void) | null = null;
+  let pauseReject: (() => void) | null = null;
   let pauseIsFromPrintQueue = false;
-  // pauseShownAt: kdy dialog vznikl — filtruje zbytkový vstup ze spouštěcí akce
-  let pauseShownAt = 0;
+  let showCancelButton = $state(false);
   let isReady = $state(false);
 
   const FALLBACK_MSG = "Tisk pozastaven";
@@ -26,7 +26,6 @@
   function show(message: string) {
     console.log("[PAUSE-DEBUG] show():", message);
     pauseMessage = message || FALLBACK_MSG;
-    pauseShownAt = Date.now();
     isReady = false;
     setTimeout(() => {
       isReady = true;
@@ -38,7 +37,9 @@
     console.log("[PAUSE-DEBUG] showFromPrintQueue():", message);
     show(message || FALLBACK_MSG);
     pauseIsFromPrintQueue = true;
+    showCancelButton = false;
     pauseResolve = null;
+    pauseReject = null;
   }
 
   /** Programová pauza — Promise se resolvne po potvrzení uživatelem. */
@@ -48,7 +49,23 @@
       setTimeout(() => {
         show(message);
         pauseIsFromPrintQueue = false;
+        showCancelButton = false;
         pauseResolve = resolve;
+        pauseReject = null;
+      }, 50);
+    });
+  }
+
+  /** Potvrzení s možností zrušení — resolvne true (potvrzeno) nebo false (zrušeno). */
+  export function confirmOrCancel(message: string): Promise<boolean> {
+    console.log("[PAUSE-DEBUG] confirmOrCancel():", message);
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        show(message);
+        pauseIsFromPrintQueue = false;
+        showCancelButton = true;
+        pauseResolve = () => resolve(true);
+        pauseReject = () => resolve(false);
       }, 50);
     });
   }
@@ -57,12 +74,26 @@
     if (!isReady) return;
     console.log("[PAUSE-DEBUG] dismiss(), pauseIsFromPrintQueue =", pauseIsFromPrintQueue);
     pauseMessage = null;
+    showCancelButton = false;
     if (pauseIsFromPrintQueue) {
       pauseIsFromPrintQueue = false;
       await resume_app_pause();
       console.log("[PAUSE-DEBUG] resume_app_pause() hotovo");
     } else if (pauseResolve) {
       pauseResolve();
+      pauseResolve = null;
+      pauseReject = null;
+    }
+  }
+
+  function cancel() {
+    if (!isReady) return;
+    console.log("[PAUSE-DEBUG] cancel()");
+    pauseMessage = null;
+    showCancelButton = false;
+    if (pauseReject) {
+      pauseReject();
+      pauseReject = null;
       pauseResolve = null;
     }
   }
@@ -79,13 +110,24 @@
       aria-modal="true"
     >
       <p class="text-slate-100 font-semibold text-sm">{pauseMessage}</p>
-      <button
-        onclick={dismiss}
-        disabled={!isReady}
-        class="w-full px-4 py-2 rounded-lg bg-labaccent hover:bg-blue-600 text-white font-medium transition-colors disabled:opacity-50"
-      >
-        Pokračovat
-      </button>
+      <div class="flex gap-2 w-full">
+        {#if showCancelButton}
+          <button
+            onclick={cancel}
+            disabled={!isReady}
+            class="flex-1 px-4 py-2 rounded-lg border border-slate-600 bg-slate-800/60 text-slate-300 hover:border-slate-400 font-medium transition-colors disabled:opacity-50"
+          >
+            Zrušit
+          </button>
+        {/if}
+        <button
+          onclick={dismiss}
+          disabled={!isReady}
+          class="flex-1 px-4 py-2 rounded-lg bg-labaccent hover:bg-blue-600 text-white font-medium transition-colors disabled:opacity-50"
+        >
+          Pokračovat
+        </button>
+      </div>
     </div>
   </div>
 {/if}
