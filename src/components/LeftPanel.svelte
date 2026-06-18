@@ -325,6 +325,17 @@
     if (!status.is_connected || isStarting) return;
     isStarting = true;
 
+    if (params.bed_leveling) {
+      const confirmed = await ask(
+        "Připevněte PINDA sondu k podložce (tiskové hlavě), než bude provedeno automatické najetí na home.",
+        { title: "DPI — PINDA sonda", kind: "warning", okLabel: "Sonda připevněna — pokračovat", cancelLabel: "Zrušit" }
+      );
+      if (!confirmed) {
+        isStarting = false;
+        return;
+      }
+    }
+
     const setts = await get_app_settings();
     const blockH = setts.block_height || 34.0;
     machineBlockHeight = blockH;
