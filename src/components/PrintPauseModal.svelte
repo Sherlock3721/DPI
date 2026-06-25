@@ -1,14 +1,7 @@
 <script lang="ts">
   import { resume_app_pause } from "../lib/tauri";
 
-  /** Modální dialog pauzy tisku (M0/M1/M601 + LIVE_ADJUST tok).
-   *  Dva režimy:
-   *  - `waitFor(msg)` — programová pauza; vrácená Promise se resolvne potvrzením,
-   *  - `showFromPrintQueue(msg)` — pauza z tiskové fronty; potvrzení pošle
-   *    resume_app_pause() backendu.
-   *  Potvrzení: pouze klávesa Enter — myš/touch (klik na tlačítko, backdrop)
-   *  i Mezerník byly na Windows nespolehlivé (zbytkový vstup z akce, která
-   *  dialog otevřela, dialog okamžitě zavřel). */
+  /** Modální dialog pauzy tisku (M0/M1/M601 + LIVE_ADJUST tok). */
 
   let pauseMessage: string | null = $state(null);
   let pauseResolve: (() => void) | null = null;
@@ -114,6 +107,7 @@
         {#if showCancelButton}
           <button
             onclick={cancel}
+            onkeydown={(e: KeyboardEvent) => e.preventDefault()}
             disabled={!isReady}
             class="flex-1 px-4 py-2 rounded-lg border border-slate-600 bg-slate-800/60 text-slate-300 hover:border-slate-400 font-medium transition-colors disabled:opacity-50"
           >
@@ -122,6 +116,7 @@
         {/if}
         <button
           onclick={dismiss}
+          onkeydown={(e: KeyboardEvent) => e.preventDefault()}
           disabled={!isReady}
           class="flex-1 px-4 py-2 rounded-lg bg-labaccent hover:bg-blue-600 text-white font-medium transition-colors disabled:opacity-50"
         >

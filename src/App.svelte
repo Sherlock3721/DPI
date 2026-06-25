@@ -40,7 +40,7 @@
   import { toCanonicalExtrusionRate, type ExtUnit } from "./lib/extrusionUnits";
   import { selectedLiquidName } from "./stores/liquidStore";
   import { printerStore } from "./stores/printerStore";
-  import { save, ask, open } from "@tauri-apps/plugin-dialog";
+  import { save, open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
   import { check } from "@tauri-apps/plugin-updater";
@@ -176,11 +176,9 @@
 
     if (!anyOverflow) return;
 
-    const confirmed = await ask(
-      `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj substrátu\n` +
-        `a tryska by se dotkla jeho stěny.\n\n` +
-        `Chcete objekt automaticky zmenšit?`,
-      { title: "Varování — průměr trysky", kind: "warning" }
+    const confirmed = await pauseModalRef.confirmOrCancel(
+      `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj substrátu ` +
+        `a tryska by se dotkla jeho stěny. Chcete objekt automaticky zmenšit?`
     );
 
     if (confirmed) {
@@ -292,10 +290,7 @@
   // Otevření dialogu souboru přes Tauri API
   async function checkUnsavedChanges(): Promise<boolean> {
     if ($projectStore.isDirty) {
-      return await ask("Máte neuložené změny. Opravdu chcete pokračovat a změny zahodit?", {
-        title: "DPI",
-        kind: "warning",
-      });
+      return await pauseModalRef.confirmOrCancel("Máte neuložené změny. Opravdu chcete pokračovat a změny zahodit?");
     }
     return true;
   }
@@ -619,10 +614,7 @@
         if (closeConfirmed) return;
         if ($projectStore.isDirty) {
           event.preventDefault();
-          const confirmed = await ask("Máte neuložené změny. Opravdu chcete aplikaci zavřít?", {
-            title: "DPI",
-            kind: "warning",
-          });
+          const confirmed = await pauseModalRef.confirmOrCancel("Máte neuložené změny. Opravdu chcete aplikaci zavřít?");
           if (confirmed) {
             closeConfirmed = true;
             appWindow.close();

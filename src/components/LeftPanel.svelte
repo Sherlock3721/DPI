@@ -29,7 +29,6 @@
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
   import type PrintPauseModal from "./PrintPauseModal.svelte";
-  import { ask } from "@tauri-apps/plugin-dialog";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
   import { settingsStore } from "../stores/settingsStore";
@@ -326,9 +325,8 @@
     isStarting = true;
 
     if (params.bed_leveling) {
-      const confirmed = await ask(
-        "Připevněte PINDA sondu k podložce (tiskové hlavě), než bude provedeno automatické najetí na home.",
-        { title: "DPI — PINDA sonda", kind: "warning", okLabel: "Sonda připevněna — pokračovat", cancelLabel: "Zrušit" }
+      const confirmed = await pauseModal.confirmOrCancel(
+        "Připevněte PINDA sondu k podložce (tiskové hlavě), než bude provedeno automatické najetí na home."
       );
       if (!confirmed) {
         isStarting = false;
@@ -372,7 +370,7 @@
     const initSegments = await split_gcode_pauses(initGcode);
 
     try {
-      // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí nativní OS dialog)
+      // 1. Nouzový stop + start_gcode po segmentech (pauzy M1/M0 zobrazí in-app dialog)
       for (let i = 0; i < initSegments.length; i++) {
         const gcode = initSegments[i].code.trim();
         const prefix = i === 0 ? "M410\n" : "";
@@ -380,11 +378,22 @@
           await send_manual_blocking(prefix + gcode);
         }
         if (initSegments[i].msg !== null) {
-          const confirmed = await ask(initSegments[i].msg!, { title: "DPI — Potvrzení", kind: "warning", okLabel: "Pokračovat", cancelLabel: "Zrušit" });
+          const confirmed = await pauseModal.confirmOrCancel(initSegments[i].msg!);
           if (!confirmed) {
             isStarting = false;
             return;
           }
+        }
+      }
+
+      // 1b. Po bed levelingu odebrat PINDA sondu
+      if (params.bed_leveling) {
+        const confirmed = await pauseModal.confirmOrCancel(
+          "Odstraňte PINDA sondu z podložky (tiskové hlavy), než bude zahájen tisk."
+        );
+        if (!confirmed) {
+          isStarting = false;
+          return;
         }
       }
 

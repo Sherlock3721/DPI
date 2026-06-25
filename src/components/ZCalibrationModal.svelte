@@ -198,12 +198,14 @@
     <div class="flex items-center justify-end gap-3 px-5 py-3 border-t border-slate-700">
       <button
         onclick={cancel}
+        onkeydown={(e: KeyboardEvent) => { if (e.key !== "ArrowUp" && e.key !== "ArrowDown") e.preventDefault(); }}
         class="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800 rounded-sm transition-colors"
       >
         Zrušit
       </button>
       <button
         onclick={confirm}
+        onkeydown={(e: KeyboardEvent) => { if (e.key !== "ArrowUp" && e.key !== "ArrowDown") e.preventDefault(); }}
         class="bg-labaccent hover:bg-opacity-80 text-white text-sm font-bold px-6 py-2 rounded-lg transition-colors flex items-center gap-2"
       >
         <Check class="w-4 h-4" /> Potvrdit a Tisknout
