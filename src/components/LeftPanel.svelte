@@ -485,7 +485,8 @@
   }
 
   async function handleStop() {
-    if (confirm("Opravdu chcete tisk okamžitě zrušit?")) {
+    const confirmed = await pauseModal.confirmOrCancel("Opravdu chcete tisk okamžitě zrušit?");
+    if (confirmed) {
       await stop_print();
     }
   }
@@ -526,14 +527,7 @@
     });
 
     const unlistenPause = listen<string>("app-pause-requested", (event) => {
-      console.log("[PAUSE-DEBUG] app-pause-requested přijato:", event.payload, "isStarting =", isStarting);
-      // Ignoruj APP_PAUSE eventy během blokující fáze 1 — přepis interní Promise
-      // by natrvalo zablokoval pauseModal.waitFor().
-      if (isStarting) return;
-      setTimeout(() => {
-        console.log("[PAUSE-DEBUG] volám showFromPrintQueue");
-        pauseModal.showFromPrintQueue(event.payload || "");
-      }, 50);
+      pauseModal.showFromPrintQueue(event.payload || "");
     });
 
     return () => {

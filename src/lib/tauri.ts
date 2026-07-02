@@ -111,7 +111,7 @@ export interface LevelingPoint {
   y: number;
 }
 
-/** Kompletní nastavení aplikace — odráží strukturu DEFAULT_SETTINGS_JSON v src-tauri/src/lib.rs. */
+/** Kompletní nastavení aplikace — odráží strukturu AppSettings v src-tauri/src/settings.rs. */
 export interface AppSettings {
   // Tisková plocha
   bed_max_x: number;

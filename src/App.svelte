@@ -7,7 +7,6 @@
   import GraphicsView from "./components/GraphicsView.svelte";
   import Header from "./components/Header.svelte";
   import FeedbackModal from "./components/FeedbackModal.svelte";
-  import Terminal from "./components/Terminal.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import DiagnosticsModal from "./components/DiagnosticsModal.svelte";
   import AboutModal from "./components/AboutModal.svelte";
@@ -39,7 +38,6 @@
   import { settingsStore } from "./stores/settingsStore";
   import { toCanonicalExtrusionRate, type ExtUnit } from "./lib/extrusionUnits";
   import { selectedLiquidName } from "./stores/liquidStore";
-  import { printerStore } from "./stores/printerStore";
   import { save, open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";

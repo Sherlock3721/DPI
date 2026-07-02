@@ -255,6 +255,16 @@ pub fn auto_find_printer(
 
 type Port = Box<dyn serialport::SerialPort>;
 
+/// Původ aktivní pauzy — rozhoduje, zda se při resume posílá M602.
+/// Uživatelská pauza odeslala tiskárně M601; app-side pauza (M0/M1 dialog)
+/// tiskárnu nezastavila, takže M602 by přišlo bez párového M601.
+#[derive(Clone, Copy, PartialEq)]
+enum PauseOrigin {
+    None,
+    User,
+    App,
+}
+
 fn lock_status(arc: &Arc<Mutex<PrinterStatus>>) -> std::sync::MutexGuard<'_, PrinterStatus> {
     arc.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -266,6 +276,7 @@ fn handle_pause(
     status_arc: &Arc<Mutex<PrinterStatus>>,
     app_handle: &AppHandle,
     pause_start: &mut Option<Instant>,
+    pause_origin: &mut PauseOrigin,
 ) -> bool {
     let mut status = lock_status(status_arc);
     if status.is_paused {
@@ -273,13 +284,14 @@ fn handle_pause(
     }
     status.is_paused = true;
     *pause_start = Some(Instant::now());
+    *pause_origin = PauseOrigin::User;
     let _ = port.write_all(b"M601\n");
     let _ = port.flush();
     app_handle.emit("printer-status-changed", status.clone()).ok();
     true
 }
 
-/// Obnoví tisk. `send_m602 = false` pro app-side pauzu (M1/M0 modal).
+/// Obnoví tisk. `app_initiated = true` pro potvrzení app-side pauzy (dialog).
 /// Vrátí `true` pokud bylo odesláno M602 (přijde "ok").
 fn handle_resume(
     port: &mut Port,
@@ -287,16 +299,24 @@ fn handle_resume(
     app_handle: &AppHandle,
     pause_start: &mut Option<Instant>,
     paused_duration: &mut Duration,
-    send_m602: bool,
+    pause_origin: &mut PauseOrigin,
+    app_initiated: bool,
 ) -> bool {
     let mut status = lock_status(status_arc);
     if !status.is_paused {
+        return false;
+    }
+    // Potvrzení dialogu smí ukončit jen app-side pauzu — u uživatelské pauzy
+    // (M601) by tichý resume rozsynchronizoval stav aplikace s firmwarem.
+    if app_initiated && *pause_origin == PauseOrigin::User {
         return false;
     }
     status.is_paused = false;
     if let Some(ps) = pause_start.take() {
         *paused_duration += ps.elapsed();
     }
+    let send_m602 = *pause_origin == PauseOrigin::User;
+    *pause_origin = PauseOrigin::None;
     if send_m602 {
         let _ = port.write_all(b"M602\n");
         let _ = port.flush();
@@ -316,6 +336,7 @@ fn handle_stop(
     queue_idx: &mut usize,
     dist_sent: &mut f64,
     pause_start: &mut Option<Instant>,
+    pause_origin: &mut PauseOrigin,
     park_x: f64,
     park_y: f64,
 ) {
@@ -324,6 +345,7 @@ fn handle_stop(
     *queue_idx = 0;
     *dist_sent = 0.0;
     *pause_start = None;
+    *pause_origin = PauseOrigin::None;
 
     // Nouzový stop a bezpečný odjezd trysky (stejně jako Python)
     let _ = port.clear(serialport::ClearBuffer::Output);
@@ -444,6 +466,7 @@ pub fn spawn_comms_loop(
         let mut print_start_time = Instant::now();
         let mut paused_duration = Duration::ZERO;
         let mut pause_start: Option<Instant> = None;
+        let mut pause_origin = PauseOrigin::None;
         let mut last_temp_query = Instant::now();
         // Počítadlo po sobě jdoucích chyb zápisu M105 — detekce vytaženého kabelu
         // v klidovém stavu (zápisy při tisku chyby řeší vlastní větví).
@@ -467,14 +490,11 @@ pub fn spawn_comms_loop(
                             continue;
                         }
 
-                        // Sestavíme frontu G-kódu, zachováme markery a převedeme M1/M0/M601
+                        // Sestavíme frontu G-kódu a převedeme M1/M0/M601 na APP_PAUSE markery
                         gcode_queue.clear();
                         for raw_line in gcode.lines() {
                             let clean = raw_line.split(';').next().unwrap_or("").trim();
                             if clean.is_empty() {
-                                if raw_line.contains("; LIVE_ADJUST") {
-                                    gcode_queue.push("; LIVE_ADJUST".to_string());
-                                }
                                 continue;
                             }
                             let upper = clean.to_uppercase();
@@ -484,17 +504,11 @@ pub fn spawn_comms_loop(
                             if is_m0 || is_m1 || is_m601 {
                                 let msg = clean.split_once(' ').map(|x| x.1).unwrap_or("").trim();
                                 let msg = if msg.is_empty() { "Stiskněte pro pokračování" } else { msg };
-                                eprintln!("[PAUSE-DEBUG] StartPrint: nalezen pauzovací příkaz '{clean}', msg='{msg}'");
                                 gcode_queue.push(format!("; APP_PAUSE:{msg}"));
                             } else {
                                 gcode_queue.push(clean.to_string());
                             }
                         }
-                        eprintln!(
-                            "[PAUSE-DEBUG] StartPrint: fronta má {} řádků, z toho {} APP_PAUSE markerů",
-                            gcode_queue.len(),
-                            gcode_queue.iter().filter(|l| l.starts_with("; APP_PAUSE:")).count()
-                        );
 
                         // Pre-výpočet vzdálenosti extruze pro každý řádek fronty.
                         // Slouží k výpočtu progress% podle ujeté vzdálenosti tisku (ne počtu řádků).
@@ -526,6 +540,7 @@ pub fn spawn_comms_loop(
                         print_start_time = Instant::now();
                         paused_duration = Duration::ZERO;
                         pause_start = None;
+                        pause_origin = PauseOrigin::None;
 
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_printing = true;
@@ -539,7 +554,13 @@ pub fn spawn_comms_loop(
                     }
 
                     PrinterCommand::Pause => {
-                        handle_pause(&mut serial_port, &status_arc2, &app_handle, &mut pause_start);
+                        handle_pause(
+                            &mut serial_port,
+                            &status_arc2,
+                            &app_handle,
+                            &mut pause_start,
+                            &mut pause_origin,
+                        );
                     }
 
                     PrinterCommand::Resume => {
@@ -549,7 +570,8 @@ pub fn spawn_comms_loop(
                             &app_handle,
                             &mut pause_start,
                             &mut paused_duration,
-                            true,
+                            &mut pause_origin,
+                            false,
                         );
                     }
 
@@ -560,7 +582,8 @@ pub fn spawn_comms_loop(
                             &app_handle,
                             &mut pause_start,
                             &mut paused_duration,
-                            false,
+                            &mut pause_origin,
+                            true,
                         );
                     }
 
@@ -700,6 +723,7 @@ pub fn spawn_comms_loop(
                             &mut queue_idx,
                             &mut dist_sent,
                             &mut pause_start,
+                            &mut pause_origin,
                             park_x,
                             park_y,
                         );
@@ -742,29 +766,13 @@ pub fn spawn_comms_loop(
                 if queue_idx < gcode_queue.len() {
                     let next_line = gcode_queue[queue_idx].clone();
 
-                    // LIVE_ADJUST marker — pozastavíme tisk a vyžádáme si kalibraci
-                    if next_line == "; LIVE_ADJUST" {
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        status.is_paused = true;
-                        pause_start = Some(Instant::now());
-                        let _ = app_handle.emit("live-adjust-requested", ());
-                        app_handle
-                            .emit("printer-status-changed", status.clone())
-                            .ok();
-                        queue_idx += 1;
-                        continue;
-                    }
-
                     // APP_PAUSE marker (M1/M0/M601) — zobrazíme hlášku v aplikaci
                     if let Some(msg) = next_line.strip_prefix("; APP_PAUSE:") {
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_paused = true;
                         pause_start = Some(Instant::now());
-                        let emit_result = app_handle.emit("app-pause-requested", msg.to_string());
-                        eprintln!(
-                            "[PAUSE-DEBUG] APP_PAUSE marker na queue_idx={queue_idx}, msg='{msg}', emit ok={}",
-                            emit_result.is_ok()
-                        );
+                        pause_origin = PauseOrigin::App;
+                        let _ = app_handle.emit("app-pause-requested", msg.to_string());
                         app_handle
                             .emit("printer-status-changed", status.clone())
                             .ok();
@@ -858,6 +866,7 @@ pub fn spawn_comms_loop(
                                             &mut queue_idx,
                                             &mut dist_sent,
                                             &mut pause_start,
+                                            &mut pause_origin,
                                             park_x,
                                             park_y,
                                         );
@@ -870,6 +879,7 @@ pub fn spawn_comms_loop(
                                             &status_arc2,
                                             &app_handle,
                                             &mut pause_start,
+                                            &mut pause_origin,
                                         ) {
                                             extra_oks_needed += 1;
                                         }
@@ -881,7 +891,8 @@ pub fn spawn_comms_loop(
                                             &app_handle,
                                             &mut pause_start,
                                             &mut paused_duration,
-                                            true,
+                                            &mut pause_origin,
+                                            false,
                                         ) {
                                             extra_oks_needed += 1;
                                         }
@@ -893,7 +904,8 @@ pub fn spawn_comms_loop(
                                             &app_handle,
                                             &mut pause_start,
                                             &mut paused_duration,
-                                            false,
+                                            &mut pause_origin,
+                                            true,
                                         );
                                     }
                                     PrinterCommand::SendManual { gcode } => {
