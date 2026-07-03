@@ -28,6 +28,8 @@
     "shell:default",
     "updater:default",
     "process:default",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
   ]
 }
