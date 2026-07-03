@@ -320,11 +320,36 @@
     }
   }
 
+  // True, pokud G-kód obsahuje homing sjíždějící osu Z (holé G28, G28 W, G28 Z
+  // nebo G28 jen s parametry typu R). G28 omezené jen na osu X/Y osu Z nechá být.
+  function gcodeHomesZ(gcode: string): boolean {
+    for (const rawLine of gcode.split("\n")) {
+      const line = rawLine.split(";")[0].trim().toUpperCase();
+      const m = line.match(/^G28\b(.*)$/);
+      if (!m) continue;
+      const args = m[1];
+      if (args.includes("W") || args.includes("Z")) return true;
+      if (!args.includes("X") && !args.includes("Y")) return true;
+    }
+    return false;
+  }
+
   async function handleStart() {
     if (!status.is_connected || isStarting) return;
     isStarting = true;
 
-    if (params.bed_leveling) {
+    const setts = await get_app_settings();
+
+    // Homing sekvence ze start_gcode. Bez aktivního bed levelingu převedeme holé
+    // G28 na G28 W (domů jen neznámé osy). PINDA sonda je ale nutná pokaždé, když
+    // homing sjíždí osu Z — tedy i bez bed levelingu, kdykoli se Z homuje.
+    let initGcode = setts.start_gcode ?? "";
+    if (!params.bed_leveling) {
+      initGcode = initGcode.replace(/\bG28\b(?!\s*[XYZW])/g, "G28 W");
+    }
+    const homingHomesZ = gcodeHomesZ(initGcode);
+
+    if (homingHomesZ) {
       const confirmed = await pauseModal.confirmOrCancel(
         "Připevněte PINDA sondu k podložce (tiskové hlavě), než bude provedeno automatické najetí na home."
       );
@@ -334,7 +359,6 @@
       }
     }
 
-    const setts = await get_app_settings();
     const blockH = setts.block_height || 34.0;
     machineBlockHeight = blockH;
     const safeZ: number = setts.safe_z ?? 20.0;
@@ -363,10 +387,6 @@
     const calibVirtualZ = glassZTheoretical + zShift;    // vždy >= CALIB_BUFFER nebo glassZTheoretical
     const approachVirtualZ = calibVirtualZ + 2.0;
 
-    let initGcode = setts.start_gcode ?? "";
-    if (!params.bed_leveling) {
-      initGcode = initGcode.replace(/\bG28\b(?!\s*[XYZW])/g, "G28 W");
-    }
     const initSegments = await split_gcode_pauses(initGcode);
 
     try {
@@ -386,8 +406,8 @@
         }
       }
 
-      // 1b. Po bed levelingu odebrat PINDA sondu
-      if (params.bed_leveling) {
+      // 1b. Po homingu (sjezd osy Z) odebrat PINDA sondu
+      if (homingHomesZ) {
         const confirmed = await pauseModal.confirmOrCancel(
           "Odstraňte PINDA sondu z podložky (tiskové hlavy), než bude zahájen tisk."
         );
