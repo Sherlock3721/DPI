@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 520" width="950" height="520">
+  <defs>
+    <marker id="arrow-up" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 5 L 10 0 L 10 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-down" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 5 L 10 0 L 10 10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect width="950" height="520" fill="#f8fafc" rx="10" />
+  <rect x="15" y="15" width="920" height="490" fill="none" stroke="#cbd5e1" stroke-width="1.5" rx="8" />
+
+  <text x="40" y="50" font-family="'DejaVu Sans', sans-serif" font-size="20px" font-weight="bold" fill="#0f172a">Princip kalibrace výšky trysky a korekce Z-Shift</text>
+  <text x="40" y="72" font-family="'DejaVu Sans', sans-serif" font-size="12px" fill="#64748b">Matematický model výpočtu bezpečné výšky v dpi-core::gcode</text>
+
+  <!-- Reference Surface: Heatbed Plate -->
+  <line x1="80" y1="440" x2="860" y2="440" stroke="#0f172a" stroke-width="3" />
+  <text x="90" y="460" font-family="'DejaVu Sans', sans-serif" font-size="11px" font-weight="bold" fill="#475569">Z = 0.0 (Fyzický povrch ocelového plátu Prusa)</text>
+
+  <!-- Glass Substrate -->
+  <rect x="320" y="415" width="280" height="25" fill="#93c5fd" stroke="#2563eb" stroke-width="1.5" rx="2" />
+  <text x="380" y="432" font-family="'DejaVu Sans', sans-serif" font-size="11px" font-weight="bold" fill="#1e3a8a">Podložní sklo (slide_z = 1.0 mm)</text>
+
+  <!-- Reference Block -->
+  <rect x="180" y="240" width="100" height="200" fill="#e2e8f0" stroke="#64748b" stroke-width="2" rx="4" />
+  <text x="230" y="340" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="12px" font-weight="bold" fill="#334155">Hlava tiskárny</text>
+  <text x="230" y="360" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="10px" fill="#64748b">(block_height = 34 mm)</text>
+
+  <!-- Needle mounted into block -->
+  <rect x="222" y="215" width="16" height="25" fill="#f97316" />
+  <text x="250" y="230" font-family="'DejaVu Sans', sans-serif" font-size="10px" fill="#c2410c">nozzle_hidden (4 mm)</text>
+
+  <rect x="227" y="240" width="6" height="150" fill="#3b82f6" />
+  <text x="245" y="300" font-family="'DejaVu Sans', sans-serif" font-size="10px" fill="#1d4ed8">nozzle_height (30 mm)</text>
+
+  <!-- Height Dimension Lines -->
+  <!-- Block Height -->
+  <line x1="140" y1="440" x2="140" y2="240" stroke="#64748b" stroke-width="1.5" />
+  <line x1="130" y1="440" x2="150" y2="440" stroke="#64748b" stroke-width="1.5" />
+  <line x1="130" y1="240" x2="150" y2="240" stroke="#64748b" stroke-width="1.5" />
+  <text x="125" y="345" text-anchor="end" font-family="'DejaVu Sans', sans-serif" font-size="11px" font-weight="bold" fill="#475569">block_height</text>
+
+  <!-- Target Glass Height Formula Box -->
+  <g transform="translate(610, 130)">
+    <rect width="310" height="270" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5" />
+    <text x="18" y="28" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#1d4ed8">Vzorec teoretické výšky (gcode.rs):</text>
+
+    <text x="18" y="58" font-family="'JetBrainsMono NF', monospace" font-size="11px" font-weight="bold" fill="#0f172a">glass_z_theor =</text>
+    <text x="25" y="78" font-family="'JetBrainsMono NF', monospace" font-size="10.5px" fill="#ef4444">- block_height (34 mm)</text>
+    <text x="25" y="98" font-family="'JetBrainsMono NF', monospace" font-size="10.5px" fill="#2563eb">+ nozzle_height (31 mm)</text>
+    <text x="25" y="118" font-family="'JetBrainsMono NF', monospace" font-size="10.5px" fill="#ef4444">- nozzle_hidden (4 mm)</text>
+    <text x="25" y="138" font-family="'JetBrainsMono NF', monospace" font-size="10.5px" fill="#10b981">+ slide_z (1 mm) = -6.0 mm</text>
+
+    <line x1="18" y1="155" x2="292" y2="155" stroke="#bfdbfe" stroke-width="1" />
+
+    <text x="18" y="178" font-family="'DejaVu Sans', sans-serif" font-size="11px" font-weight="bold" fill="#0f172a">Korekce Z-Shift (kladný offset):</text>
+    <text x="18" y="198" font-family="'JetBrainsMono NF', monospace" font-size="10px" fill="#15803d">z_shift = |Z_min| + 1.0 mm (7.0 mm)</text>
+    <text x="18" y="218" font-family="'DejaVu Sans', sans-serif" font-size="10px" fill="#475569">M211 S0 (vypnutí soft endstopů)</text>
+    <text x="18" y="238" font-family="'JetBrainsMono NF', monospace" font-size="10px" font-weight="bold" fill="#15803d">G92 Z... (přenastavení nuly na sklo)</text>
+    <text x="18" y="258" font-family="'JetBrainsMono NF', monospace" font-size="10.5px" font-weight="bold" fill="#1e3a8a">Z_tisk = Z_theor + z_shift + z_offset</text>
+  </g>
+</svg>

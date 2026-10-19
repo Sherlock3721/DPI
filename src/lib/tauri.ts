@@ -243,6 +243,9 @@ export interface AppSettings {
   end_gcode: string;
   loop_start_gcode: string;
   loop_end_gcode: string;
+  nozzle_change_gcode?: string;
+  print_order?: "substrate_major" | "nozzle_major";
+  route_mode?: "fastest" | "cross_allowed" | "no_cross";
   // Výchozí procesní hodnoty
   default_z_offset: number;
   default_z_hop: number;
@@ -630,6 +633,11 @@ export async function parse_dxf(dxfText: string): Promise<SubstratePaths> {
 /** Parsuje SVG soubor na SubstratePaths — Rust dpi-core. */
 export async function parse_svg(svgText: string, fineness: number = 1.0): Promise<SubstratePaths> {
   return await invoke<SubstratePaths>("parse_svg_file", { svgText, fineness });
+}
+
+/** Rozdělí surový import na samostatné objekty podle oddělených tvarů. */
+export async function split_objects(rawPaths: SubstratePaths): Promise<SubstratePaths[]> {
+  return await invoke<SubstratePaths[]>("split_objects", { rawPaths });
 }
 
 /** Sestaví G-kód metadata hlavičku (vkládá se před vygenerovaný G-kód). */

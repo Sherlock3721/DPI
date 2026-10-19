@@ -17,6 +17,7 @@ import {
 } from "../lib/tauri";
 import { settingsStore } from "./settingsStore";
 import { clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
+import { samePathGeometry } from "../lib/nodeMerge";
 import {
   IDENTITY_XF,
   designToWorld,
@@ -1117,6 +1118,20 @@ function createProjectStore() {
         isDirty: false,
         projectFilePath: filePath !== null ? filePath : state.projectFilePath,
       }));
+    },
+
+    applyMergedPath: (slideIdx: number, merged: SubstratePaths, applyToAll: boolean) => {
+      update((state) => {
+        const source = state.paths[slideIdx];
+        if (!source) return state;
+        const paths = state.paths.map((p, i) => {
+          if (i === slideIdx) return merged;
+          if (!applyToAll) return p;
+          if (!samePathGeometry(p, source)) return p;
+          return JSON.parse(JSON.stringify(merged));
+        });
+        return { ...state, paths, isDirty: true };
+      });
     },
 
     setGCodeResult: (gcode: string, dist: number, time: number) => {

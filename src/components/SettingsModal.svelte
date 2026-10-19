@@ -9,6 +9,7 @@
   import SettingsLimits from "./settings/SettingsLimits.svelte";
   import SettingsLiquids from "./settings/SettingsLiquids.svelte";
   import SettingsLeveling from "./settings/SettingsLeveling.svelte";
+  import SettingsTisk from "./settings/SettingsTisk.svelte";
   import { createEventDispatcher } from "svelte";
 
   interface Props {
@@ -18,7 +19,7 @@
   let { isOpen = $bindable(false) }: Props = $props();
 
   const dispatch = createEventDispatcher();
-  let activeTab: "nozzles" | "glass" | "liquids" | "limits" | "leveling" | "gcode" | "program" = $state("nozzles");
+  let activeTab: "nozzles" | "glass" | "liquids" | "limits" | "leveling" | "tisk" | "gcode" | "program" = $state("nozzles");
 
   let settings: any = $state(null);
   let nozzleList: { name: string; h: number; d: number; s: number; c: string }[] = $state([]);
@@ -425,6 +426,10 @@
                 onclick={() => (activeTab = "limits")}
                 class="px-3 py-2 rounded-sm text-left text-xs font-bold transition-colors {activeTab === 'limits' || activeTab === 'leveling' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
               >Tiskárna</button>
+              <button
+                onclick={() => (activeTab = "tisk")}
+                class="px-3 py-2 rounded-sm text-left text-xs font-bold transition-colors {activeTab === 'tisk' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Tisk</button>
               {#if expertModeActive}
                 <button
                   onclick={() => (activeTab = "gcode")}
@@ -655,6 +660,11 @@
             <!-- ═══ 4. BED LEVELING ═══ -->
             {#if activeTab === "leveling"}
               <SettingsLeveling bind:settings bind:levelingPoints />
+            {/if}
+
+            <!-- ═══ 5. TISK ═══ -->
+            {#if activeTab === "tisk"}
+              <SettingsTisk bind:settings />
             {/if}
 
             <!-- ═══ 6. G-KÓDY ═══ -->

@@ -5,9 +5,11 @@
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, ObjectTransform } from "../lib/tauri";
   import { getTransformIdx } from "../lib/geometry";
-  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash, CircleDashed, X, Magnet } from "lucide-svelte";
+  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash, CircleDashed, X, Magnet, Merge } from "lucide-svelte";
   import Tooltip from "./Tooltip.svelte";
   import Canvas2D from "./Canvas2D.svelte";
+  import MergeNodesPopup from "./MergeNodesPopup.svelte";
+  import { samePathGeometry, type MergePreview, type MergeResult } from "../lib/nodeMerge";
   import NumberInput from "./NumberInput.svelte";
   import { printerStore } from "../stores/printerStore";
   import {
@@ -71,6 +73,8 @@
   // Kontextové menu: souřadnice v rámci panelu (panel má backdrop-filter, takže
   // position: fixed by se počítalo od něj, ne od okna — proto absolute + ořez do panelu)
   let contextMenu = $state({ visible: false, x: 0, y: 0, slideIndex: -1 });
+  let showMergePopup = $state(false);
+  let mergePreview: MergePreview | null = $state(null);
   let rootEl: HTMLDivElement | undefined = $state();
   let menuEl: HTMLDivElement | undefined = $state();
   let canvasRef: any = $state();
@@ -219,7 +223,63 @@
     if (drawTool) {
       isMeasuring = false;
       measurePoints = [];
+      closeMergePopup();
     }
+  }
+
+  // ─── Sloučení uzlů (merge by distance) ───────────────────────────────────
+  function hasPath(tIdx: number): boolean {
+    const p = paths[tIdx];
+    return !!p && p.segments && p.segments.length > 0;
+  }
+
+  let mergeTIdx = $derived.by(() => {
+    if (selectedIndex >= 0 && !positions[selectedIndex]?.is_prime) {
+      const t = getTransformIdx(selectedIndex, positions);
+      if (t >= 0 && hasPath(t)) return t;
+    }
+    for (let i = 0; i < paths.length; i++) {
+      if (hasPath(i)) return i;
+    }
+    return -1;
+  });
+
+  let mergePathData = $derived(mergeTIdx >= 0 ? paths[mergeTIdx] ?? null : null);
+  let mergeTransform = $derived(mergeTIdx >= 0 ? transforms[mergeTIdx] ?? null : null);
+
+  let mergeTwinCount = $derived.by(() => {
+    if (!mergePathData || mergeTIdx < 0) return 0;
+    let n = 0;
+    for (let i = 0; i < paths.length; i++) {
+      if (i === mergeTIdx) continue;
+      if (paths[i] && samePathGeometry(paths[i], mergePathData)) n++;
+    }
+    return n;
+  });
+
+  function toggleMergePopup() {
+    showMergePopup = !showMergePopup;
+    if (showMergePopup) {
+      isMeasuring = false;
+      drawTool = null;
+    } else {
+      mergePreview = null;
+    }
+  }
+
+  function closeMergePopup() {
+    showMergePopup = false;
+    mergePreview = null;
+  }
+
+  function handleMergeApply(e: CustomEvent<MergeResult & { applyToAll: boolean }>) {
+    if (mergeTIdx < 0) return;
+    dispatch("saveState");
+    projectStore.applyMergedPath(
+      mergeTIdx,
+      e.detail.paths,
+      e.detail.applyToAll
+    );
   }
 
   // Kreslení díry: obdélník/elipsa se odečte z ostatních tvarů
@@ -432,6 +492,11 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && showMergePopup) {
+      e.preventDefault();
+      closeMergePopup();
+      return;
+    }
     // Psaní do polí má přednost; zaškrtávací pole ani tlačítka zkratky neblokují
     const el = e.target;
     if (el instanceof HTMLTextAreaElement) return;
@@ -620,7 +685,7 @@
 
     <div class="relative group">
       <button
-        onclick={() => { isMeasuring = !isMeasuring; if (!isMeasuring) measurePoints = []; else drawTool = null; }}
+        onclick={() => { isMeasuring = !isMeasuring; if (!isMeasuring) measurePoints = []; else { drawTool = null; closeMergePopup(); } }}
         class="p-2 rounded-lg border shadow transition-colors {isMeasuring
           ? 'bg-yellow-500 border-yellow-400 text-black'
           : measurePoints.length > 0
@@ -653,6 +718,21 @@
         <VectorSquare class="w-4 h-4" />
       </button>
       <Tooltip text="Na sklíčko" />
+    </div>
+
+    <div class="relative group">
+      <button
+        onclick={toggleMergePopup}
+        disabled={mergeTIdx < 0}
+        class="p-2 rounded-lg border shadow transition-colors {mergeTIdx < 0
+          ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed'
+          : showMergePopup
+            ? 'bg-labaccent border-blue-500/60 text-white'
+            : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+      >
+        <Merge class="w-4 h-4" />
+      </button>
+      <Tooltip text="Sloučit uzly (merge by distance)" />
     </div>
 
     <!-- ── Kreslicí nástroje — vpravo, odlišené od navigačních vlevo ── -->
@@ -718,6 +798,16 @@
       </div>
     </div>
 
+    <MergeNodesPopup
+      open={showMergePopup}
+      pathData={mergePathData}
+      transform={mergeTransform}
+      slideLabel={mergeTIdx >= 0 ? `Substrát ${mergeTIdx + 1}` : ""}
+      twinCount={mergeTwinCount}
+      bind:preview={mergePreview}
+      on:close={closeMergePopup}
+      on:apply={handleMergeApply}
+    />
   </div>
 
   <!-- ── Volby kreslení (pod lištou, aby lišta nepřetékala) ── -->
@@ -781,6 +871,7 @@
       {extrusionRateUl}
       {drawTool}
       {snapToPaths}
+      {mergePreview}
       objEditOnlyHere={editObjOnlyHere}
       on:slideSelected={handleSlideSelected}
       on:slideContext={handleSlideContext}

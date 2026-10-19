@@ -50,6 +50,12 @@ pub struct AppSettings {
     pub end_gcode: String,
     pub loop_start_gcode: String,
     pub loop_end_gcode: String,
+    #[serde(default)]
+    pub nozzle_change_gcode: String,
+    #[serde(default)]
+    pub print_order: String,
+    #[serde(default)]
+    pub route_mode: String,
     // Výchozí procesní hodnoty
     pub default_z_offset: f64,
     pub default_z_hop: f64,

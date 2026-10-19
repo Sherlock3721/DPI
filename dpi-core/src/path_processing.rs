@@ -2269,6 +2269,102 @@ pub fn parse_dxf(dxf_text: &str) -> SubstratePaths {
     SubstratePaths::new(segments)
 }
 
+// ─── Union-Find a rozdělení importu na objekty ────────────────────────────────
+
+fn uf_find(parent: &mut Vec<usize>, i: usize) -> usize {
+    if parent[i] != i {
+        parent[i] = uf_find(parent, parent[i]);
+    }
+    parent[i]
+}
+
+fn uf_union(parent: &mut Vec<usize>, i: usize, j: usize) {
+    let ri = uf_find(parent, i);
+    let rj = uf_find(parent, j);
+    if ri != rj {
+        parent[ri] = rj;
+    }
+}
+
+/// Rozdělí surový import na samostatné objekty. Segmenty, jejichž bounding boxy
+/// se překrývají, patří do téhož objektu (union-find) — mezikruží nebo tvar
+/// s dírou tak zůstane pohromadě a výplň pro něj dál funguje podle even-odd
+/// pravidla.
+pub fn split_into_objects(raw: &SubstratePaths) -> Vec<SubstratePaths> {
+    let segs: Vec<&PathSegment> = raw.segments.iter().filter(|s| !s.is_empty()).collect();
+    let n = segs.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let boxes: Vec<(f64, f64, f64, f64)> = segs
+        .iter()
+        .map(|s| bbox_of_points(s.points.iter()).unwrap_or((0.0, 0.0, 0.0, 0.0)))
+        .collect();
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        boxes[a]
+            .0
+            .partial_cmp(&boxes[b].0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut active: Vec<usize> = Vec::new();
+    for &i in &order {
+        let (ax1, _, ay1, ay2) = boxes[i];
+        active.retain(|&j| boxes[j].1 >= ax1);
+        for &j in &active {
+            let (_, _, by1, by2) = boxes[j];
+            if !(ay2 < by1 || ay1 > by2) {
+                uf_union(&mut parent, i, j);
+            }
+        }
+        active.push(i);
+    }
+
+    let mut groups: HashMap<usize, Vec<PathSegment>> = HashMap::new();
+    for (i, seg) in segs.iter().enumerate() {
+        let root = uf_find(&mut parent, i);
+        groups.entry(root).or_default().push((*seg).clone());
+    }
+
+    let mut objects: Vec<SubstratePaths> = groups.into_values().map(SubstratePaths::new).collect();
+    objects.sort_by(|a, b| {
+        let c = |o: &SubstratePaths| -> (f64, f64) {
+            let pts: Vec<&Point2D> = o.segments.iter().flat_map(|s| s.points.iter()).collect();
+            let k = pts.len().max(1) as f64;
+            (
+                pts.iter().map(|p| p.x).sum::<f64>() / k,
+                pts.iter().map(|p| p.y).sum::<f64>() / k,
+            )
+        };
+        let (ax, ay) = c(a);
+        let (bx, by) = c(b);
+        ax.partial_cmp(&bx)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    objects
+}
+
+pub(crate) fn segs_cross(p1: Point2D, p2: Point2D, p3: Point2D, p4: Point2D) -> bool {
+    let dx1 = p2.x - p1.x;
+    let dy1 = p2.y - p1.y;
+    let dx2 = p4.x - p3.x;
+    let dy2 = p4.y - p3.y;
+    let d = dx1 * dy2 - dy1 * dx2;
+    if d.abs() < 1e-12 {
+        return false;
+    }
+    let ox = p3.x - p1.x;
+    let oy = p3.y - p1.y;
+    let t = (ox * dy2 - oy * dx2) / d;
+    let u = (ox * dy1 - oy * dx1) / d;
+    t > 1e-9 && t < 1.0 - 1e-9 && u > 1e-9 && u < 1.0 - 1e-9
+}
+
 // ─── Testy ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -8,6 +8,47 @@ use crate::types::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Značka pro kontrolu vyosení trysky, kterou generátor vloží za homing po
+/// každé výměně trysky.
+pub const NOZZLE_ALIGN_MARKER: &str = "; DPI_NOZZLE_ALIGN:";
+
+/// Výchozí blok po výměně trysky, pokud ho nastavení nepřepíše.
+pub const DEFAULT_NOZZLE_CHANGE_GCODE: &str = "G28 ; Homing po vymene trysky";
+
+pub fn push_nozzle_change(
+    out: &mut String,
+    nozzle_name: &str,
+    nozzle_diam: f64,
+    z_shift: f64,
+    machine: &MachineConfig,
+) {
+    let change_block = if machine.nozzle_change_gcode.trim().is_empty() {
+        DEFAULT_NOZZLE_CHANGE_GCODE
+    } else {
+        machine.nozzle_change_gcode.trim_end()
+    };
+
+    out.push_str(&format!(
+        "\n; --- VYMENA TRYSKY: {nozzle_name} (prumer {nozzle_diam:.2} mm) ---\n\
+         G1 Z{:.3} F1000 ; Vyjezd do bezpecne vysky pred vymenou\n\
+         M0 Vymente trysku za: {nozzle_name} ({nozzle_diam:.2} mm). Po potvrzeni probehne homing a kontrola vyoseni.\n",
+        machine.safe_z + z_shift,
+    ));
+    push_gcode_block(out, change_block);
+    out.push_str(&format!("{NOZZLE_ALIGN_MARKER}{nozzle_name}\n"));
+
+    if z_shift > 0.0 {
+        out.push_str(&format!(
+            "; Obnoveni virtualniho posunu Z po homingu (SHIFT {z_shift:.2}mm)\n\
+             G1 Z{:.3} F1000 ; Vyjezd do bezpecne vysky\n\
+             G92 Z{:.3} ; Nastaveni posunute nuly\n",
+            machine.safe_z,
+            machine.safe_z + z_shift
+        ));
+    }
+    out.push_str("G92 E0.0 ; Reset extruderu po vymene\n");
+}
+
 /// Rozestup odplivu: vlastní nastavení odplivu (hodnota a typ vždy v páru),
 /// jinak nastavení vzorku — hodnota se nikdy nevykládá jiným typem.
 fn prime_infill<'a>(params: &'a ProcessParams, o: Option<&'a SlideOverride>) -> (&'a str, f64) {

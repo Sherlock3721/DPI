@@ -17,7 +17,9 @@
     drawOverlayBox,
     drawSnapGrid,
     drawShapePreview,
+    drawMergePreview,
   } from "../lib/canvas2dDraw";
+  import type { MergePreview } from "../lib/nodeMerge";
   import { projectStore, sliceParamsFor, type DrawnShape, type LineAnchor } from "../stores/projectStore";
   import { settingsStore } from "../stores/settingsStore";
   import {
@@ -60,6 +62,8 @@
     snapToPaths?: boolean;
     /** Úprava objektu platí jen pro jeho substrát (živý náhled jen tam). */
     objEditOnlyHere?: boolean;
+    /** Živý náhled sloučení uzlů. */
+    mergePreview?: MergePreview | null;
   }
 
   let {
@@ -83,7 +87,8 @@
     previewTotalTime = $bindable(0),
     focusedObject = null,
     snapToPaths = false,
-    objEditOnlyHere = false
+    objEditOnlyHere = false,
+    mergePreview = null
   }: Props = $props();
 
   let canvas: HTMLCanvasElement = $state()!;
@@ -1426,6 +1431,9 @@
     // 8. Náhled právě kresleného tvaru
     const sp = shapePreview();
     if (sp) drawShapePreview(ctx, sp.pts, sp.closed, sp.label, zoom);
+
+    // 8c. Živý náhled sloučení uzlů
+    if (mergePreview && mergePreview.groups.length > 0) drawMergePreview(ctx, mergePreview, zoom);
 
     // 8b. Magnet: bod, ke kterému se kurzor přichytil
     if (drawTool && snapToPaths && snapHit) {

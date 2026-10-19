@@ -256,6 +256,12 @@ fn update_layout(
     )
 }
 
+/// Rozdělí surový import na samostatné objekty podle oddělených tvarů.
+#[tauri::command]
+fn split_objects(raw_paths: dpi_core::SubstratePaths) -> Vec<dpi_core::SubstratePaths> {
+    dpi_core::split_into_objects(&raw_paths)
+}
+
 // ─── Metadata a export ───────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -467,6 +473,7 @@ pub fn run() {
             compute_preview_segments,
             check_paths_overflow,
             update_layout,
+            split_objects,
             generate_gcode_job,
             compute_z_calibration,
             split_gcode_pauses,

@@ -256,6 +256,8 @@ pub struct MachineConfig {
     pub end_gcode: String,
     pub loop_start_gcode: String,
     pub loop_end_gcode: String,
+    #[serde(default)]
+    pub nozzle_change_gcode: String,
     pub multi_spacing: f64,
     pub block_height: f64,
     pub calibration_factor: f64,
@@ -446,4 +448,77 @@ pub struct ObjectOverride {
     /// (levý dolní …), None = automaticky podle nejkratší trasy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snake_start: Option<String>,
+}
+
+fn default_one() -> f64 {
+    1.0
+}
+
+/// Stav umístění objektu na jednom sklíčku (bez geometrie tras).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacementState {
+    pub object_id: String,
+    pub enabled: bool,
+    pub transform: Transform,
+    #[serde(default = "default_one")]
+    pub baked_scale: f64,
+    /// Název trysky přenastavené jen pro tento objekt (klíč do `nozzle_defs`).
+    /// `None` = tryska z globálních parametrů.
+    #[serde(default)]
+    pub nozzle_type: Option<String>,
+    /// Průměr přenastavené trysky v mm — řídí rozestup výplně i inset okrajů.
+    #[serde(default)]
+    pub nozzle_diam: Option<f64>,
+}
+
+impl PlacementState {
+    /// Efektivní průměr trysky: override objektu, jinak globální hodnota.
+    pub fn effective_nozzle_diam(&self, global: f64) -> f64 {
+        self.nozzle_diam.filter(|d| *d > 0.0).unwrap_or(global)
+    }
+}
+
+/// Umístění objektu na jednom skle včetně spočtené trasy — výstup `update_layout`
+/// a vstup do generátoru G-kódu / plánovače.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Placement {
+    pub object_id: String,
+    pub enabled: bool,
+    pub transform: Transform,
+    pub baked_scale: f64,
+    #[serde(default)]
+    pub nozzle_type: Option<String>,
+    #[serde(default)]
+    pub nozzle_diam: Option<f64>,
+    /// Zpracovaná trasa v lokálních souřadnicích sklíčka (po výplni a měřítku).
+    pub path: SubstratePaths,
+}
+
+impl Placement {
+    /// Stav bez geometrie — pro zpětné předání do `update_layout`.
+    pub fn state(&self) -> PlacementState {
+        PlacementState {
+            object_id: self.object_id.clone(),
+            enabled: self.enabled,
+            transform: self.transform,
+            baked_scale: self.baked_scale,
+            nozzle_type: self.nozzle_type.clone(),
+            nozzle_diam: self.nozzle_diam,
+        }
+    }
+
+    /// Efektivní průměr trysky: override objektu, jinak globální hodnota.
+    pub fn effective_nozzle_diam(&self, global: f64) -> f64 {
+        self.nozzle_diam.filter(|d| *d > 0.0).unwrap_or(global)
+    }
+}
+
+/// Objekt scény — odkaz do zdroje plus pořadí v něm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneObject {
+    pub id: String,
+    pub source_id: String,
+    pub index: usize,
+    pub name: String,
+    pub raw: SubstratePaths,
 }

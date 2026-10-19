@@ -5,6 +5,7 @@
  */
 import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData } from "./tauri";
 import { getTransformIdx } from "./geometry";
+import type { MergePreview } from "./nodeMerge";
 
 /** Transformuje bod z path-lokálního prostoru do world space.
  *  Odpovídá transform_pt v Rustu; Y-flip zajišťuje canvas scale(zoom,-zoom). */
@@ -767,4 +768,118 @@ export function drawShapePreview(
   ctx.fillStyle = "#a5f3fc";
   ctx.fillText(label, lx, ly);
   ctx.restore();
+}
+
+/**
+ * Živý náhled sloučení uzlů. Souřadnice přicházejí ve world space (popup je
+ * spočítal přes tpt se stejnou transformací, jakou má trasa).
+ */
+export function drawMergePreview(
+  ctx: CanvasRenderingContext2D,
+  preview: MergePreview,
+  zoom: number
+) {
+  // Uzly mimo merge — drobné světlé čtverečky s tmavým lemem
+  if (preview.others.length > 0) {
+    for (const [half, color] of [
+      [1.9 / zoom, "rgba(15,23,42,0.85)"],
+      [1.0 / zoom, "rgba(203,213,225,0.9)"],
+    ] as [number, string][]) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      for (const p of preview.others) ctx.rect(p.x - half, p.y - half, half * 2, half * 2);
+      ctx.fill();
+    }
+  }
+
+  // Trasa tak, jak bude vypadat po sloučení — jen v okolí změn
+  if (preview.runs.length > 0) {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    for (const run of preview.runs) {
+      ctx.moveTo(run.points[0].x, run.points[0].y);
+      for (let i = 1; i < run.points.length; i++) ctx.lineTo(run.points[i].x, run.points[i].y);
+    }
+    ctx.strokeStyle = "rgba(34,211,238,0.28)";
+    ctx.lineWidth = 5 / zoom;
+    ctx.stroke();
+    ctx.strokeStyle = "#22d3ee";
+    ctx.lineWidth = 1.6 / zoom;
+    ctx.stroke();
+  }
+
+  for (const g of preview.groups) {
+    const hot = g.index === preview.hovered;
+
+    // Spojnice slučovaných uzlů s cílovou pozicí
+    if (g.target) {
+      ctx.strokeStyle = hot ? "#f5d0fe" : "rgba(217,70,239,0.5)";
+      ctx.lineWidth = (hot ? 1.4 : 0.9) / zoom;
+      ctx.setLineDash([3 / zoom, 3 / zoom]);
+      ctx.beginPath();
+      for (const n of g.nodes) {
+        if (n.excluded) continue;
+        ctx.moveTo(n.x, n.y);
+        ctx.lineTo(g.target.x, g.target.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Dosah meze vzdálenosti u zvýrazněné skupiny
+    if (hot && g.target && preview.radius > 0) {
+      ctx.strokeStyle = "rgba(34,211,238,0.35)";
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([2 / zoom, 3 / zoom]);
+      ctx.beginPath();
+      ctx.arc(g.target.x, g.target.y, preview.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Uzly skupiny
+    for (const n of g.nodes) {
+      const r = (n.anchor ? 3.6 : 2.4) * (hot ? 1.25 : 1) / zoom;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = n.excluded ? "rgba(100,116,139,0.6)" : n.anchor ? "#fbbf24" : "#e879f9";
+      ctx.fill();
+      if (n.anchor || n.excluded) {
+        ctx.strokeStyle = n.excluded ? "rgba(148,163,184,0.7)" : "#fef3c7";
+        ctx.lineWidth = 1 / zoom;
+        ctx.stroke();
+      }
+    }
+
+    // Nově vzniklý uzel
+    if (g.target) {
+      ctx.beginPath();
+      ctx.arc(g.target.x, g.target.y, (hot ? 5 : 3.4) / zoom, 0, Math.PI * 2);
+      ctx.fillStyle = "#22d3ee";
+      ctx.fill();
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 1 / zoom;
+      ctx.stroke();
+    }
+
+    // Čísla uzlů — jen u zvýrazněné skupiny
+    if (hot) {
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.font = `bold ${8 / zoom}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const n of g.nodes) {
+        const lbl = `${n.label}`;
+        const ly = -(n.y + 7 / zoom);
+        const tw = ctx.measureText(lbl).width;
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillRect(n.x - tw / 2 - 2 / zoom, ly - 5 / zoom, tw + 4 / zoom, 10 / zoom);
+        ctx.fillStyle = n.excluded ? "#94a3b8" : n.anchor ? "#fde68a" : "#f5d0fe";
+        ctx.fillText(lbl, n.x, ly);
+      }
+      ctx.restore();
+    }
+  }
 }

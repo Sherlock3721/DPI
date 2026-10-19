@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820">
+  <defs>
+    <filter id="c4-shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.15"/>
+    </filter>
+    <linearGradient id="tauri-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+    <linearGradient id="svelte-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ea580c" />
+      <stop offset="100%" stop-color="#c2410c" />
+    </linearGradient>
+    <linearGradient id="rust-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b45309" />
+      <stop offset="100%" stop-color="#78350f" />
+    </linearGradient>
+    <linearGradient id="hw-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#475569" />
+      <stop offset="100%" stop-color="#334155" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1200" height="820" fill="#f8fafc" rx="12" />
+  <rect x="15" y="15" width="1170" height="790" fill="none" stroke="#e2e8f0" stroke-width="1.5" rx="8" />
+
+  <!-- Title Header -->
+  <g transform="translate(40, 50)">
+    <text font-family="'DejaVu Sans', sans-serif" font-size="22px" font-weight="bold" fill="#0f172a">[Diagram C4] Architektura systému Droplet Printing Interface (DPI)</text>
+    <text font-family="'DejaVu Sans', sans-serif" font-size="13px" fill="#64748b" y="24">Zobrazení kontejnerů, komponent jádra a fyzického hardwaru 3D tiskárny</text>
+  </g>
+
+  <!-- PERSON / USER -->
+  <g transform="translate(60, 130)" filter="url(#c4-shadow)">
+    <rect width="220" height="110" rx="8" fill="#0284c7" />
+    <circle cx="110" cy="35" r="16" fill="#ffffff" opacity="0.9" />
+    <path d="M 90 70 Q 110 50 130 70" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" />
+    <text x="110" y="92" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="14px" font-weight="bold" fill="#ffffff">Laborant / Výzkumník</text>
+    <text x="110" y="104" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="10px" fill="#e0f2fe">[Uživatel]</text>
+  </g>
+
+  <!-- TAURI APPLICATION BOUNDARY -->
+  <g transform="translate(340, 110)">
+    <rect width="810" height="490" rx="10" fill="#ffffff" stroke="#3b82f6" stroke-width="2" stroke-dasharray="6 4" />
+    <text x="20" y="28" font-family="'DejaVu Sans', sans-serif" font-size="14px" font-weight="bold" fill="#2563eb">Desktopová aplikace DPI [Tauri v2 Application Boundary]</text>
+
+    <!-- CONTAINER 1: SVELTE 5 FRONTEND -->
+    <g transform="translate(25, 50)" filter="url(#c4-shadow)">
+      <rect width="360" height="390" rx="8" fill="url(#svelte-grad)" />
+      <text x="20" y="32" font-family="'DejaVu Sans', sans-serif" font-size="16px" font-weight="bold" fill="#ffffff">Svelte 5 Frontend</text>
+      <text x="20" y="50" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#fed7aa">[Kontejner: HTML5 Canvas, Runes, Tailwind]</text>
+
+      <!-- Component A: Canvas2D -->
+      <rect x="20" y="70" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="94" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">Canvas2D Renderer</text>
+      <text x="35" y="114" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#ffedd5">Vykreslování podložky, tras a interpolace trysky</text>
+
+      <!-- Component B: State Stores -->
+      <rect x="20" y="145" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="169" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">Reaktivní Stores (Runes)</text>
+      <text x="35" y="189" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#ffedd5">projectStore, settingsStore, liquidStore</text>
+
+      <!-- Component C: Modals and Panels -->
+      <rect x="20" y="220" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="244" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">UI Komponenty &amp; Modály</text>
+      <text x="35" y="264" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#ffedd5">LeftPanel, RightPanel, BracketExport, ZCalib</text>
+
+      <!-- Component D: WASM Bridge -->
+      <rect x="20" y="295" width="320" height="70" rx="6" fill="rgba(255,255,255,0.25)" stroke="#ffffff" stroke-width="1.5" />
+      <text x="35" y="322" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">WASM Bridge (dpi-core)</text>
+      <text x="35" y="342" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#ffedd5">Okamžitý přepočet náhledu držáků &amp; drah</text>
+    </g>
+
+    <!-- CONTAINER 2: RUST TAURI BACKEND -->
+    <g transform="translate(420, 50)" filter="url(#c4-shadow)">
+      <rect width="360" height="390" rx="8" fill="url(#rust-grad)" />
+      <text x="20" y="32" font-family="'DejaVu Sans', sans-serif" font-size="16px" font-weight="bold" fill="#ffffff">Rust Core Backend</text>
+      <text x="20" y="50" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#fef3c7">[Kontejner: Tauri v2, Tokio, Serialport]</text>
+
+      <!-- Component E: Serial Comms Loop -->
+      <rect x="20" y="70" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="94" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">comms.rs (Serial Thread)</text>
+      <text x="35" y="114" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#fef3c7">Dedikované vlákno, mpsc fronta, handshake</text>
+
+      <!-- Component F: GCode Engine & Slicer -->
+      <rect x="20" y="145" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="169" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">dpi-core (Nativní jádro)</text>
+      <text x="35" y="189" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#fef3c7">TSP optimalizace, Bézier křivky, extruze</text>
+
+      <!-- Component G: Settings & Config -->
+      <rect x="20" y="220" width="320" height="65" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="244" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">settings.rs &amp; Storage</text>
+      <text x="35" y="264" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#fef3c7">Atomický zápis, validace typů, defaulty</text>
+
+      <!-- Component H: Sync WS Server -->
+      <rect x="20" y="295" width="320" height="70" rx="6" fill="rgba(255,255,255,0.18)" stroke="#ffffff" stroke-width="1" />
+      <text x="35" y="322" font-family="'DejaVu Sans', sans-serif" font-size="13px" font-weight="bold" fill="#ffffff">sync.rs (WebSocket Server)</text>
+      <text x="35" y="342" font-family="'DejaVu Sans', sans-serif" font-size="10.5px" fill="#fef3c7">Sdílení telemetrie do laboratorní sítě</text>
+    </g>
+  </g>
+
+  <!-- EXTERNAL HARDWARE -->
+  <!-- 1. 3D Printer -->
+  <g transform="translate(680, 640)" filter="url(#c4-shadow)">
+    <rect width="360" height="130" rx="8" fill="url(#hw-grad)" />
+    <text x="20" y="32" font-family="'DejaVu Sans', sans-serif" font-size="16px" font-weight="bold" fill="#ffffff">Prusa i3 MK3S (3D Tiskárna)</text>
+    <text x="20" y="52" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#cbd5e1">[Hardware &amp; Marlin Firmware]</text>
+    <text x="20" y="80" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• Stříkačkový dávkovač na pístu (NEMA 17)</text>
+    <text x="20" y="100" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• PINDA indukční sonda (nivelace bodů)</text>
+    <text x="20" y="120" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• Vyhřívaná podložka s magnetickou matricí</text>
+  </g>
+
+  <!-- 2. USB Camera -->
+  <g transform="translate(360, 640)" filter="url(#c4-shadow)">
+    <rect width="280" height="130" rx="8" fill="url(#hw-grad)" />
+    <text x="20" y="32" font-family="'DejaVu Sans', sans-serif" font-size="15px" font-weight="bold" fill="#ffffff">USB Mikroskop / Kamera</text>
+    <text x="20" y="52" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#cbd5e1">[Optická kontrola]</text>
+    <text x="20" y="80" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• Sledování tvorby kapky na jehle</text>
+    <text x="20" y="100" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• Vizuální asistence Z-Shiftu</text>
+    <text x="20" y="120" font-family="'DejaVu Sans', sans-serif" font-size="11px" fill="#ffffff">• WebKit2GTK / WebView2 Stream</text>
+  </g>
+
+  <!-- CONNECTIONS / ARROWS -->
+  <!-- User -> Frontend -->
+  <line x1="280" y1="185" x2="365" y2="185" stroke="#0284c7" stroke-width="3" marker-end="url(#arrow)" />
+  <text x="322" y="175" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="10px" font-weight="bold" fill="#0369a1">Ovládá UI</text>
+
+  <!-- Frontend <-> Backend IPC -->
+  <line x1="725" y1="280" x2="760" y2="280" stroke="#3b82f6" stroke-width="3" />
+  <text x="742" y="270" text-anchor="middle" font-family="'DejaVu Sans', sans-serif" font-size="10px" font-weight="bold" fill="#1d4ed8">IPC Invoke</text>
+
+  <!-- Backend -> 3D Printer (Serial) -->
+  <line x1="940" y1="550" x2="940" y2="640" stroke="#f59e0b" stroke-width="3" stroke-dasharray="4 2" />
+  <text x="945" y="600" font-family="'DejaVu Sans', sans-serif" font-size="10px" font-weight="bold" fill="#b45309">USB CDC Serial (115200)</text>
+
+  <!-- Camera -> Frontend -->
+  <line x1="500" y1="640" x2="500" y2="550" stroke="#10b981" stroke-width="3" stroke-dasharray="4 2" />
+  <text x="505" y="600" font-family="'DejaVu Sans', sans-serif" font-size="10px" font-weight="bold" fill="#047857">WebRTC / MediaDevices</text>
+</svg>
