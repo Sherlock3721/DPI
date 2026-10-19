@@ -99,6 +99,7 @@
 
   // Canvas ↔ pravý panel
   let canvasExternalSelected = $state(-1); // posIdx → zvýrazní sklíčko v plátně
+  let canvasExternalObjIdx = $state(-1); // index objektu → zvýrazní trasu v plátně
   let rightPanelOpenIdx = $state(-1); // sampleIdx → otevře accordion
   let rightPanelTrigger = $state(0); // inkrementuje se při každém canvas kliku
 
@@ -126,14 +127,19 @@
   let _prevFineness = $state(1.0);
   run(() => {
     const f = $settingsStore.path_fineness ?? 1.0;
-    if (f !== _prevFineness && $projectStore.rawFileText !== null) {
+    if (f !== _prevFineness && $projectStore.sources.length > 0) {
       _prevFineness = f;
       projectStore.reparseRaw(f);
     }
   });
 
-  // Kontrola mezí s ohledem na průměr trysky
-  function checkBoundsAgainstNozzle(paths: SubstratePaths, silent = false): boolean {
+  /** Zjistí, zda se import vejde na substrát; při přesahu zapne auto-scale
+   *  na jeho zdroji (a tím i na objektech, které z něj vznikly). */
+  function checkBoundsAgainstNozzle(
+    paths: SubstratePaths,
+    sourceId: string | null,
+    silent = false
+  ): boolean {
     const bbox = getBoundingBoxOfPaths(paths.segments);
     if (!bbox.hasPoints) return false;
     const width = bbox.maxX - bbox.minX;
@@ -141,46 +147,36 @@
     const nozzleDiam = $projectStore.params.nozzle_diam ?? 0.4;
     const usableW = $projectStore.params.slide_w - nozzleDiam;
     const usableH = $projectStore.params.slide_h - nozzleDiam;
-    if (width > usableW || height > usableH) {
-      $projectStore.autoScaleFile = true;
-      if (!silent) {
-        alert(
-          `Upozornění: Objekt (${width.toFixed(1)} × ${height.toFixed(1)} mm) přesahuje tisknutelnou plochu substrátu s ohledem na průměr trysky ${nozzleDiam} mm.\n` +
-            `Dostupná plocha: ${usableW.toFixed(1)} × ${usableH.toFixed(1)} mm.\n\n` +
-            `Objekt byl automaticky zmenšen.`
-        );
-      }
-      return true;
-    } else {
-      $projectStore.autoScaleFile = false;
-      return false;
+    const overflows = width > usableW || height > usableH;
+    if (sourceId) projectStore.setSourceAutoScale(sourceId, overflows);
+    if (overflows && !silent) {
+      alert(
+        `Upozornění: Objekt (${width.toFixed(1)} × ${height.toFixed(1)} mm) přesahuje tisknutelnou plochu substrátu s ohledem na průměr trysky ${nozzleDiam} mm.\n` +
+          `Dostupná plocha: ${usableW.toFixed(1)} × ${usableH.toFixed(1)} mm.\n\n` +
+          `Objekt byl automaticky zmenšen.`
+      );
     }
+    return overflows;
   }
 
   // Zkontroluje, zda by aktuálně umístěný objekt přesáhl okraj sklíčka
   // s insetem nového průměru trysky. Ptá se uživatele před zmenšením.
   async function handleNozzleDiamGrew(newDiam: number) {
-    if (!$projectStore.rawLoadedPaths || $projectStore.autoScaleFile) return;
-
     const state = $projectStore;
-    const nonPrimePositions = state.positions.filter((p) => !p.is_prime);
+    if (state.objects.length === 0 || state.objects.every((o) => o.auto_scale)) return;
 
-    const anyOverflow = await check_paths_overflow(
-      state.paths,
-      state.transforms,
-      nonPrimePositions,
-      newDiam
-    );
+    const nonPrimePositions = state.positions.filter((p) => !p.is_prime);
+    const anyOverflow = await check_paths_overflow(state.slides, nonPrimePositions, newDiam);
 
     if (!anyOverflow) return;
 
     const confirmed = await pauseModalRef.confirmOrCancel(
       `Se zvolenou tryskou (∅ ${newDiam} mm) by tisknutá trasa přesáhla okraj substrátu ` +
-        `a tryska by se dotkla jeho stěny. Chcete objekt automaticky zmenšit?`
+        `a tryska by se dotkla jeho stěny. Chcete objekty automaticky zmenšit?`
     );
 
     if (confirmed) {
-      projectStore.update((s) => ({ ...s, autoScaleFile: true }));
+      for (const src of state.sources) projectStore.setSourceAutoScale(src.id, true);
     }
   }
 
@@ -219,8 +215,7 @@
         // Bez bed levelingu: G28 → G28 W (obnoví mesh z paměti, neprobuje znovu)
         startGcode = startGcode.replace(/\bG28\b(?!\s*[XYZW])/g, "G28 W");
       }
-      const currentPaths = $projectStore.paths;
-      const currentTransforms = $projectStore.transforms;
+      const currentSlides = $projectStore.slides;
       const currentOverrides = $projectStore.overrides;
 
       // Rust expects z_offset in mm — convert if the UI unit is µm
@@ -228,7 +223,7 @@
         ? { ...currentParams, z_offset: currentParams.z_offset / 1000.0 }
         : currentParams;
 
-      const res = await generate_gcode(currentPaths, paramsForRust, currentTransforms, currentOverrides, {
+      const res = await generate_gcode(currentSlides, paramsForRust, currentOverrides, {
         bed: {
           max_x: globalBedX,
           max_y: globalBedY,
@@ -240,6 +235,9 @@
         end_gcode: endGcode,
         loop_start_gcode: loopStartGcode,
         loop_end_gcode: loopEndGcode,
+        nozzle_change_gcode: setts.nozzle_change_gcode ?? "",
+        print_order: setts.print_order ?? "nozzle_major",
+        route_mode: setts.route_mode ?? "no_cross",
         multi_spacing: globalMultiSpacing,
         block_height: globalBlockHeight,
         calibration_factor: calFactor,
@@ -274,11 +272,10 @@
 
   run(() => {
     $projectStore.params;
-    $projectStore.transforms;
     $projectStore.overrides;
-    $projectStore.paths;
+    $projectStore.slides;
     $projectStore.positions;
-    if ($projectStore.paths.length > 0) scheduleStatsRefresh();
+    if ($projectStore.slides.length > 0) scheduleStatsRefresh();
   });
 
   export async function generateGCodeSilently(overrideStartGcode?: string, skipZShiftSetup = false) {
@@ -314,6 +311,33 @@
     }
   }
 
+  /** Přidá další objekt ke stávající scéně (na rozdíl od „Načíst vzorek“,
+   *  které scénu nahradí). Objekt se založí na všech substrátech naráz. */
+  async function triggerAddObject() {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Vektorová grafika", extensions: ["svg", "dxf"] }],
+      });
+      if (!selected || typeof selected !== "string") return;
+      const text = await readTextFile(selected);
+      const fileName = selected.split(/[/\\]/).pop() || "";
+      const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+      if (ext !== "svg" && ext !== "dxf") {
+        alert(`Jako objekt lze přidat jen SVG nebo DXF (zvoleno: .${ext}).`);
+        return;
+      }
+      showWelcomeModal = false;
+      await projectStore.addImportFromText(text, ext, fileName, false);
+      const src = $projectStore.sources[$projectStore.sources.length - 1];
+      const obj = $projectStore.objects.find((o) => o.sourceId === src?.id);
+      if (obj) checkBoundsAgainstNozzle({ segments: obj.raw.segments }, src.id);
+    } catch (e) {
+      console.error("Chyba při přidávání objektu:", e);
+      alert("Nepodařilo se přidat objekt: " + e);
+    }
+  }
+
   async function loadRecentFile(absolutePath: string) {
     if (!(await checkUnsavedChanges())) return;
     await loadFileFromPath(absolutePath);
@@ -331,17 +355,17 @@
       addRecentFile(absolutePath, fileName);
 
       switch (ext) {
-        case "svg": {
-          const parsed = await parse_svg(text, fineness);
-          projectStore.setRawPaths(parsed, false, fileName, text, ext);
-          checkBoundsAgainstNozzle(parsed);
-          projectStore.setProjectSaved(null);
-          break;
-        }
+        case "svg":
         case "dxf": {
-          const parsed = await parse_dxf(text);
-          projectStore.setRawPaths(parsed, false, fileName, text, ext);
-          checkBoundsAgainstNozzle(parsed);
+          const parsed = ext === "svg" ? await parse_svg(text, fineness) : await parse_dxf(text);
+          await projectStore.addImport(parsed, {
+            fileName,
+            ext,
+            text,
+            fineness,
+            replace: true,
+          });
+          checkBoundsAgainstNozzle(parsed, $projectStore.sources[0]?.id ?? null);
           projectStore.setProjectSaved(null);
           break;
         }
@@ -350,14 +374,17 @@
           const meta = await parse_gcode_metadata(text);
           if (meta) {
             await projectStore.restoreFromGCode(meta, fineness);
-            if ($projectStore.rawLoadedPaths) {
-              checkBoundsAgainstNozzle($projectStore.rawLoadedPaths, true);
-            }
           } else {
             // Externí GCode bez DPI metadat — načti jako vizualizaci dráhy
             const parsed = await parse_gcode_file_paths(text);
-            projectStore.setRawPaths(parsed, false, fileName, text, "gcode");
-            checkBoundsAgainstNozzle(parsed);
+            await projectStore.addImport(parsed, {
+              fileName,
+              ext: "gcode",
+              text,
+              fineness,
+              replace: true,
+            });
+            checkBoundsAgainstNozzle(parsed, $projectStore.sources[0]?.id ?? null);
           }
           break;
         }
@@ -374,15 +401,47 @@
   async function _internalSaveGCode(saveAs: boolean) {
     const data = await triggerGCodeGeneration();
     const state = $projectStore;
+    // Projekt s jediným objektem zapisujeme i ve formátu v2 (source_file_* +
+    // transforms), aby ho otevřela i starší verze aplikace.
+    const single = state.objects.length === 1 ? state.objects[0] : null;
+    const legacyRows = single ? state.slides.filter((row) => row.length === 1) : [];
+    const singleSrc =
+      single && legacyRows.length === state.slides.length
+        ? state.sources.find((s) => s.id === single.sourceId)
+        : null;
     const meta: GCodeMetadata = {
       params: state.params,
       overrides: state.overrides,
-      transforms: state.transforms,
-      baked_scales: state.bakedScales ?? [],
-      source_file_name: state.fileName ?? "",
-      source_file_ext: state.rawFileExt ?? "",
-      source_file_content: state.rawFileText ?? "",
-      auto_scale: state.autoScaleFile,
+      sources: state.sources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        ext: s.ext,
+        content: s.text,
+        auto_scale: s.autoScale,
+        fineness: s.fineness,
+      })),
+      objects: state.objects.map((o) => ({
+        id: o.id,
+        source_id: o.sourceId,
+        index: o.index,
+        name: o.name,
+      })),
+      slides: state.slides.map((row) =>
+        row.map((p) => ({
+          object_id: p.object_id,
+          enabled: p.enabled,
+          transform: p.transform,
+          baked_scale: p.baked_scale,
+          nozzle_type: p.nozzle_type ?? null,
+          nozzle_diam: p.nozzle_diam ?? null,
+        }))
+      ),
+      transforms: singleSrc ? legacyRows.map((row) => row[0].transform) : [],
+      baked_scales: singleSrc ? legacyRows.map((row) => row[0].baked_scale) : [],
+      source_file_name: singleSrc ? singleSrc.name : "",
+      source_file_ext: singleSrc ? singleSrc.ext : "",
+      source_file_content: singleSrc ? singleSrc.text : "",
+      auto_scale: singleSrc ? singleSrc.autoScale : false,
       fineness: $settingsStore.path_fineness ?? 1.0,
     };
     const header = await build_gcode_metadata_header(meta);
@@ -486,10 +545,15 @@
   function handleKeyDown(event: KeyboardEvent) {
     if (event.ctrlKey && event.key.toLowerCase() === "o") {
       event.preventDefault();
-      triggerLoadFileInput();
+      if (event.shiftKey) triggerAddObject();
+      else triggerLoadFileInput();
     } else if (event.ctrlKey && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      triggerGCodeGeneration();
+      if (event.shiftKey) {
+        saveProjectAs();
+      } else {
+        saveProject();
+      }
     } else if (event.ctrlKey && event.key.toLowerCase() === "q") {
       event.preventDefault();
       quitApp();
@@ -509,15 +573,18 @@
     projectStore.triggerLayoutUpdate();
   }
 
-  // Reaktivní sledování tažení sklíček na Canvasu
-  function handleTransformChanged(event: CustomEvent<{ index: number; transform: Transform }>) {
-    const { index, transform } = event.detail;
-    projectStore.updateTransform(index, transform);
+  // Reaktivní sledování tažení objektů na Canvasu
+  function handleTransformChanged(
+    event: CustomEvent<{ slideIdx: number; objIdx: number; transform: Transform }>
+  ) {
+    const { slideIdx, objIdx, transform } = event.detail;
+    projectStore.updateTransform(slideIdx, objIdx, transform);
   }
 
-  function handlePathCleared(event: CustomEvent<{ index: number }>) {
-    const { index } = event.detail;
-    projectStore.clearPath(index);
+  /** Odebrání objektu z jednoho skla (Delete / kontextová nabídka) — vratné. */
+  function handleObjectHidden(event: CustomEvent<{ slideIdx: number; objIdx: number }>) {
+    const { slideIdx, objIdx } = event.detail;
+    projectStore.setObjectEnabled(slideIdx, objIdx, false);
   }
 
   onMount(async () => {
@@ -548,7 +615,14 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       // Těžká pole (zdrojový soubor, vygenerovaný G-kód) vzdálený náhled
       // nepotřebuje — neposíláme je při každé změně po síti.
-      const lean = { ...state, rawFileText: null, rawLoadedPaths: null, generatedGCode: "" };
+      // Těžká pole (zdrojové soubory, surová geometrie objektů, G-kód) vzdálený
+      // náhled nepotřebuje — kreslí z `slides[].path`.
+      const lean = {
+        ...state,
+        sources: state.sources.map((s) => ({ ...s, text: "" })),
+        objects: state.objects.map((o) => ({ ...o, raw: { segments: [] } })),
+        generatedGCode: "",
+      };
       ws.send(JSON.stringify(lean));
     }
 
@@ -676,6 +750,7 @@
     {isTauri}
     onResetProject={resetProject}
     onTriggerLoadFileInput={triggerLoadFileInput}
+    onAddObject={triggerAddObject}
     onLoadRecentFile={loadRecentFile}
     onSaveProject={saveProject}
     onSaveProjectAs={saveProjectAs}
@@ -723,21 +798,28 @@
         bedMaxX={globalBedX}
         bedMaxY={globalBedY}
         positions={$projectStore.positions}
-        paths={$projectStore.paths}
+        slides={$projectStore.slides}
+        objectNames={$projectStore.objects.map((o) => o.name)}
         primePath={$projectStore.primePath}
-        transforms={$projectStore.transforms}
         {currentNozzle}
         nozzleDiam={$projectStore.params ? $projectStore.params.nozzle_diam : 0.4}
         overrides={$projectStore.overrides}
         externalSelectedIndex={canvasExternalSelected}
+        externalSelectedObjIdx={canvasExternalObjIdx}
         totalPreviewTime={$projectStore.totalTime ?? 0}
         {extrusionRateUl}
         suspendAutoCenter={showWelcomeModal}
         on:transformChanged={handleTransformChanged}
-        on:pathCleared={handlePathCleared}
+        on:objectHidden={handleObjectHidden}
         on:saveState={() => projectStore.pushState()}
         on:pathRebuildNeeded={(e) =>
-          projectStore.rebuildSlicePath(e.detail.slideIdx, e.detail.scale, e.detail.rotation)}
+          projectStore.rebuildSlicePath(
+            e.detail.slideIdx,
+            e.detail.objIdx,
+            e.detail.scale,
+            e.detail.rotation
+          )}
+        on:objectSelected={(e) => (canvasExternalObjIdx = e.detail)}
         on:slideSelected={(e) => {
           const posIdx = e.detail;
           canvasExternalSelected = posIdx;
@@ -759,8 +841,17 @@
         bind:overrides={$projectStore.overrides}
         openSlideIdx={rightPanelOpenIdx}
         openTrigger={rightPanelTrigger}
+        slides={$projectStore.slides}
+        objects={$projectStore.objects}
+        selectedObjIdx={canvasExternalObjIdx}
+        globalNozzleDiam={$projectStore.params ? $projectStore.params.nozzle_diam : 0.4}
+        pauseModal={pauseModalRef}
         on:slideActivated={(e) => {
           canvasExternalSelected = sampleToPositionIdx(e.detail);
+        }}
+        on:objectSelected={(e) => {
+          canvasExternalSelected = sampleToPositionIdx(e.detail.slideIdx);
+          canvasExternalObjIdx = e.detail.objIdx;
         }}
       />
     </div>

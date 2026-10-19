@@ -42,4 +42,18 @@
       class="input-premium font-mono text-[10px] w-full resize-y min-h-[50px]"
     ></textarea>
   </div>
+  <div class="flex flex-col gap-1">
+    <span class="text-slate-400 font-bold uppercase text-[9px]">G-code po výměně trysky</span>
+    <span class="text-[9px] text-slate-500 leading-snug">
+      Vloží se po každé výměně trysky, hned za pauzou pro obsluhu. Homing je
+      povinný — nová jehla má jinou délku i vyosení. Prázdné pole = G28.
+      Kontrola vyosení se doplní sem, až bude k dispozici.
+    </span>
+    <textarea
+      bind:value={settings.nozzle_change_gcode}
+      rows="2"
+      placeholder="G28 ; Homing po vymene trysky"
+      class="input-premium font-mono text-[10px] w-full resize-y min-h-[50px]"
+    ></textarea>
+  </div>
 </div>

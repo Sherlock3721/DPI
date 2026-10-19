@@ -50,6 +50,16 @@ pub struct AppSettings {
     pub end_gcode: String,
     pub loop_start_gcode: String,
     pub loop_end_gcode: String,
+    /// Blok vkládaný po výměně trysky (homing a příprava na kontrolu vyosení).
+    #[serde(default)]
+    pub nozzle_change_gcode: String,
+    /// Pořadí tisku napříč substráty a tryskami — "substrate_major" | "nozzle_major".
+    #[serde(default)]
+    pub print_order: String,
+    /// Strategie přejezdů — "fastest" | "cross_allowed" (alias, stejný algoritmus)
+    /// nebo "no_cross".
+    #[serde(default)]
+    pub route_mode: String,
     // Výchozí procesní hodnoty
     pub default_z_offset: f64,
     pub default_z_hop: f64,

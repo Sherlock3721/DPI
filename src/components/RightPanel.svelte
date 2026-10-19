@@ -17,11 +17,18 @@
     Grip,
     Grid,
     Square,
+    Eye,
+    EyeOff,
+    Trash2,
+    Shapes,
+    TriangleAlert,
   } from "lucide-svelte";
-  import { subscribe_printer_status, type SlideOverride, type PrinterStatus } from "../lib/tauri";
+  import { subscribe_printer_status, type SlideOverride, type PrinterStatus, type Placement } from "../lib/tauri";
   import { liquidLimits } from "../stores/liquidStore";
   import { cameraAvailable } from "../stores/cameraStore";
   import { settingsStore } from "../stores/settingsStore";
+  import { projectStore, type ProjectObject } from "../stores/projectStore";
+  import { nozzleTraceColor } from "../lib/nozzleColors";
   import { convertExtrusionRate, toCanonicalExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
 
   interface Props {
@@ -32,6 +39,13 @@
      *  opakovaném výběru stejného sklíčka, aby se reactive blok vždy spustil. */
     openSlideIdx?: number;
     openTrigger?: number;
+    /** Umístění objektů po substrátech — `slides[i][k]` patří k `objects[k]`. */
+    slides?: Placement[][];
+    objects?: ProjectObject[];
+    /** Objekt zvýrazněný v plátně — ve výčtu se orámuje. */
+    selectedObjIdx?: number;
+    globalNozzleDiam?: number;
+    pauseModal?: { confirmOrCancel: (msg: string) => Promise<boolean> } | null;
   }
 
   let {
@@ -39,7 +53,12 @@
     primeActive = false,
     overrides = $bindable({}),
     openSlideIdx = -1,
-    openTrigger = 0
+    openTrigger = 0,
+    slides = [],
+    objects = [],
+    selectedObjIdx = -1,
+    globalNozzleDiam = 0.4,
+    pauseModal = null
   }: Props = $props();
 
   const dispatch = createEventDispatcher();
@@ -101,6 +120,66 @@
     } else {
       openSlides = openSlides.map((v, i) => (i === idx ? false : v));
     }
+  }
+
+  // ─── Výčet objektů na substrátu ───────────────────────────────────────────
+
+  /** Volby trysky pro override objektu — klíče z nastavení + globální volba. */
+  let nozzleOptions = $derived([
+    { value: "", label: "Globální tryska" },
+    ...Object.keys($settingsStore.nozzle_defs ?? {}).map((n) => ({ value: n, label: n })),
+  ]);
+
+  function objectName(objIdx: number): string {
+    return objects[objIdx]?.name || `Objekt ${objIdx + 1}`;
+  }
+
+  /** Barva trasy objektu s přenastavenou tryskou; null = standardní barva. */
+  function objectColor(p: Placement): string | null {
+    return nozzleTraceColor(p.nozzle_type, $settingsStore.nozzle_defs);
+  }
+
+  /** Rozměr trasy objektu v mm — orientační kontrola, že jde o ten správný. */
+  function objectSize(p: Placement): string {
+    let mnX = Infinity, mxX = -Infinity, mnY = Infinity, mxY = -Infinity;
+    for (const seg of p.path.segments)
+      for (const pt of seg.points) {
+        if (pt.x < mnX) mnX = pt.x;
+        if (pt.x > mxX) mxX = pt.x;
+        if (pt.y < mnY) mnY = pt.y;
+        if (pt.y > mxY) mxY = pt.y;
+      }
+    if (!isFinite(mnX)) return "";
+    const s = p.transform.scale;
+    return `${((mxX - mnX) * s).toFixed(1)} × ${((mxY - mnY) * s).toFixed(1)} mm`;
+  }
+
+  function toggleObject(slideIdx: number, objIdx: number, enabled: boolean) {
+    projectStore.pushState();
+    projectStore.setObjectEnabled(slideIdx, objIdx, enabled);
+  }
+
+  function changeObjectNozzle(slideIdx: number, objIdx: number, nozzleName: string) {
+    const defs = $settingsStore.nozzle_defs ?? {};
+    const def = defs[nozzleName];
+    projectStore.pushState();
+    projectStore.setObjectNozzle(
+      slideIdx,
+      objIdx,
+      nozzleName && def ? { type: nozzleName, diam: def[1] } : null
+    );
+  }
+
+  async function deleteObject(objIdx: number) {
+    const name = objectName(objIdx);
+    const ok = pauseModal
+      ? await pauseModal.confirmOrCancel(`Smazat objekt „${name}“ ze všech substrátů?`)
+      : true;
+    if (!ok) return;
+    const id = objects[objIdx]?.id;
+    if (!id) return;
+    projectStore.pushState();
+    projectStore.removeObject(id);
   }
 
   let primeSlide = $state({
@@ -547,6 +626,98 @@
           >
             <!-- FORM LAYOUT INSIDE ACCORDION CARD -->
             <div class="flex flex-col gap-2.5 pt-2">
+              <!-- VÝČET OBJEKTŮ NA SUBSTRÁTU -->
+              {#if (slides[idx]?.length ?? 0) > 0}
+                {@const row = slides[idx]}
+                {@const visible = row.filter((p) => p.enabled).length}
+                <div class="flex flex-col gap-1 rounded-sm border border-slate-800 bg-slate-950/40 p-1.5">
+                  <div class="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-400">
+                    <Shapes class="w-3 h-3 text-labaccent" />
+                    <span>Objekty na substrátu</span>
+                    <span class="ml-auto font-mono text-slate-500">{visible} z {row.length}</span>
+                  </div>
+
+                  {#if row.some((p) => p.enabled && p.nozzle_type)}
+                    <div
+                      class="flex items-start gap-1 rounded-sm bg-amber-500/10 border border-amber-500/30 px-1.5 py-1 text-[9px] leading-snug text-amber-200/90"
+                      title="Jiná tryska znamená jinou délku i vyosení jehly, proto se po výměně musí najet nuly"
+                    >
+                      <TriangleAlert class="w-3 h-3 shrink-0 mt-px" />
+                      <span>
+                        Výměna trysky přeruší tisk: pauza pro obsluhu, homing a kontrola vyosení.
+                      </span>
+                    </div>
+                  {/if}
+
+                  {#each row as placement, objIdx (placement.object_id)}
+                    {@const color = objectColor(placement)}
+                    <div
+                      class="flex items-center gap-1 rounded-sm px-1 py-0.5 border {selectedObjIdx === objIdx &&
+                      openSlides[idx]
+                        ? 'border-labaccent/50 bg-labaccent/10'
+                        : 'border-transparent hover:bg-slate-800/50'}"
+                    >
+                      <button
+                        type="button"
+                        title={placement.enabled
+                          ? "Skrýt objekt na tomto substrátu"
+                          : "Vrátit objekt na tento substrát"}
+                        aria-label={placement.enabled ? "Skrýt objekt" : "Zobrazit objekt"}
+                        aria-pressed={placement.enabled}
+                        onclick={() => toggleObject(idx, objIdx, !placement.enabled)}
+                        class="p-0.5 rounded-sm shrink-0 {placement.enabled
+                          ? 'text-slate-300 hover:text-white'
+                          : 'text-slate-600 hover:text-slate-400'}"
+                      >
+                        {#if placement.enabled}
+                          <Eye class="w-3.5 h-3.5" />
+                        {:else}
+                          <EyeOff class="w-3.5 h-3.5" />
+                        {/if}
+                      </button>
+
+                      <button
+                        type="button"
+                        onclick={() => dispatch("objectSelected", { slideIdx: idx, objIdx })}
+                        class="flex-1 min-w-0 text-left leading-tight"
+                        title={`${objectName(objIdx)} · ${objectSize(placement)}`}
+                      >
+                        <span
+                          class="block truncate text-[11px] {placement.enabled
+                            ? ''
+                            : 'line-through opacity-50'} {color ? 'font-semibold' : 'text-slate-200'}"
+                          style={color ? `color: ${color}` : ""}
+                        >
+                          {objectName(objIdx)}
+                        </span>
+                        <span class="block truncate text-[9px] text-slate-500 font-mono">
+                          {objectSize(placement)}
+                        </span>
+                      </button>
+
+                      <div class="w-24 h-6 shrink-0">
+                        <CustomSelect
+                          value={placement.nozzle_type ?? ""}
+                          on:change={(e) => changeObjectNozzle(idx, objIdx, e.detail.value)}
+                          options={nozzleOptions}
+                          cssStyle={`height: 100%; font-size: 9px;${color ? ` color: ${color};` : ""}`}
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        title="Smazat objekt ze všech substrátů"
+                        aria-label="Smazat objekt"
+                        onclick={() => deleteObject(objIdx)}
+                        class="p-0.5 rounded-sm shrink-0 text-slate-500 hover:text-red-400"
+                      >
+                        <Trash2 class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
               <!-- RESET BUTTON -->
               <button
                 type="button"

@@ -15,6 +15,14 @@ export interface SubstratePaths {
   segments: PathSegment[];
 }
 
+/** Značka kontroly vyosení trysky, kterou generátor vkládá za homing po každé
+ *  výměně trysky — zrcadlí `NOZZLE_ALIGN_MARKER` v `dpi-core/src/gcode.rs`.
+ *
+ *  Dnes je to jen komentář: tiskový front komentáře zahazuje, takže tisk
+ *  pokračuje bez přerušení. Až kontrola vyosení vznikne, bude ji `comms.rs`
+ *  rozpoznávat stejně jako `; APP_PAUSE:` a posílat frontendu událost. */
+export const NOZZLE_ALIGN_MARKER = "; DPI_NOZZLE_ALIGN:";
+
 export interface Transform {
   scale: number;
   rotation: number;
@@ -22,6 +30,35 @@ export interface Transform {
   gui_dy: number;
   cx: number;
   cy: number;
+}
+
+/** Objekt scény — samostatně umístitelný tvar. Jeden import se na objekty
+ *  rozpadá podle oddělených tvarů (`split_objects` v Rustu). */
+export interface SceneObject {
+  id: string;
+  name: string;
+  /** Surová geometrie jen tohoto objektu (souřadnice zdrojového importu). */
+  raw: SubstratePaths;
+  /** Bbox celého importu `[min_x, max_x, min_y, max_y]` — společný rám pro
+   *  normalizaci, díky němuž objekty z jednoho souboru drží vzájemné rozložení. */
+  frame: [number, number, number, number];
+  auto_scale: boolean;
+}
+
+/** Stav umístění objektu na jednom skle (bez geometrie) — vstup do update_layout. */
+export interface PlacementState {
+  object_id: string;
+  enabled: boolean;
+  transform: Transform;
+  baked_scale: number;
+  /** Tryska přenastavená jen pro tento objekt; null = globální tryska. */
+  nozzle_type?: string | null;
+  nozzle_diam?: number | null;
+}
+
+/** Umístění objektu včetně spočtené trasy — výstup update_layout. */
+export interface Placement extends PlacementState {
+  path: SubstratePaths;
 }
 
 export interface ProcessParams {
@@ -93,9 +130,33 @@ export interface GCodeResponse {
   total_time: number;
 }
 
+/** Zdrojový soubor importu v metadatech — geometrie se neukládá, při obnově
+ *  se soubor znovu naparsuje a rozdělí na objekty. */
+export interface SourceMeta {
+  id: string;
+  name: string;
+  ext: string;
+  content: string;
+  auto_scale: boolean;
+  fineness: number;
+}
+
+export interface ObjectMeta {
+  id: string;
+  source_id: string;
+  /** Pořadí objektu ve výsledku `split_objects` nad zdrojem. */
+  index: number;
+  name: string;
+}
+
 export interface GCodeMetadata {
   params: ProcessParams;
   overrides: Record<string, SlideOverride>;
+  sources: SourceMeta[];
+  objects: ObjectMeta[];
+  slides: PlacementState[][];
+  // Pole formátu v2 — čtou se ze starších souborů, zapisují se jen
+  // u projektů s jediným objektem (aby je otevřela i starší verze).
   transforms: Transform[];
   baked_scales: number[];
   source_file_name: string;
@@ -132,6 +193,12 @@ export interface AppSettings {
   end_gcode: string;
   loop_start_gcode: string;
   loop_end_gcode: string;
+  /** Blok po výměně trysky — homing a příprava na kontrolu vyosení. */
+  nozzle_change_gcode?: string;
+  /** Pořadí tisku napříč substráty a tryskami — "substrate_major" | "nozzle_major". */
+  print_order?: string;
+  /** Strategie přejezdů — "fastest" | "cross_allowed" (alias) | "no_cross". */
+  route_mode?: string;
   // Výchozí procesní hodnoty
   default_z_offset: number;
   default_z_hop: number;
@@ -215,11 +282,11 @@ export async function disconnect_from_printer(): Promise<void> {
 /** Výsledek update_layout — kompletní data pro překreslení plátna. */
 export interface LayoutUpdateResult {
   positions: LayoutPosition[];
-  transforms: Transform[];
-  paths: SubstratePaths[];
+  /** `slides[i][k]` patří k `objects[k]` — každé sklíčko nese položku pro každý
+   *  objekt, skryté mají `enabled === false`. */
+  slides: Placement[][];
   prime_path: SubstratePaths | null;
   final_sample_count: number;
-  baked_scales: number[];
 }
 
 export interface BedConfig {
@@ -235,29 +302,48 @@ export interface BedConfig {
 export async function update_layout(
   params: ProcessParams,
   overrides: Record<string, SlideOverride>,
-  rawPaths: SubstratePaths | null,
-  autoScale: boolean,
-  bakedScales: number[],
+  objects: SceneObject[],
+  slides: PlacementState[][],
   oldPositions: LayoutPosition[],
-  currentTransforms: Transform[],
   bed: BedConfig,
   multiSpacing: number
 ): Promise<LayoutUpdateResult> {
   return await invoke<LayoutUpdateResult>("update_layout", {
     params,
     overrides,
-    rawPaths,
-    autoScale,
-    bakedScales,
+    objects,
+    slides,
     oldPositions,
-    currentTransforms,
     bed,
     multiSpacing,
   });
 }
 
+/** Rozdělí surový import na samostatné objekty podle oddělených tvarů. */
+export async function split_objects(rawPaths: SubstratePaths): Promise<SubstratePaths[]> {
+  return await invoke<SubstratePaths[]>("split_objects", { rawPaths });
+}
+
+/** Najde volné místo na sklíčku pro nově přidanou skupinu objektů.
+ *  Vrací `[dx, dy]`, nebo null když se skupina nikam nevejde. */
+export async function find_free_offset(
+  pos: LayoutPosition,
+  newAabb: [number, number, number, number],
+  occupied: [number, number, number, number][],
+  nozzleDiam: number
+): Promise<[number, number] | null> {
+  return await invoke<[number, number] | null>("find_free_offset", {
+    pos,
+    newAabb,
+    occupied,
+    nozzleDiam,
+  });
+}
+
 export interface PreviewSegData {
   slide_idx: number;
+  /** Index objektu (placementu) na sklíčku — u odplivu vždy 0. */
+  obj_idx: number;
   seg_idx: number;
   path_start_dist: number;
   point_dists: number[];
@@ -272,28 +358,30 @@ export interface PreviewDistResult {
 /** Předpočítá kumulativní vzdálenosti segmentů pro náhled průběhu tisku. */
 export async function compute_preview_segments(
   positions: LayoutPosition[],
-  paths: SubstratePaths[],
-  transforms: Transform[],
-  primePath: SubstratePaths | null
+  slides: Placement[][],
+  primePath: SubstratePaths | null,
+  globalNozzle: string,
+  printOrder: string,
+  routeMode: string
 ): Promise<PreviewDistResult> {
   return await invoke<PreviewDistResult>("compute_preview_segments", {
     positions,
-    paths,
-    transforms,
+    slides,
     primePath,
+    globalNozzle,
+    printOrder,
+    routeMode,
   });
 }
 
 /** Vrátí `true` pokud některá z transformovaných tras přesahuje okraj sklíčka s insetem trysky. */
 export async function check_paths_overflow(
-  paths: SubstratePaths[],
-  transforms: Transform[],
+  slides: Placement[][],
   nonPrimePositions: LayoutPosition[],
   nozzleDiam: number
 ): Promise<boolean> {
   return await invoke<boolean>("check_paths_overflow", {
-    paths,
-    transforms,
+    slides,
     nonPrimePositions,
     nozzleDiam,
   });
@@ -312,6 +400,12 @@ export interface MachineConfig {
   end_gcode: string;
   loop_start_gcode: string;
   loop_end_gcode: string;
+  /** G-kód po výměně trysky; prázdný = vestavěný default (G28). */
+  nozzle_change_gcode?: string;
+  /** Pořadí tisku napříč substráty a tryskami — "substrate_major" | "nozzle_major". */
+  print_order?: string;
+  /** Strategie přejezdů — "fastest" | "cross_allowed" (alias) | "no_cross". */
+  route_mode?: string;
   multi_spacing: number;
   block_height: number;
   calibration_factor: number;
@@ -325,16 +419,14 @@ export interface MachineConfig {
 }
 
 export async function generate_gcode(
-  slidePaths: SubstratePaths[],
+  slides: Placement[][],
   params: ProcessParams,
-  transforms: Transform[],
   slideOverrides: Record<string, SlideOverride>,
   machine: MachineConfig
 ): Promise<GCodeResponse> {
   return await invoke<GCodeResponse>("generate_gcode_job", {
-    slidePaths,
+    slides,
     params,
-    transforms,
     slideOverrides,
     machine,
   });
@@ -431,6 +523,8 @@ export interface SliceParams {
   infill_angle: number;
   nozzle_diam: number;
   user_scale: number;
+  /** Společný rám importu `[min_x, max_x, min_y, max_y]`; null = bbox vlastní geometrie. */
+  frame?: [number, number, number, number] | null;
 }
 
 /** Zpracuje raw vektorové dráhy (normalizace, škálování, infill) — Rust dpi-core. */

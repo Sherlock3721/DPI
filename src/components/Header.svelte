@@ -7,6 +7,8 @@
     onResetProject: () => void;
     isTauri?: boolean;
     onTriggerLoadFileInput: () => void;
+    /** Přidá další objekt ke stávající scéně (nenahrazuje ji). */
+    onAddObject: () => void;
     onLoadRecentFile: (path: string) => void;
     onSaveProject: () => void;
     onSaveProjectAs: () => void;
@@ -30,6 +32,7 @@
     onResetProject,
     isTauri = true,
     onTriggerLoadFileInput,
+    onAddObject,
     onLoadRecentFile,
     onSaveProject,
     onSaveProjectAs,
@@ -79,6 +82,14 @@
             >
               <span>Načíst vzorek</span>
               <span class="text-[9px] text-slate-500 font-mono">Ctrl+O</span>
+            </button>
+            <button
+              onclick={onAddObject}
+              title="Přidá další objekt ke stávajícím — na všechny substráty"
+              class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent flex items-center justify-between transition-all duration-150"
+            >
+              <span>Přidat objekt</span>
+              <span class="text-[9px] text-slate-500 font-mono">Ctrl+Shift+O</span>
             </button>
             <button
               onclick={onSaveProject}

@@ -3,8 +3,9 @@
  * Komponenta drží kameru (pan/zoom), interakce a hit-testing; sem patří vše,
  * co jen kreslí do CanvasRenderingContext2D na základě předaných hodnot.
  */
-import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData } from "./tauri";
+import type { LayoutPosition, SubstratePaths, Point2D, SlideOverride, PreviewSegData, Placement } from "./tauri";
 import { getTransformIdx } from "./geometry";
+import type { MergePreview } from "./nodeMerge";
 
 /** Transformuje bod z path-lokálního prostoru do world space.
  *  Odpovídá transform_pt v Rustu; Y-flip zajišťuje canvas scale(zoom,-zoom). */
@@ -28,6 +29,8 @@ export function tpt(
 
 export interface PreviewCursor {
   slideIdx: number;
+  /** Index objektu na sklíčku, ke kterému segment patří. */
+  objIdx: number;
   segIdx: number;
   ptIdx: number;
   fracT: number;
@@ -53,7 +56,7 @@ export function computePreviewCursor(
       const d1 = ptIdx + 1 < sd.point_dists.length ? sd.point_dists[ptIdx + 1] : d0;
       const interval = d1 - d0;
       const fracT = interval > 1e-9 ? Math.min(1, (distIntoSeg - d0) / interval) : 0;
-      return { slideIdx: sd.slide_idx, segIdx: sd.seg_idx, ptIdx, fracT };
+      return { slideIdx: sd.slide_idx, objIdx: sd.obj_idx, segIdx: sd.seg_idx, ptIdx, fracT };
     }
   }
   return null;
@@ -125,16 +128,20 @@ export function drawBedAndGrid(
 
 export interface SlidesDrawOptions {
   positions: LayoutPosition[];
-  paths: SubstratePaths[];
+  /** Umístění objektů po sklíčkách — `slides[i][k]` patří k objektu `k`. */
+  slides: Placement[][];
   primePath: SubstratePaths | null;
-  transforms: Transform[];
   overrides: Record<string, SlideOverride>;
   selectedIndex: number;
+  /** Index vybraného objektu na vybraném sklíčku; -1 = vybráno jen sklíčko. */
+  selectedObjIdx: number;
   nozzleDiam: number;
   zoom: number;
   cursor: PreviewCursor | null;
   /** Rozměry skla pro odplivové sklíčko typu „vzorkové" (slide_w/slide_h z parametrů). */
   primeGlassSize: { w: number; h: number } | null;
+  /** Barva trasy objektu s přenastavenou tryskou; null = barva sklíčka. */
+  nozzleColor: (nozzleType: string | null | undefined) => string | null;
 }
 
 /** Sklíčka, trasy (s ořezem dle preview kurzoru) a popisky.
@@ -143,12 +150,21 @@ export function drawSlidesAndPaths(
   ctx: CanvasRenderingContext2D,
   o: SlidesDrawOptions
 ): { x: number; y: number } | null {
-  const { positions, paths, primePath, transforms, overrides, selectedIndex, nozzleDiam, zoom, cursor } = o;
+  const { positions, slides, primePath, overrides, selectedIndex, selectedObjIdx, nozzleDiam, zoom, cursor } = o;
 
   let previewNozzleWX = 0,
     previewNozzleWY = 0,
     hasPreviewNozzle = false;
   let previewDone = false;
+
+  /** Pořadí kreslení vs. pozice kurzoru náhledu: -1 před, 0 na, 1 za. */
+  const cmpCursor = (slideIdx: number, objIdx: number, segIdx: number): number => {
+    if (!cursor) return -1;
+    if (slideIdx !== cursor.slideIdx) return slideIdx < cursor.slideIdx ? -1 : 1;
+    if (objIdx !== cursor.objIdx) return objIdx < cursor.objIdx ? -1 : 1;
+    if (segIdx !== cursor.segIdx) return segIdx < cursor.segIdx ? -1 : 1;
+    return 0;
+  };
 
   for (let i = 0; i < positions.length; i++) {
     const pos = positions[i];
@@ -174,40 +190,70 @@ export function drawSlidesAndPaths(
     ctx.lineWidth = (isSelected ? 2.0 : 1.0) / zoom;
     ctx.strokeRect(pos.x, pos.y, glassW, glassH);
 
-    // ── TRASA ────────────────────────────────────────────────────────────
-    // Parametry transformace (výchozí = identity pro primepath)
-    let pathData: SubstratePaths | null = null;
-    let pX = pos.x,
-      pY = pos.y,
-      pRot = 0.0,
-      pScale = 1.0;
-    let pCX = pos.width / 2,
-      pCY = pos.height / 2;
+    // ── TRASY OBJEKTŮ ────────────────────────────────────────────────────
+    // Odpliv má jedinou trasu s identickou transformací; vzorková sklíčka
+    // tolik tras, kolik na nich leží viditelných objektů.
+    interface DrawItem {
+      objIdx: number;
+      pathData: SubstratePaths;
+      t: { x: number; y: number; rot: number; scale: number; cx: number; cy: number };
+      color: string;
+      width: number;
+      isSelectedObj: boolean;
+    }
+    const items: DrawItem[] = [];
 
     if (pos.is_prime) {
-      pathData = primePath;
-    } else if (transforms[tidx]) {
-      const tr = transforms[tidx];
-      pathData = paths[tidx] || null;
-      pX = tr.gui_dx;
-      pY = tr.gui_dy;
-      pRot = tr.rotation;
-      pScale = tr.scale;
-      pCX = tr.cx;
-      pCY = tr.cy;
+      if (primePath) {
+        items.push({
+          objIdx: 0,
+          pathData: primePath,
+          t: { x: pos.x, y: pos.y, rot: 0, scale: 1, cx: pos.width / 2, cy: pos.height / 2 },
+          color: slideColor,
+          width: nozzleDiam,
+          isSelectedObj: false,
+        });
+      }
+    } else {
+      const row = slides[tidx] ?? [];
+      for (let k = 0; k < row.length; k++) {
+        const pl = row[k];
+        if (!pl.enabled || pl.path.segments.length === 0) continue;
+        const custom = o.nozzleColor(pl.nozzle_type);
+        items.push({
+          objIdx: k,
+          pathData: pl.path,
+          t: {
+            x: pl.transform.gui_dx,
+            y: pl.transform.gui_dy,
+            rot: pl.transform.rotation,
+            scale: pl.transform.scale,
+            cx: pl.transform.cx,
+            cy: pl.transform.cy,
+          },
+          color: custom ?? slideColor,
+          width: pl.nozzle_diam && pl.nozzle_diam > 0 ? pl.nozzle_diam : nozzleDiam,
+          isSelectedObj: isSelected && k === selectedObjIdx,
+        });
+      }
     }
 
-    if (pathData && pathData.segments.length > 0) {
+    for (const item of items) {
+      if (previewDone) break;
+      const { pathData } = item;
+      const { x: pX, y: pY, rot: pRot, scale: pScale, cx: pCX, cy: pCY } = item.t;
+
       ctx.save();
       // Klip na hranici skla (world souřadnice — bariéra bez paddingu)
       ctx.beginPath();
       ctx.rect(pos.x, pos.y, glassW, glassH);
       ctx.clip();
 
-      ctx.strokeStyle = slideColor;
-      ctx.fillStyle = slideColor;
-      ctx.globalAlpha = isSelected ? 1.0 : 0.7;
-      ctx.lineWidth = nozzleDiam;
+      ctx.strokeStyle = item.color;
+      ctx.fillStyle = item.color;
+      // Vybraný objekt plně, ostatní na jeho skle o něco slaběji
+      ctx.globalAlpha = item.isSelectedObj ? 1.0 : isSelected ? 0.85 : 0.7;
+      ctx.lineWidth = item.width;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
 
@@ -221,10 +267,12 @@ export function drawSlidesAndPaths(
           fracWY: number | null = null;
 
         if (cursor !== null) {
-          if (i > cursor.slideIdx || (i === cursor.slideIdx && si > cursor.segIdx)) {
+          const rel = cmpCursor(i, item.objIdx, si);
+          if (rel > 0) {
             // Po kurzoru — přeskočit vše
+            previewDone = true;
             break;
-          } else if (i === cursor.slideIdx && si === cursor.segIdx) {
+          } else if (rel === 0) {
             // Kurzorovací segment — kreslit jen do ptIdx, pak interpolovat
             toRender = cursor.ptIdx + 1;
             if (cursor.fracT > 0 && cursor.ptIdx + 1 < seg.points.length) {
@@ -243,7 +291,7 @@ export function drawSlidesAndPaths(
             }
             previewDone = true;
           }
-          // else: before cursor — draw all (toRender stays seg.points.length)
+          // else: před kurzorem — kreslit celý segment
         }
 
         const p0 = seg.points[0];
@@ -257,7 +305,7 @@ export function drawSlidesAndPaths(
         if (isDot) {
           const [wx, wy] = tpt(p0.x, p0.y, pX, pY, pScale, pRot, pCX, pCY);
           ctx.beginPath();
-          ctx.arc(wx, wy, nozzleDiam / 2, 0, Math.PI * 2);
+          ctx.arc(wx, wy, item.width / 2, 0, Math.PI * 2);
           ctx.fill();
         } else if (toRender > 0) {
           ctx.beginPath();
@@ -273,13 +321,13 @@ export function drawSlidesAndPaths(
           ctx.stroke();
 
           // Označení začátků segmentů pro vybranou trasu (orientace tisku)
-          if (isSelected && !pos.is_prime) {
+          if (item.isSelectedObj) {
             const [sx, sy] = tpt(seg.points[0].x, seg.points[0].y, pX, pY, pScale, pRot, pCX, pCY);
             ctx.fillStyle = "#22d3ee";
             ctx.beginPath();
             ctx.arc(sx, sy, 1.5 / zoom, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = slideColor;
+            ctx.fillStyle = item.color;
           }
         }
 
@@ -642,4 +690,126 @@ export function drawShapePreview(
   ctx.fillStyle = "#a5f3fc";
   ctx.fillText(label, lx, ly);
   ctx.restore();
+}
+
+/**
+ * Živý náhled sloučení uzlů. Souřadnice přicházejí ve world space (popup je
+ * spočítal přes tpt se stejnou transformací, jakou má trasa), takže funkce jen
+ * kreslí: uzly mimo merge jako potlačené čtverečky, slučované uzly fialově,
+ * vyjmuté šedě, kotvy jantarově s prstencem a nově vznikající uzel azurově.
+ * Azurová linka navíc ukazuje, jak bude trasa po sloučení vypadat — vykresluje
+ * se jen okolí změn, zbytek trasy zůstává v podání drawSlidesAndPaths.
+ * Zvýrazněná skupina dostane kružnici o poloměru meze vzdálenosti a čísla
+ * uzlů shodná s popisky v popupu.
+ */
+export function drawMergePreview(
+  ctx: CanvasRenderingContext2D,
+  preview: MergePreview,
+  zoom: number
+) {
+  // Uzly mimo merge — drobné světlé čtverečky s tmavým lemem, aby byly čitelné
+  // i na samotné trase. Dvě dávkové cesty místo fill() na každý bod: u hustých
+  // tras jde o tisíce uzlů a jednotlivé fill() by srážely snímkování.
+  if (preview.others.length > 0) {
+    for (const [half, color] of [
+      [1.9 / zoom, "rgba(15,23,42,0.85)"],
+      [1.0 / zoom, "rgba(203,213,225,0.9)"],
+    ] as [number, string][]) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      for (const p of preview.others) ctx.rect(p.x - half, p.y - half, half * 2, half * 2);
+      ctx.fill();
+    }
+  }
+
+  // Trasa tak, jak bude vypadat po sloučení — jen v okolí změn
+  if (preview.runs.length > 0) {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    for (const run of preview.runs) {
+      ctx.moveTo(run.points[0].x, run.points[0].y);
+      for (let i = 1; i < run.points.length; i++) ctx.lineTo(run.points[i].x, run.points[i].y);
+    }
+    ctx.strokeStyle = "rgba(34,211,238,0.28)";
+    ctx.lineWidth = 5 / zoom;
+    ctx.stroke();
+    ctx.strokeStyle = "#22d3ee";
+    ctx.lineWidth = 1.6 / zoom;
+    ctx.stroke();
+  }
+
+  for (const g of preview.groups) {
+    const hot = g.index === preview.hovered;
+
+    // Spojnice slučovaných uzlů s cílovou pozicí
+    if (g.target) {
+      ctx.strokeStyle = hot ? "#f5d0fe" : "rgba(217,70,239,0.5)";
+      ctx.lineWidth = (hot ? 1.4 : 0.9) / zoom;
+      ctx.setLineDash([3 / zoom, 3 / zoom]);
+      ctx.beginPath();
+      for (const n of g.nodes) {
+        if (n.excluded) continue;
+        ctx.moveTo(n.x, n.y);
+        ctx.lineTo(g.target.x, g.target.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Dosah meze vzdálenosti u zvýrazněné skupiny
+    if (hot && g.target && preview.radius > 0) {
+      ctx.strokeStyle = "rgba(34,211,238,0.35)";
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([2 / zoom, 3 / zoom]);
+      ctx.beginPath();
+      ctx.arc(g.target.x, g.target.y, preview.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Uzly skupiny
+    for (const n of g.nodes) {
+      const r = (n.anchor ? 3.6 : 2.4) * (hot ? 1.25 : 1) / zoom;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = n.excluded ? "rgba(100,116,139,0.6)" : n.anchor ? "#fbbf24" : "#e879f9";
+      ctx.fill();
+      if (n.anchor || n.excluded) {
+        ctx.strokeStyle = n.excluded ? "rgba(148,163,184,0.7)" : "#fef3c7";
+        ctx.lineWidth = 1 / zoom;
+        ctx.stroke();
+      }
+    }
+
+    // Nově vzniklý uzel
+    if (g.target) {
+      ctx.beginPath();
+      ctx.arc(g.target.x, g.target.y, (hot ? 5 : 3.4) / zoom, 0, Math.PI * 2);
+      ctx.fillStyle = "#22d3ee";
+      ctx.fill();
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 1 / zoom;
+      ctx.stroke();
+    }
+
+    // Čísla uzlů — jen u zvýrazněné skupiny, jinak by se popisky slily
+    if (hot) {
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.font = `bold ${8 / zoom}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const n of g.nodes) {
+        const lbl = `${n.label}`;
+        const ly = -(n.y + 7 / zoom);
+        const tw = ctx.measureText(lbl).width;
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillRect(n.x - tw / 2 - 2 / zoom, ly - 5 / zoom, tw + 4 / zoom, 10 / zoom);
+        ctx.fillStyle = n.excluded ? "#94a3b8" : n.anchor ? "#fde68a" : "#f5d0fe";
+        ctx.fillText(lbl, n.x, ly);
+      }
+      ctx.restore();
+    }
+  }
 }

@@ -2,9 +2,11 @@
   import { run } from 'svelte/legacy';
 
   import { onMount, createEventDispatcher } from "svelte";
-  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData } from "../lib/tauri";
+  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, PreviewSegData, Placement } from "../lib/tauri";
   import { compute_preview_segments } from "../lib/tauri";
-  import { computeWorldAABB, clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
+  import { clampGuidXY, getTransformIdx, type RawBbox } from "../lib/geometry";
+  import { nozzleTraceColor } from "../lib/nozzleColors";
+  import { settingsStore } from "../stores/settingsStore";
   import { wasm_max_fit_rotation_factor, wasm_max_fit_scale } from "../lib/dpiWasm";
   import {
     tpt,
@@ -18,7 +20,9 @@
     drawOverlayBox,
     drawSnapGrid,
     drawShapePreview,
+    drawMergePreview,
   } from "../lib/canvas2dDraw";
+  import type { MergePreview } from "../lib/nodeMerge";
   import { projectStore, type DrawnShape } from "../stores/projectStore";
 
   const dispatch = createEventDispatcher();
@@ -27,38 +31,42 @@
     bedMaxX?: number;
     bedMaxY?: number;
     positions?: LayoutPosition[];
-    paths?: SubstratePaths[];
+    /** Umístění objektů po sklíčkách — `slides[i][k]` patří k objektu `k`. */
+    slides?: Placement[][];
     primePath?: SubstratePaths | null;
-    transforms?: Transform[];
     overrides?: Record<string, SlideOverride>;
     currentNozzle?: Point2D | null;
     nozzleDiam?: number;
     selectedIndex?: any;
+    /** Index vybraného objektu na vybraném sklíčku; -1 = vybráno jen sklíčko. */
+    selectedObjIdx?: number;
     showAxes?: boolean;
     isMeasuring?: boolean;
     measurePoints?: { x: number; y: number }[];
     printProgress?: number;
     extrusionRateUl?: number; // µl/mm, 0 = neznámý (skryj objem)
     drawTool?: "rect" | "ellipse" | "line" | null;
+    mergePreview?: MergePreview | null;
   }
 
   let {
     bedMaxX = 250.0,
     bedMaxY = 210.0,
     positions = [],
-    paths = [],
+    slides = [],
     primePath = null,
-    transforms = [],
     overrides = {},
     currentNozzle = null,
     nozzleDiam = 0.4,
     selectedIndex = -1,
+    selectedObjIdx = -1,
     showAxes = true,
     isMeasuring = false,
     measurePoints = $bindable([]),
     printProgress = 100,
     extrusionRateUl = 0,
-    drawTool = null
+    drawTool = null,
+    mergePreview = null
   }: Props = $props();
 
   let canvas: HTMLCanvasElement = $state()!;
@@ -77,11 +85,38 @@
   let activeHandle = -1; // 0=TL 1=TR 2=BL 3=BR
   let hoverHandle = $state(-1);
   let dragSlideIdx = -1; // independent of selectedIndex prop lag
+  let dragObjIdx = -1; // objekt, se kterým se táhne
   let dragStartWorld = { x: 0, y: 0 };
   let dragStartTransform: Transform | null = null;
+  /** Výchozí transformace téhož objektu na ostatních sklech (ALT = na všechna). */
   let dragStartTransformsAll: Map<number, Transform> = new Map();
-  // Indexy transformů mutovaných během dragu — store se aktualizuje až na mouseup
-  let _dragModifiedIndices: Set<number> = new Set();
+  // Umístění mutovaná během dragu — store se aktualizuje až na mouseup
+  let _dragModifiedIndices: Map<string, { slideIdx: number; objIdx: number }> = new Map();
+
+  /** Umístění objektu na sklíčku dané POZICÍ v layoutu (přeskakuje odpliv). */
+  function placementAt(posIdx: number, objIdx: number): Placement | null {
+    if (posIdx < 0 || posIdx >= positions.length || positions[posIdx].is_prime) return null;
+    const tidx = getTransformIdx(posIdx, positions);
+    return slides[tidx]?.[objIdx] ?? null;
+  }
+
+  /** Index téhož objektu na jiném sklíčku — layout drží pořadí objektů shodné,
+   *  přesto párujeme přes object_id, aby drag přežil i přechodný nesoulad. */
+  function objIdxOn(slideIdx: number, objectId: string): number {
+    const row = slides[slideIdx];
+    if (!row) return -1;
+    if (row[dragObjIdx]?.object_id === objectId) return dragObjIdx;
+    return row.findIndex((p) => p.object_id === objectId);
+  }
+
+  function markModified(slideIdx: number, objIdx: number) {
+    _dragModifiedIndices.set(`${slideIdx}:${objIdx}`, { slideIdx, objIdx });
+  }
+
+  /** Efektivní průměr trysky umístění — objekt s vlastní tryskou má vlastní inset. */
+  function diamOf(p: Placement | null): number {
+    return p?.nozzle_diam && p.nozzle_diam > 0 ? p.nozzle_diam : nozzleDiam;
+  }
 
   // Pan
   let lastMouseScreenX = 0;
@@ -110,7 +145,7 @@
   }
 
   // Cache bbox pro aktuální drag — path se při dragu nemění
-  let _bboxDragCache: Map<number, RawBbox | null> = new Map();
+  let _bboxDragCache: Map<string, RawBbox | null> = new Map();
 
   run(() => {
     if (selectedIndex < 0) transformMode = "scale";
@@ -273,15 +308,19 @@
   }
 
   // ─── Handles pro trasu: rohy bbox trasy v world space (po rotaci) ─────────
-  function getPathHandles(posIdx: number, useT?: Transform): { x: number; y: number }[] {
+  function getPathHandles(
+    posIdx: number,
+    objIdx: number,
+    useT?: Transform
+  ): { x: number; y: number }[] {
     if (posIdx < 0 || posIdx >= positions.length) return [];
     const pos = positions[posIdx];
     if (pos.is_prime) return [];
-    const tidx = getTransformIdx(posIdx, positions);
-    const t = useT ?? transforms[tidx];
+    const pl = placementAt(posIdx, objIdx);
+    const t = useT ?? pl?.transform;
     if (!t) return [];
 
-    const pathData = paths[tidx];
+    const pathData = pl?.path;
     let minX: number, maxX: number, minY: number, maxY: number;
 
     if (pathData && pathData.segments.length > 0) {
@@ -298,7 +337,7 @@
         }
       }
       if (!isFinite(mn)) return [];
-      const r = nozzleDiam / 2;
+      const r = diamOf(pl) / 2;
       // Aplikovat scale kolem (t.cx, t.cy) — stejná logika jako transform_pt v Rustu
       minX = t.cx + (mn - t.cx) * t.scale - r;
       maxX = t.cx + (mx - t.cx) * t.scale + r;
@@ -333,14 +372,14 @@
     });
   }
 
-  function isInsidePath(wx: number, wy: number, posIdx: number): boolean {
+  function isInsidePath(wx: number, wy: number, posIdx: number, objIdx: number): boolean {
     if (posIdx < 0 || posIdx >= positions.length) return false;
     const pos = positions[posIdx];
     if (pos.is_prime) return false;
-    const tidx = getTransformIdx(posIdx, positions);
-    const t = transforms[tidx];
-    if (!t) return false;
-    const raw = getPathBboxRaw(posIdx);
+    const pl = placementAt(posIdx, objIdx);
+    const t = pl?.transform;
+    if (!t || !pl?.enabled) return false;
+    const raw = getPathBboxRaw(posIdx, objIdx);
     if (!raw) return false;
 
     // Inverze transformace tpt: world → path lokální souřadnice
@@ -353,13 +392,32 @@
     const px = t.cx + (dx * cos_r - dy * sin_r) / t.scale;
     const py = t.cy + (dx * sin_r + dy * cos_r) / t.scale;
 
-    const tol = nozzleDiam;
+    const tol = diamOf(pl);
     return px >= raw.mnX - tol && px <= raw.mxX + tol && py >= raw.mnY - tol && py <= raw.mxY + tol;
   }
 
+  /** Objekt pod kurzorem na daném skle — odzadu, aby vyhrál ten kreslený navrch.
+   *  Přednost má aktuálně vybraný objekt, aby kliknutí v překryvu neuskakovalo. */
+  function hitTestObject(wx: number, wy: number, posIdx: number): number {
+    const tidx = getTransformIdx(posIdx, positions);
+    const row = slides[tidx];
+    if (!row) return -1;
+    if (
+      posIdx === selectedIndex &&
+      selectedObjIdx >= 0 &&
+      isInsidePath(wx, wy, posIdx, selectedObjIdx)
+    ) {
+      return selectedObjIdx;
+    }
+    for (let k = row.length - 1; k >= 0; k--) {
+      if (isInsidePath(wx, wy, posIdx, k)) return k;
+    }
+    return -1;
+  }
+
   function hitTestHandle(wx: number, wy: number): number {
-    if (selectedIndex < 0) return -1;
-    const handles = getPathHandles(selectedIndex);
+    if (selectedIndex < 0 || selectedObjIdx < 0) return -1;
+    const handles = getPathHandles(selectedIndex, selectedObjIdx);
     const hitR = 7 / zoom;
     for (let i = 0; i < handles.length; i++) {
       if (Math.hypot(handles[i].x - wx, handles[i].y - wy) < hitR) return i;
@@ -369,10 +427,10 @@
 
   // ─── Sdílené geometrické helpery ─────────────────────────────────────────
 
-  function getPathBboxRaw(posIdx: number): RawBbox | null {
-    if (_bboxDragCache.has(posIdx)) return _bboxDragCache.get(posIdx)!;
-    const tidx = getTransformIdx(posIdx, positions);
-    const pathData = paths[tidx];
+  function getPathBboxRaw(posIdx: number, objIdx: number): RawBbox | null {
+    const key = `${posIdx}:${objIdx}`;
+    if (_bboxDragCache.has(key)) return _bboxDragCache.get(key)!;
+    const pathData = placementAt(posIdx, objIdx)?.path;
     if (!pathData || pathData.segments.length === 0) return null;
     let mnX = Infinity,
       mxX = -Infinity,
@@ -386,7 +444,7 @@
         if (pt.y > mxY) mxY = pt.y;
       }
     const result = isFinite(mnX) ? { mnX, mxX, mnY, mxY } : null;
-    if (dragOp) _bboxDragCache.set(posIdx, result);
+    if (dragOp) _bboxDragCache.set(key, result);
     return result;
   }
 
@@ -418,14 +476,15 @@
     for (let i = 0; i < positions.length; i++) {
       if (positions[i].is_prime) continue;
       const tidx = getTransformIdx(i, positions);
-      const t = transforms[tidx];
-      const pd = paths[tidx];
-      if (!t || !pd) continue;
-      for (const seg of pd.segments) {
-        for (const pt of seg.points) {
-          const [ptx, pty] = tpt(pt.x, pt.y, t.gui_dx, t.gui_dy, t.scale, t.rotation, t.cx, t.cy);
-          const d = Math.hypot(ptx - wx, pty - wy);
-          if (d < bestDist) { bestDist = d; best = { x: ptx, y: pty }; }
+      for (const pl of slides[tidx] ?? []) {
+        if (!pl.enabled) continue;
+        const t = pl.transform;
+        for (const seg of pl.path.segments) {
+          for (const pt of seg.points) {
+            const [ptx, pty] = tpt(pt.x, pt.y, t.gui_dx, t.gui_dy, t.scale, t.rotation, t.cx, t.cy);
+            const d = Math.hypot(ptx - wx, pty - wy);
+            if (d < bestDist) { bestDist = d; best = { x: ptx, y: pty }; }
+          }
         }
       }
     }
@@ -505,24 +564,18 @@
       const now = Date.now();
 
       // 1. Handle na již vybrané trase
-      if (selectedIndex >= 0 && !positions[selectedIndex]?.is_prime) {
+      if (selectedIndex >= 0 && selectedObjIdx >= 0 && !positions[selectedIndex]?.is_prime) {
         const hi = hitTestHandle(w.x, w.y);
-        if (hi >= 0) {
-          const tidx = getTransformIdx(selectedIndex, positions);
+        const sel = placementAt(selectedIndex, selectedObjIdx);
+        if (hi >= 0 && sel) {
           dispatch("saveState");
           dragOp = transformMode === "rotate" ? "rotate" : "scale";
           activeHandle = hi;
           dragSlideIdx = selectedIndex;
+          dragObjIdx = selectedObjIdx;
           dragStartWorld = { ...w };
-          dragStartTransform = { ...transforms[tidx] };
-          if (dragOp === "scale") {
-            dragStartTransformsAll = new Map();
-            for (let j = 0; j < positions.length; j++) {
-              if (positions[j].is_prime) continue;
-              const oj = getTransformIdx(j, positions);
-              if (transforms[oj]) dragStartTransformsAll.set(oj, { ...transforms[oj] });
-            }
-          }
+          dragStartTransform = { ...sel.transform };
+          captureDragStartAll(sel.object_id);
           return;
         }
       }
@@ -540,29 +593,35 @@
         const isDoubleClick = now - lastClickTime < 300 && lastClickIndex === hitIdx;
         lastClickTime = now;
         lastClickIndex = hitIdx;
+        const hitObj = hitTestObject(w.x, w.y, hitIdx);
 
         if (hitIdx === selectedIndex) {
-          if (isDoubleClick) {
+          if (isDoubleClick && hitObj === selectedObjIdx) {
             // Přepnout rotační / scale mód
             transformMode = transformMode === "rotate" ? "scale" : "rotate";
             scheduleDraw();
             return;
           }
           dispatch("slideSelected", hitIdx);
-          // Přesun trasy jen pokud klik míří přímo na bbox trasy
-          const tidx = getTransformIdx(hitIdx, positions);
-          if (transforms[tidx] && isInsidePath(w.x, w.y, hitIdx)) {
+          if (hitObj !== selectedObjIdx) dispatch("objectSelected", hitObj);
+          // Přesun trasy jen pokud klik míří přímo na bbox některého objektu
+          const pl = hitObj >= 0 ? placementAt(hitIdx, hitObj) : null;
+          if (pl) {
             dispatch("saveState");
             dragOp = "move";
             dragSlideIdx = hitIdx;
+            dragObjIdx = hitObj;
             dragStartWorld = { ...w };
-            dragStartTransform = { ...transforms[tidx] };
+            dragStartTransform = { ...pl.transform };
+            captureDragStartAll(pl.object_id);
             return;
           }
-          // Klik na plochu skla mimo trasu → pan (propad níže)
+          // Klik na plochu skla mimo trasy → pan (propad níže)
         } else {
-          // Vybrat sklíčko — drag se spustí až při kliknutí na již vybrané
+          // Vybrat sklíčko (a objekt pod kurzorem) — drag se spustí až při
+          // kliknutí na již vybrané sklíčko
           dispatch("slideSelected", hitIdx);
+          dispatch("objectSelected", hitObj);
           transformMode = "scale";
           return;
         }
@@ -570,6 +629,7 @@
         // Klik do prázdna — odselektovat
         if (hitIdx !== selectedIndex) {
           dispatch("slideSelected", -1);
+          dispatch("objectSelected", -1);
           transformMode = "scale";
         }
       }
@@ -631,9 +691,9 @@
     if (dragOp === "move" && dragStartTransform !== null && dragSlideIdx >= 0) {
       const w = screenToWorld(mouseX, mouseY);
       const pos = positions[dragSlideIdx];
-      const tidx = getTransformIdx(dragSlideIdx, positions);
-      const t = transforms[tidx];
-      if (!t) return;
+      const dragged = placementAt(dragSlideIdx, dragObjIdx);
+      const t = dragged?.transform;
+      if (!t || !dragged) return;
 
       let newX = dragStartTransform.gui_dx + (w.x - dragStartWorld.x);
       let newY = dragStartTransform.gui_dy + (w.y - dragStartWorld.y);
@@ -646,26 +706,28 @@
       }
 
       if (altDown) {
+        // ALT = tentýž objekt na všech sklech dostane stejný relativní offset
         const relDx = newX - pos.x;
         const relDy = newY - pos.y;
         positions.forEach((p, i) => {
           if (p.is_prime) return;
           const oi = getTransformIdx(i, positions);
-          const ot = transforms[oi];
-          if (ot) {
-            ot.gui_dx = p.x + relDx;
-            ot.gui_dy = p.y + relDy;
-            const raw = getPathBboxRaw(i);
-            if (raw) clampGuidXY(ot, p, raw, nozzleDiam);
-            _dragModifiedIndices.add(oi);
+          const ok = objIdxOn(oi, dragged.object_id);
+          const opl = ok >= 0 ? slides[oi]?.[ok] : null;
+          if (opl) {
+            opl.transform.gui_dx = p.x + relDx;
+            opl.transform.gui_dy = p.y + relDy;
+            const raw = getPathBboxRaw(i, ok);
+            if (raw) clampGuidXY(opl.transform, p, raw, diamOf(opl));
+            markModified(oi, ok);
           }
         });
       } else {
         t.gui_dx = newX;
         t.gui_dy = newY;
-        const raw = getPathBboxRaw(dragSlideIdx);
-        if (raw) clampGuidXY(t, pos, raw, nozzleDiam);
-        _dragModifiedIndices.add(tidx);
+        const raw = getPathBboxRaw(dragSlideIdx, dragObjIdx);
+        if (raw) clampGuidXY(t, pos, raw, diamOf(dragged));
+        markModified(getTransformIdx(dragSlideIdx, positions), dragObjIdx);
       }
       scheduleDraw();
       return;
@@ -681,10 +743,11 @@
       const w = screenToWorld(mouseX, mouseY);
       const pos = positions[dragSlideIdx];
       const tidx = getTransformIdx(dragSlideIdx, positions);
-      const t = transforms[tidx];
-      if (!t) return;
+      const dragged = placementAt(dragSlideIdx, dragObjIdx);
+      const t = dragged?.transform;
+      if (!t || !dragged) return;
 
-      const initHandles = getPathHandles(dragSlideIdx, dragStartTransform);
+      const initHandles = getPathHandles(dragSlideIdx, dragObjIdx, dragStartTransform);
       if (initHandles.length < 4) return;
 
       const st = dragStartTransform;
@@ -711,13 +774,14 @@
           anc: { x: number; y: number },
           wanted: number,
           p: LayoutPosition,
-          raw: RawBbox
+          raw: RawBbox,
+          diam: number
         ): number => wasm_max_fit_scale(
           startT.gui_dx, startT.gui_dy, startT.scale, startT.rotation, startT.cx, startT.cy,
           anc.x, anc.y, wanted,
           p.x, p.y, p.width, p.height,
           raw.mnX, raw.mxX, raw.mnY, raw.mxY,
-          nozzleDiam
+          diam
         );
 
         // Přepočítá gui_dx/gui_dy tak, aby anchor zůstal na místě:
@@ -728,10 +792,14 @@
           anc: { x: number; y: number },
           targetScale: number,
           p: LayoutPosition,
-          idx: number
+          posIdx: number,
+          objIdx: number,
+          diam: number
         ) => {
-          const raw = getPathBboxRaw(idx);
-          const clampedScale = raw ? maxFitScale(startT, anc, targetScale, p, raw) : targetScale;
+          const raw = getPathBboxRaw(posIdx, objIdx);
+          const clampedScale = raw
+            ? maxFitScale(startT, anc, targetScale, p, raw, diam)
+            : targetScale;
           const r = clampedScale / startT.scale;
           ot.gui_dx = anc.x - startT.cx - r * (anc.x - startT.gui_dx - startT.cx);
           ot.gui_dy = anc.y - startT.cy - r * (anc.y - startT.gui_dy - startT.cy);
@@ -742,21 +810,22 @@
           positions.forEach((p, i) => {
             if (p.is_prime) return;
             const oi = getTransformIdx(i, positions);
-            const ot = transforms[oi];
+            const ok = objIdxOn(oi, dragged.object_id);
+            const opl = ok >= 0 ? slides[oi]?.[ok] : null;
             const startT = dragStartTransformsAll.get(oi);
-            if (!ot || !startT) return;
+            if (!opl || !startT) return;
             const targetScale = Math.max(0.05, Math.min(10.0, startT.scale * scaleRatio));
-            const ih = getPathHandles(i, startT);
+            const ih = getPathHandles(i, ok, startT);
             const anc =
               ih.length >= 4 && !shiftDown
                 ? ih[oppositeIdx]
                 : { x: startT.gui_dx + startT.cx, y: startT.gui_dy + startT.cy };
-            applyAnchored(ot, startT, anc, targetScale, p, i);
-            _dragModifiedIndices.add(oi);
+            applyAnchored(opl.transform, startT, anc, targetScale, p, i, ok, diamOf(opl));
+            markModified(oi, ok);
           });
         } else {
-          applyAnchored(t, st, anchor, newScale, pos, dragSlideIdx);
-          _dragModifiedIndices.add(tidx);
+          applyAnchored(t, st, anchor, newScale, pos, dragSlideIdx, dragObjIdx, diamOf(dragged));
+          markModified(tidx, dragObjIdx);
         }
         scheduleDraw();
       }
@@ -768,8 +837,9 @@
       const w = screenToWorld(mouseX, mouseY);
       const pos = positions[dragSlideIdx];
       const tidx = getTransformIdx(dragSlideIdx, positions);
-      const t = transforms[tidx];
-      if (!t) return;
+      const dragged = placementAt(dragSlideIdx, dragObjIdx);
+      const t = dragged?.transform;
+      if (!t || !dragged) return;
 
       const cx = dragStartTransform.gui_dx + dragStartTransform.cx;
       const cy = dragStartTransform.gui_dy + dragStartTransform.cy;
@@ -782,13 +852,14 @@
         startT: Transform,
         delta: number,
         p: LayoutPosition,
-        raw: RawBbox
+        raw: RawBbox,
+        diam: number
       ): number => wasm_max_fit_rotation_factor(
         startT.gui_dx, startT.gui_dy, startT.scale, startT.cx, startT.cy,
         startT.rotation, delta,
         p.x, p.y, p.width, p.height,
         raw.mnX, raw.mxX, raw.mnY, raw.mxY,
-        nozzleDiam
+        diam
       );
 
       const rotFromFactor = (startRot: number, factor: number): number =>
@@ -800,39 +871,45 @@
         positions.forEach((p, i) => {
           if (p.is_prime) return;
           const oi = getTransformIdx(i, positions);
+          const ok = objIdxOn(oi, dragged.object_id);
+          const opl = ok >= 0 ? slides[oi]?.[ok] : null;
           const startTi = dragStartTransformsAll.get(oi);
-          if (!startTi) return;
-          const rawI = getPathBboxRaw(i);
-          if (rawI) factor = Math.min(factor, maxFitFactor(startTi, rawDeltaDeg, p, rawI));
+          if (!startTi || !opl) return;
+          const rawI = getPathBboxRaw(i, ok);
+          if (rawI)
+            factor = Math.min(factor, maxFitFactor(startTi, rawDeltaDeg, p, rawI, diamOf(opl)));
         });
         positions.forEach((p, i) => {
           if (p.is_prime) return;
           const oi = getTransformIdx(i, positions);
-          const ot = transforms[oi];
+          const ok = objIdxOn(oi, dragged.object_id);
+          const opl = ok >= 0 ? slides[oi]?.[ok] : null;
           const startTi = dragStartTransformsAll.get(oi);
-          if (!ot || !startTi) return;
+          if (!opl || !startTi) return;
           let rot = rotFromFactor(startTi.rotation, factor);
           if (ctrlDown) rot = Math.round(rot / 15) * 15;
-          ot.rotation = rot;
-          const rawI = getPathBboxRaw(i);
-          if (rawI) clampGuidXY(ot, p, rawI, nozzleDiam);
-          _dragModifiedIndices.add(oi);
+          opl.transform.rotation = rot;
+          const rawI = getPathBboxRaw(i, ok);
+          if (rawI) clampGuidXY(opl.transform, p, rawI, diamOf(opl));
+          markModified(oi, ok);
         });
       } else {
-        const raw = getPathBboxRaw(dragSlideIdx);
-        const factor = raw ? maxFitFactor(dragStartTransform, rawDeltaDeg, pos, raw) : 1;
+        const raw = getPathBboxRaw(dragSlideIdx, dragObjIdx);
+        const factor = raw
+          ? maxFitFactor(dragStartTransform, rawDeltaDeg, pos, raw, diamOf(dragged))
+          : 1;
         let newRot = rotFromFactor(dragStartTransform.rotation, factor);
         if (ctrlDown) newRot = Math.round(newRot / 15) * 15;
         t.rotation = newRot;
-        if (raw) clampGuidXY(t, pos, raw, nozzleDiam);
-        _dragModifiedIndices.add(tidx);
+        if (raw) clampGuidXY(t, pos, raw, diamOf(dragged));
+        markModified(tidx, dragObjIdx);
       }
       scheduleDraw();
       return;
     }
 
     // Hover feedback na handles
-    if (selectedIndex >= 0 && !positions[selectedIndex]?.is_prime && dragOp === null) {
+    if (selectedIndex >= 0 && selectedObjIdx >= 0 && !positions[selectedIndex]?.is_prime && dragOp === null) {
       const w = screenToWorld(mouseX, mouseY);
       const nh = hitTestHandle(w.x, w.y);
       if (nh !== hoverHandle) {
@@ -860,27 +937,36 @@
       dragSlideIdx >= 0 &&
       dragStartTransform !== null
     ) {
-      const tidx = getTransformIdx(dragSlideIdx, positions);
-      if (tidx >= 0) {
-        const t = transforms[tidx];
-        if (t) {
-          const scaleChanged = Math.abs(t.scale - dragStartTransform.scale) > 0.001;
-          const rotChanged = Math.abs(t.rotation - dragStartTransform.rotation) > 0.01;
-          if (scaleChanged || rotChanged) {
-            dispatch("pathRebuildNeeded", { slideIdx: tidx, scale: t.scale, rotation: t.rotation });
-          }
+      // Přepečení geometrie potřebuje každé změněné umístění zvlášť — ALT
+      // mění měřítko/rotaci téhož objektu na všech sklech naráz. Porovnává se
+      // vůči výchozímu stavu TOHO umístění, ne taženého (ta se můžou lišit).
+      for (const { slideIdx, objIdx } of _dragModifiedIndices.values()) {
+        const t = slides[slideIdx]?.[objIdx]?.transform;
+        if (!t) continue;
+        const start = dragStartTransformsAll.get(slideIdx) ?? dragStartTransform;
+        const scaleChanged = Math.abs(t.scale - start.scale) > 0.001;
+        const rotChanged = Math.abs(t.rotation - start.rotation) > 0.01;
+        if (scaleChanged || rotChanged) {
+          dispatch("pathRebuildNeeded", {
+            slideIdx,
+            objIdx,
+            scale: t.scale,
+            rotation: t.rotation,
+          });
         }
       }
     }
     // Odešli všechny změny transformů najednou (store update 1× místo n× za drag)
-    for (const idx of _dragModifiedIndices) {
-      if (transforms[idx]) dispatch("transformChanged", { index: idx, transform: { ...transforms[idx] } });
+    for (const { slideIdx, objIdx } of _dragModifiedIndices.values()) {
+      const t = slides[slideIdx]?.[objIdx]?.transform;
+      if (t) dispatch("transformChanged", { slideIdx, objIdx, transform: { ...t } });
     }
     _dragModifiedIndices.clear();
 
     dragOp = null;
     activeHandle = -1;
     dragSlideIdx = -1;
+    dragObjIdx = -1;
     dragStartTransform = null;
     dragStartTransformsAll = new Map();
     _bboxDragCache.clear();
@@ -888,6 +974,18 @@
   }
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
+  }
+
+  /** Výchozí transformace téhož objektu na všech sklech — podklad pro ALT drag. */
+  function captureDragStartAll(objectId: string) {
+    dragStartTransformsAll = new Map();
+    for (let j = 0; j < positions.length; j++) {
+      if (positions[j].is_prime) continue;
+      const oj = getTransformIdx(j, positions);
+      const ok = objIdxOn(oj, objectId);
+      const opl = ok >= 0 ? slides[oj]?.[ok] : null;
+      if (opl) dragStartTransformsAll.set(oj, { ...opl.transform });
+    }
   }
 
   // ─── Draw ──────────────────────────────────────────────────────────────────
@@ -916,28 +1014,29 @@
     const cursor = computePreviewCursor(printProgress, precomputedSegs, totalPreviewDist);
     const previewNozzle = drawSlidesAndPaths(ctx, {
       positions,
-      paths,
+      slides,
       primePath,
-      transforms,
       overrides,
       selectedIndex,
+      selectedObjIdx,
       nozzleDiam,
       zoom,
       cursor,
       primeGlassSize: $projectStore.params
         ? { w: $projectStore.params.slide_w, h: $projectStore.params.slide_h }
         : null,
+      nozzleColor: (type) => nozzleTraceColor(type, $settingsStore.nozzle_defs),
     });
 
-    // 6. Handles trasy pro vybrané sklíčko
+    // 6. Handles trasy pro vybraný objekt
     if (
       selectedIndex >= 0 &&
+      selectedObjIdx >= 0 &&
       selectedIndex < positions.length &&
       !positions[selectedIndex]?.is_prime
     ) {
-      const handles = getPathHandles(selectedIndex);
-      const tidx = getTransformIdx(selectedIndex, positions);
-      const t = transforms[tidx];
+      const handles = getPathHandles(selectedIndex, selectedObjIdx);
+      const t = placementAt(selectedIndex, selectedObjIdx)?.transform;
       drawTransformHandles(
         ctx,
         handles,
@@ -969,6 +1068,9 @@
     // 8. Náhled právě kresleného tvaru
     const sp = shapePreview();
     if (sp) drawShapePreview(ctx, sp.pts, sp.closed, sp.label, zoom);
+
+    // 8b. Živý náhled sloučení uzlů
+    if (mergePreview && mergePreview.groups.length > 0) drawMergePreview(ctx, mergePreview, zoom);
 
     // 9. Trysky (reálná červená při tisku, preview cyan při náhledu)
     drawNozzleMarkers(ctx, currentNozzle, previewNozzle, nozzleDiam, zoom);
@@ -1011,13 +1113,14 @@
     // ── Pravý horní overlay — info o vybraném prvku ──────────────────────────
     if (
       selectedIndex >= 0 &&
+      selectedObjIdx >= 0 &&
       selectedIndex < positions.length &&
       !positions[selectedIndex]?.is_prime
     ) {
-      const si = getTransformIdx(selectedIndex, positions);
-      const st = transforms[si];
+      const sel = placementAt(selectedIndex, selectedObjIdx);
+      const st = sel?.transform;
       const spos = positions[selectedIndex];
-      const spd = paths[si];
+      const spd = sel?.path;
       if (st) {
         // Délka trasy — součet vzdáleností po sobě jdoucích bodů × aktuální scale
         let pathLen = 0;
@@ -1036,7 +1139,7 @@
         const cy = (st.gui_dy + st.cy - spos.y).toFixed(1);
 
         // Rozměry trasy v lokálním prostoru × scale (nezávislé na rotaci)
-        const rawBb = getPathBboxRaw(selectedIndex);
+        const rawBb = getPathBboxRaw(selectedIndex, selectedObjIdx);
         const pw = rawBb ? (rawBb.mxX - rawBb.mnX) * st.scale : 0;
         const ph = rawBb ? (rawBb.mxY - rawBb.mnY) * st.scale : 0;
 
@@ -1071,13 +1174,20 @@
 
   async function recomputePreviewDist() {
     if (dragOp) return;
-    const result = await compute_preview_segments(positions, paths, transforms, primePath);
+    const result = await compute_preview_segments(
+      positions,
+      slides,
+      primePath,
+      $projectStore.params.nozzle_type,
+      $settingsStore.print_order ?? "nozzle_major",
+      $settingsStore.route_mode ?? "no_cross"
+    );
     precomputedSegs = result.segs;
     totalPreviewDist = result.total_dist;
   }
 
   run(() => {
-    paths; primePath; positions; transforms;
+    slides; primePath; positions; $settingsStore.print_order; $settingsStore.route_mode;
     if (!dragOp) recomputePreviewDist();
   });
 
@@ -1103,14 +1213,14 @@
     if (
       ctx &&
       positions &&
-      transforms &&
-      paths &&
+      slides &&
       overrides &&
       showAxes !== undefined &&
       isMeasuring !== undefined &&
       selectedIndex !== undefined &&
       currentNozzle !== undefined &&
-      printProgress !== undefined
+      printProgress !== undefined &&
+      mergePreview !== undefined
     ) {
       scheduleDraw();
     }

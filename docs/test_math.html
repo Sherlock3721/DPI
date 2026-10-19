@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { background: #0b1120; color: #f8fafc; font-family: sans-serif; padding: 40px; }
+    .math-card { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; max-width: 600px; margin: 20px auto; text-align: center; }
+    math { font-size: 1.3rem; color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <div class="math-card">
+    <p>Rovnice výpočtu kalibračního faktoru:</p>
+    <math display="block">
+      <mi>k</mi>
+      <mo>=</mo>
+      <mfrac>
+        <mn>4</mn>
+        <mrow>
+          <mi>&pi;</mi>
+          <mo>&middot;</mo>
+          <msup><mi>d</mi><mn>2</mn></msup>
+        </mrow>
+      </mfrac>
+    </math>
+  </div>
+  <div class="math-card">
+    <p>Výpočet Z-Shift:</p>
+    <math display="block">
+      <msub><mi>Z</mi><mtext>theor</mtext></msub>
+      <mo>=</mo>
+      <mo>-</mo><msub><mtext>block</mtext><mtext>height</mtext></msub>
+      <mo>+</mo><msub><mtext>nozzle</mtext><mtext>height</mtext></msub>
+      <mo>+</mo><msub><mtext>slide</mtext><mi>z</mi></msub>
+    </math>
+  </div>
+</body>
+</html>

@@ -3,11 +3,13 @@
 
   const bubble = createBubbler();
   import { createEventDispatcher, onDestroy } from "svelte";
-  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride } from "../lib/tauri";
+  import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, Placement } from "../lib/tauri";
   import { getTransformIdx } from "../lib/geometry";
-  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash } from "lucide-svelte";
+  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash, Merge } from "lucide-svelte";
   import Tooltip from "./Tooltip.svelte";
   import Canvas2D from "./Canvas2D.svelte";
+  import MergeNodesPopup from "./MergeNodesPopup.svelte";
+  import { samePathGeometry, type MergePreview, type MergeResult } from "../lib/nodeMerge";
   import { printerStore } from "../stores/printerStore";
   import { projectStore, type DrawnShape } from "../stores/projectStore";
 
@@ -17,13 +19,16 @@
     bedMaxX?: number;
     bedMaxY?: number;
     positions?: LayoutPosition[];
-    paths?: SubstratePaths[];
+    /** Umístění objektů po sklíčkách — `slides[i][k]` patří k objektu `k`. */
+    slides?: Placement[][];
+    /** Názvy objektů pro kontextovou nabídku a popup sloučení uzlů. */
+    objectNames?: string[];
     primePath?: SubstratePaths | null;
-    transforms?: Transform[];
     overrides?: Record<string, SlideOverride>;
     currentNozzle?: Point2D | null;
     nozzleDiam?: number;
     externalSelectedIndex?: any;
+    externalSelectedObjIdx?: number;
     totalPreviewTime?: number; // celkový čas tisku v sekundách (0 = neznámý)
     extrusionRateUl?: number; // µl/mm pro zobrazení objemu v overlay
     suspendAutoCenter?: boolean; // dokud true (např. welcome screen), centrování se odloží
@@ -33,25 +38,40 @@
     bedMaxX = 250.0,
     bedMaxY = 210.0,
     positions = [],
-    paths = $bindable([]),
+    slides = [],
+    objectNames = [],
     primePath = null,
-    transforms = [],
     overrides = {},
     currentNozzle = null,
     nozzleDiam = 0.4,
     externalSelectedIndex = -1,
+    externalSelectedObjIdx = -1,
     totalPreviewTime = 0,
     extrusionRateUl = 0,
     suspendAutoCenter = false
   }: Props = $props();
 
   let selectedIndex = $state(-1);
+  /** Vybraný objekt na vybraném sklíčku; -1 = vybráno jen sklíčko. */
+  let selectedObjIdx = $state(-1);
 
   run(() => {
     if (externalSelectedIndex >= 0 && externalSelectedIndex !== selectedIndex) {
       selectedIndex = externalSelectedIndex;
     }
   });
+  run(() => {
+    if (externalSelectedObjIdx !== selectedObjIdx && externalSelectedObjIdx >= 0) {
+      selectedObjIdx = externalSelectedObjIdx;
+    }
+  });
+
+  /** Umístění na sklíčku dané POZICÍ v layoutu (přeskakuje odpliv). */
+  function placementAt(posIdx: number, objIdx: number): Placement | null {
+    if (posIdx < 0 || posIdx >= positions.length || positions[posIdx].is_prime) return null;
+    const tIdx = getTransformIdx(posIdx, positions);
+    return slides[tIdx]?.[objIdx] ?? null;
+  }
 
   let showAxes = $state(true);
   let isMeasuring = $state(false);
@@ -59,6 +79,8 @@
   let drawTool: "rect" | "ellipse" | "line" | null = $state(null);
   let measurePoints: { x: number; y: number }[] = $state([]);
   let contextMenu = $state({ visible: false, x: 0, y: 0, slideIndex: -1 });
+  let showMergePopup = $state(false);
+  let mergePreview: MergePreview | null = $state(null);
   let canvasRef: any = $state();
   let printProgress = $state(100);
 
@@ -149,14 +171,18 @@
   });
 
   function getSelectedTransform(): Transform | null {
-    const tidx = getTransformIdx(selectedIndex, positions);
-    return transforms[tidx] ?? null;
+    return placementAt(selectedIndex, selectedObjIdx)?.transform ?? null;
   }
 
   function handleSlideSelected(e: CustomEvent<number>) {
     selectedIndex = e.detail;
     dispatch("slideSelected", selectedIndex);
     isMeasuring = false;
+  }
+
+  function handleObjectSelected(e: CustomEvent<number>) {
+    selectedObjIdx = e.detail;
+    dispatch("objectSelected", selectedObjIdx);
   }
 
   function handleSlideContext(e: CustomEvent<{ index: number; x: number; y: number }>) {
@@ -174,6 +200,7 @@
     if (drawTool) {
       isMeasuring = false;
       measurePoints = [];
+      closeMergePopup();
     }
   }
 
@@ -183,7 +210,9 @@
     });
   }
 
-  function handleTransformChanged(e: CustomEvent<{ index: number; transform: Transform }>) {
+  function handleTransformChanged(
+    e: CustomEvent<{ slideIdx: number; objIdx: number; transform: Transform }>
+  ) {
     dispatch("transformChanged", e.detail);
   }
 
@@ -192,7 +221,7 @@
   }
 
   function handlePathRebuildNeeded(
-    e: CustomEvent<{ slideIdx: number; scale: number; rotation: number }>
+    e: CustomEvent<{ slideIdx: number; objIdx: number; scale: number; rotation: number }>
   ) {
     dispatch("pathRebuildNeeded", e.detail);
   }
@@ -202,6 +231,12 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    // Escape zavře merge popup i z jeho vstupních polí
+    if (e.key === "Escape" && showMergePopup) {
+      e.preventDefault();
+      closeMergePopup();
+      return;
+    }
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
     // Šipky pro krokování náhledu (jen když netiskne a není vybráno sklíčko)
@@ -214,13 +249,13 @@
     const pos = positions[selectedIndex];
     if (pos.is_prime) return;
     const tIdx = getTransformIdx(selectedIndex, positions);
-    const t = transforms[tIdx];
+    const t = placementAt(selectedIndex, selectedObjIdx)?.transform;
     if (!t) return;
 
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       dispatch("saveState");
-      runAction("delete");
+      runAction("hide");
       return;
     }
 
@@ -241,7 +276,7 @@
     }
     if (moved) {
       e.preventDefault();
-      dispatch("transformChanged", { index: tIdx, transform: t });
+      dispatch("transformChanged", { slideIdx: tIdx, objIdx: selectedObjIdx, transform: t });
     }
   }
 
@@ -250,48 +285,125 @@
     if (idx < 0 || idx >= positions.length) return;
     const pos = positions[idx];
     const tIdx = getTransformIdx(idx, positions);
-    const t = transforms[tIdx];
-    if (!t) return;
+    const pl = placementAt(idx, selectedObjIdx);
+    const t = pl?.transform;
+    if (!t || !pl) return;
+    const emit = (transform: Transform, slideIdx = tIdx, objIdx = selectedObjIdx) =>
+      dispatch("transformChanged", { slideIdx, objIdx, transform });
 
     if (actionType === "center") {
       t.gui_dx = pos.x;
       t.gui_dy = pos.y;
-      dispatch("transformChanged", { index: tIdx, transform: t });
+      emit(t);
     } else if (actionType === "reset_all") {
       t.scale = 1.0;
       t.rotation = 0.0;
       t.gui_dx = pos.x;
       t.gui_dy = pos.y;
-      dispatch("transformChanged", { index: tIdx, transform: t });
+      emit(t);
     } else if (actionType === "rot_90") {
       t.rotation = (t.rotation + 90) % 360;
-      dispatch("transformChanged", { index: tIdx, transform: t });
+      emit(t);
     } else if (actionType === "apply_all") {
+      // Tentýž objekt na všech sklech — párujeme přes object_id
       const rel_dx = t.gui_dx - pos.x,
         rel_dy = t.gui_dy - pos.y;
       positions.forEach((p, i) => {
         if (p.is_prime) return;
-        const ot = transforms[getTransformIdx(i, positions)];
+        const oi = getTransformIdx(i, positions);
+        const ok = (slides[oi] ?? []).findIndex((q) => q.object_id === pl.object_id);
+        const ot = ok >= 0 ? slides[oi]?.[ok]?.transform : null;
         if (ot) {
           ot.scale = t.scale;
           ot.rotation = t.rotation;
           ot.gui_dx = p.x + rel_dx;
           ot.gui_dy = p.y + rel_dy;
-          dispatch("transformChanged", { index: getTransformIdx(i, positions), transform: ot });
+          emit(ot, oi, ok);
         }
       });
     } else if (actionType === "mirror_h") {
       t.rotation = (180 - t.rotation + 360) % 360;
-      dispatch("transformChanged", { index: tIdx, transform: t });
+      emit(t);
     } else if (actionType === "mirror_v") {
       t.rotation = (-t.rotation + 360) % 360;
-      dispatch("transformChanged", { index: tIdx, transform: t });
-    } else if (actionType === "delete") {
-      if (paths[tIdx]) {
-        paths[tIdx] = { segments: [] };
-        dispatch("pathCleared", { index: tIdx });
-      }
+      emit(t);
+    } else if (actionType === "hide") {
+      // Vratné odebrání objektu z tohoto skla — zpět přes výčet v pravém panelu
+      dispatch("objectHidden", { slideIdx: tIdx, objIdx: selectedObjIdx });
     }
+  }
+
+  // ─── Sloučení uzlů (merge by distance) ───────────────────────────────────
+  // Merge pracuje nad trasou jednoho objektu: přednost má vybraný, jinak první
+  // objekt s neprázdnou trasou — tlačítko tak funguje i bez předchozího výběru.
+  function hasPath(posIdx: number, objIdx: number): boolean {
+    const pl = placementAt(posIdx, objIdx);
+    return !!pl && pl.enabled && pl.path.segments.length > 0;
+  }
+
+  /** První objekt s trasou na daném skle. */
+  function firstObjWithPath(posIdx: number): number {
+    if (posIdx < 0 || posIdx >= positions.length || positions[posIdx].is_prime) return -1;
+    const row = slides[getTransformIdx(posIdx, positions)] ?? [];
+    for (let k = 0; k < row.length; k++) if (hasPath(posIdx, k)) return k;
+    return -1;
+  }
+
+  let mergeTarget: { posIdx: number; objIdx: number } = $derived.by(() => {
+    // 1. vybraný objekt, 2. první objekt vybraného skla, 3. první objekt vůbec
+    if (hasPath(selectedIndex, selectedObjIdx))
+      return { posIdx: selectedIndex, objIdx: selectedObjIdx };
+    const onSelected = firstObjWithPath(selectedIndex);
+    if (onSelected >= 0) return { posIdx: selectedIndex, objIdx: onSelected };
+    for (let i = 0; i < positions.length; i++) {
+      const k = firstObjWithPath(i);
+      if (k >= 0) return { posIdx: i, objIdx: k };
+    }
+    return { posIdx: -1, objIdx: -1 };
+  });
+  let mergeTIdx = $derived(
+    mergeTarget.posIdx >= 0 ? getTransformIdx(mergeTarget.posIdx, positions) : -1
+  );
+  let mergePlacement = $derived(placementAt(mergeTarget.posIdx, mergeTarget.objIdx));
+  let mergePathData = $derived(mergePlacement?.path ?? null);
+  let mergeTransform = $derived(mergePlacement?.transform ?? null);
+  /** Kolik dalších sklíček má tentýž objekt se shodnou trasou — merge se na ně
+   *  dá promítnout naráz. */
+  let mergeTwinCount = $derived.by(() => {
+    if (!mergePathData || !mergePlacement) return 0;
+    let n = 0;
+    for (let i = 0; i < slides.length; i++) {
+      if (i === mergeTIdx) continue;
+      const twin = (slides[i] ?? []).find((p) => p.object_id === mergePlacement!.object_id);
+      if (twin && samePathGeometry(twin.path, mergePathData)) n++;
+    }
+    return n;
+  });
+
+  function toggleMergePopup() {
+    showMergePopup = !showMergePopup;
+    if (showMergePopup) {
+      isMeasuring = false;
+      drawTool = null;
+    } else {
+      mergePreview = null;
+    }
+  }
+
+  function closeMergePopup() {
+    showMergePopup = false;
+    mergePreview = null;
+  }
+
+  function handleMergeApply(e: CustomEvent<MergeResult & { applyToAll: boolean }>) {
+    if (mergeTIdx < 0 || mergeTarget.objIdx < 0) return;
+    dispatch("saveState");
+    projectStore.applyMergedPath(
+      mergeTIdx,
+      mergeTarget.objIdx,
+      e.detail.paths,
+      e.detail.applyToAll
+    );
   }
 
   function resetView() {
@@ -301,9 +413,16 @@
   let selectedTransform = $derived(getSelectedTransform());
   let showContextActions =
     $derived(selectedIndex >= 0 &&
+    selectedObjIdx >= 0 &&
     selectedIndex < positions.length &&
     !positions[selectedIndex]?.is_prime &&
     selectedTransform !== null);
+  /** Název vybraného objektu pro kontextovou nabídku. */
+  let selectedObjName = $derived.by(() => {
+    const pl = placementAt(selectedIndex, selectedObjIdx);
+    if (!pl) return "";
+    return objectNames[selectedObjIdx] || `Objekt ${selectedObjIdx + 1}`;
+  });
 
   // Format values for context menu display
   let ctxScale = $derived(selectedTransform ? selectedTransform.scale.toFixed(2) : "1.00");
@@ -330,7 +449,7 @@
 
     <div class="relative group">
       <button
-        onclick={() => { isMeasuring = !isMeasuring; if (!isMeasuring) measurePoints = []; else drawTool = null; }}
+        onclick={() => { isMeasuring = !isMeasuring; if (!isMeasuring) measurePoints = []; else { drawTool = null; closeMergePopup(); } }}
         class="p-2 rounded-lg border shadow transition-colors {isMeasuring
           ? 'bg-yellow-500 border-yellow-400 text-black'
           : measurePoints.length > 0
@@ -375,6 +494,23 @@
 
       <div class="relative group">
         <button
+          onclick={toggleMergePopup}
+          disabled={mergeTarget.posIdx < 0}
+          class="p-2 rounded-lg border shadow transition-colors {mergeTarget.posIdx < 0
+            ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed'
+            : showMergePopup
+              ? 'bg-labaccent border-blue-500/60 text-white'
+              : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+        >
+          <Merge class="w-4 h-4" />
+        </button>
+        <Tooltip text="Sloučit uzly (merge by distance)" />
+      </div>
+
+      <div class="w-px h-6 bg-slate-700/60"></div>
+
+      <div class="relative group">
+        <button
           onclick={() => toggleDrawTool("rect")}
           class="p-2 rounded-lg border shadow transition-colors {drawTool === 'rect'
             ? 'bg-labaccent border-blue-500/60 text-white'
@@ -410,6 +546,19 @@
       </div>
     </div>
 
+    <MergeNodesPopup
+      open={showMergePopup}
+      pathData={mergePathData}
+      transform={mergeTransform}
+      slideLabel={mergeTIdx >= 0
+        ? `Substrát ${mergeTIdx + 1} · ${objectNames[mergeTarget.objIdx] || `Objekt ${mergeTarget.objIdx + 1}`}`
+        : ""}
+      twinCount={mergeTwinCount}
+      bind:preview={mergePreview}
+      on:close={closeMergePopup}
+      on:apply={handleMergeApply}
+    />
+
   </div>
 
   <!-- ── Canvas ── -->
@@ -419,12 +568,12 @@
       {bedMaxX}
       {bedMaxY}
       {positions}
-      {paths}
+      {slides}
       {primePath}
-      {transforms}
       {overrides}
       {nozzleDiam}
       {selectedIndex}
+      {selectedObjIdx}
       {showAxes}
       {isMeasuring}
       {measurePoints}
@@ -432,7 +581,9 @@
       {printProgress}
       {extrusionRateUl}
       {drawTool}
+      {mergePreview}
       on:slideSelected={handleSlideSelected}
+      on:objectSelected={handleObjectSelected}
       on:slideContext={handleSlideContext}
       on:measurePointsChange={handleMeasurePointsChange}
       on:transformChanged={handleTransformChanged}
@@ -520,6 +671,9 @@
     >
       {#if showContextActions}
         <!-- Transform info header -->
+        <div class="px-4 pt-2 pb-1 text-xs text-slate-300 truncate" title={selectedObjName}>
+          {selectedObjName}
+        </div>
         <div
           class="px-4 py-2 border-b border-slate-800 flex items-center justify-between gap-4 text-xs text-slate-400"
         >
@@ -590,12 +744,12 @@
         <button
           onclick={() => {
             dispatch("saveState");
-            runAction("delete");
+            runAction("hide");
             closeContextMenu();
           }}
           class="w-full text-left px-4 py-2 hover:bg-red-600/20 hover:text-red-400 text-red-400 transition-colors"
         >
-          Smazat trasu
+          Odebrat objekt z tohoto skla
         </button>
       {:else}
         <button
@@ -604,7 +758,7 @@
           }}
           class="w-full text-left px-4 py-2 text-slate-500 cursor-default"
         >
-          Vyberte trasu
+          Vyberte objekt
         </button>
       {/if}
     </div>

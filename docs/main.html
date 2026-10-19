@@ -1,0 +1,2140 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Droplet Printing Interface (DPI)</title>
+  </head>
+  <body>
+    <style>/* ==============================================================================
+   Droplet Printing Interface (DPI) — Webový stylopis pro uživatelský manuál
+   Optimalizováno pro Ultra-wide (21:9, 32:9, 4K) i mobilní zařízení (320px - 768px)
+   ============================================================================== */
+
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', ui-monospace, monospace;
+
+  /* Barevná paleta — Laboratorní tmavý motiv (DPI Dark Lab Theme) */
+  --bg-page: #0b1120;
+  --bg-card: #1e293b;
+  --bg-card-alt: #0f172a;
+  --bg-hover: #334155;
+  --border: #334155;
+  --border-light: #475569;
+
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+
+  --primary: #3b82f6;
+  --primary-light: #60a5fa;
+  --primary-glow: rgba(59, 130, 246, 0.2);
+
+  --accent-cyan: #38bdf8;
+  --accent-orange: #f97316;
+  --accent-green: #10b981;
+  --accent-yellow: #f59e0b;
+  --accent-red: #ef4444;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Globální nastavení dokumentu ──────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-page);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ochrana před horizontálním přetečením textu na malých displejích */
+p, div, span, li, a {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+/* ─── Hlavní centrovaný kontejner obsahu (Ultra-wide &amp; Mobile) ──────────── */
+.dpi-container {
+  width: 100%;
+  max-width: 1120px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 2.5rem 1.75rem 6rem 1.75rem;
+  box-sizing: border-box;
+}
+
+/* ─── Hero Titulní blok ─────────────────────────────────────────────────── */
+.dpi-hero {
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 20px;
+  padding: 3rem 2.5rem;
+  margin-bottom: 3.5rem;
+  text-align: center;
+  box-shadow: var(--shadow-xl), 0 0 40px rgba(59, 130, 246, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.dpi-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #3b82f6, #38bdf8, #10b981);
+}
+
+.dpi-hero-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1.1rem;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+  max-width: 100%;
+}
+
+.dpi-hero-title {
+  font-size: clamp(1.85rem, 5vw + 0.5rem, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  margin: 0.5rem 0 1rem 0;
+  background: linear-gradient(135deg, #ffffff 30%, #93c5fd 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  line-height: 1.2;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.dpi-hero-subtitle {
+  font-size: clamp(1rem, 2vw + 0.3rem, 1.2rem);
+  color: var(--text-muted);
+  max-width: 760px;
+  margin: 0 auto 2rem auto;
+  line-height: 1.55;
+}
+
+.dpi-author-card {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem 1.75rem;
+  margin-bottom: 2.25rem;
+  box-shadow: var(--shadow-sm);
+  max-width: 100%;
+}
+
+.dpi-author-name {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--text-main);
+}
+
+.dpi-author-email {
+  color: var(--accent-cyan);
+  font-size: 0.92rem;
+  text-decoration: none;
+  margin-top: 0.2rem;
+  transition: color 0.15s ease;
+  word-break: break-all;
+}
+
+.dpi-author-email:hover {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+.dpi-hero-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+  text-align: left;
+}
+
+.dpi-hero-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.dpi-hero-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+}
+
+.dpi-card-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-cyan);
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.dpi-card-val {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.2rem;
+}
+
+.dpi-card-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.dpi-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.6);
+}
+
+.dpi-pill {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* ─── Obsah dokumentu (Table of Contents) ───────────────────────────────── */
+.dpi-toc {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.75rem 2.25rem;
+  margin: 2.5rem 0 3.5rem 0;
+  box-shadow: var(--shadow-md);
+  position: relative;
+  overflow: hidden;
+}
+
+.dpi-toc::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--primary);
+}
+
+.dpi-toc-title {
+  margin-top: 0 !important;
+  font-size: 1.35rem;
+  color: #ffffff;
+  border-bottom: 2px solid rgba(59, 130, 246, 0.4);
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.dpi-toc-item {
+  padding: 0.4rem 0;
+  border-bottom: 1px dashed rgba(51, 65, 85, 0.35);
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.dpi-toc-item:last-child {
+  border-bottom: none;
+}
+
+.dpi-toc-item.lvl-1 {
+  font-weight: 700;
+  color: #ffffff;
+  margin-top: 0.85rem;
+  font-size: 1.05rem;
+}
+
+.dpi-toc-item.lvl-2 {
+  padding-left: 1.25rem;
+  color: #94a3b8;
+  font-size: 0.93rem;
+}
+
+.dpi-toc-item.lvl-3 {
+  padding-left: 2.5rem;
+  color: #64748b;
+  font-size: 0.88rem;
+}
+
+.dpi-toc-link {
+  color: #cbd5e1;
+  text-decoration: none;
+  display: block;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.dpi-toc-link:hover {
+  color: var(--accent-cyan);
+  text-decoration: none;
+  transform: translateX(4px);
+}
+
+.dpi-toc-item.lvl-1 .dpi-toc-link {
+  color: #ffffff;
+  font-weight: 700;
+}
+.dpi-toc-item.lvl-1 .dpi-toc-link:hover {
+  color: #60a5fa;
+}
+
+.dpi-toc-item.lvl-2 .dpi-toc-link {
+  color: #94a3b8;
+}
+.dpi-toc-item.lvl-2 .dpi-toc-link:hover {
+  color: var(--accent-cyan);
+}
+
+.dpi-toc-item.lvl-3 .dpi-toc-link {
+  color: #64748b;
+}
+.dpi-toc-item.lvl-3 .dpi-toc-link:hover {
+  color: #cbd5e1;
+}
+
+/* ─── Typografie a Nadpisy ──────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  color: #ffffff;
+  line-height: 1.3;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+  font-weight: 700;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  scroll-margin-top: 1.75rem;
+}
+
+h2 {
+  font-size: clamp(1.4rem, 3.5vw + 0.3rem, 1.85rem);
+  color: #ffffff;
+  border-bottom: 2px solid rgba(59, 130, 246, 0.4);
+  padding-bottom: 0.6rem;
+  margin-top: 3.5rem;
+  display: block;
+}
+
+h3 {
+  font-size: clamp(1.15rem, 2.5vw + 0.2rem, 1.35rem);
+  color: var(--primary-light);
+  margin-top: 2rem;
+  display: block;
+}
+
+h4 {
+  font-size: clamp(1.02rem, 2vw + 0.1rem, 1.15rem);
+  color: var(--accent-cyan);
+  display: block;
+}
+
+p {
+  margin: 1rem 0;
+  color: #cbd5e1;
+}
+
+strong, b {
+  color: #ffffff;
+}
+
+a {
+  color: var(--accent-cyan);
+  text-decoration: none;
+  transition: color 0.15s ease, text-decoration 0.15s ease;
+}
+
+a:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+hr {
+  border: none;
+  height: 1px;
+  background: var(--border);
+  margin: 3rem 0;
+}
+
+/* ─── Alert Boxy (Callout Cards) ────────────────────────────────────────── */
+.dpi-alert {
+  border-left: 4px solid var(--primary);
+  border-radius: 0 12px 12px 0;
+  padding: 1.15rem 1.4rem;
+  margin: 1.75rem 0;
+  box-shadow: var(--shadow-md);
+  position: relative;
+}
+
+.dpi-alert-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 1.02rem;
+  margin-bottom: 0.5rem;
+}
+
+.dpi-alert-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.dpi-alert-body {
+  font-size: 0.95rem;
+  color: #e2e8f0;
+  line-height: 1.65;
+}
+
+.dpi-alert-body p:first-child {
+  margin-top: 0;
+}
+
+.dpi-alert-body p:last-child {
+  margin-bottom: 0;
+}
+
+/* Varianty Alert boxů */
+.alert-note {
+  border-left-color: #3b82f6;
+  background: rgba(30, 58, 138, 0.18);
+  border-right: 1px solid rgba(59, 130, 246, 0.2);
+  border-top: 1px solid rgba(59, 130, 246, 0.2);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+}
+.alert-note .dpi-alert-header {
+  color: #93c5fd;
+}
+
+.alert-tip {
+  border-left-color: #10b981;
+  background: rgba(6, 78, 59, 0.18);
+  border-right: 1px solid rgba(16, 185, 129, 0.2);
+  border-top: 1px solid rgba(16, 185, 129, 0.2);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+}
+.alert-tip .dpi-alert-header {
+  color: #6ee7b7;
+}
+
+.alert-important {
+  border-left-color: #f59e0b;
+  background: rgba(120, 53, 15, 0.18);
+  border-right: 1px solid rgba(245, 158, 11, 0.2);
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+}
+.alert-important .dpi-alert-header {
+  color: #fcd34d;
+}
+
+.alert-warning {
+  border-left-color: #ef4444;
+  background: rgba(127, 29, 29, 0.22);
+  border-right: 1px solid rgba(239, 68, 68, 0.25);
+  border-top: 1px solid rgba(239, 68, 68, 0.25);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+}
+.alert-warning .dpi-alert-header {
+  color: #fca5a5;
+}
+
+/* ─── Číslované visačky a štítky (Badges) ─────────────────────────────────── */
+.dpi-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 11px;
+  margin: 0 4px;
+  vertical-align: middle;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ─── Klávesové zkratky (KBD) ───────────────────────────────────────────── */
+.dpi-kbd, kbd {
+  display: inline-block;
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #475569;
+  border-bottom: 2px solid #64748b;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  margin: 0 2px;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+/* ─── Tabulky (Responzivní s vodorovným posunem) ─────────────────────────── */
+table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  margin: 2rem 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: var(--shadow-lg);
+}
+
+table::-webkit-scrollbar {
+  height: 7px;
+}
+table::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 3px;
+}
+table::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 3px;
+}
+table::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+thead, tbody {
+  min-width: 100%;
+}
+
+th, td {
+  padding: 12px 18px;
+  text-align: left;
+}
+
+th {
+  background: #0f172a;
+  color: var(--primary-light);
+  font-weight: 700;
+  font-size: 0.95rem;
+  border-bottom: 2px solid var(--primary);
+  letter-spacing: 0.02em;
+}
+
+td {
+  border-bottom: 1px solid var(--border);
+  color: #cbd5e1;
+  font-size: 0.93rem;
+  line-height: 1.55;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:nth-child(even) {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+tr:hover td {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+/* ─── Obrázky a Schémata (Figures) ──────────────────────────────────────── */
+.dpi-figure {
+  margin: 2.5rem 0;
+  text-align: center;
+  max-width: 100%;
+}
+
+.dpi-figure-img-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 1.5rem 0 0.75rem 0;
+  max-width: 100%;
+}
+
+.dpi-figure-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  box-shadow: var(--shadow-xl);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.dpi-figure-img:hover {
+  border-color: var(--primary);
+}
+
+/* ─── Kód a bloky kódu ──────────────────────────────────────────────────── */
+pre, code {
+  font-family: var(--font-mono);
+}
+
+pre {
+  background: #0f172a;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  color: var(--accent-cyan);
+  box-shadow: var(--shadow-md);
+  margin: 1.5rem 0;
+  font-size: 0.88em;
+  line-height: 1.55;
+  max-width: 100%;
+}
+
+pre code {
+  white-space: pre;
+  word-break: normal;
+  word-wrap: normal;
+}
+
+pre::-webkit-scrollbar {
+  height: 6px;
+}
+pre::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.8);
+}
+pre::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 3px;
+}
+
+p code, li code, td code, .dpi-alert code {
+  background: rgba(51, 65, 85, 0.5);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--accent-cyan);
+  font-size: 0.88em;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ─── Matematické vzorce (Nativní HTML5 MathML) ─────────────────────────── */
+math {
+  font-family: 'STIX Two Math', 'Latin Modern Math', 'Cambria Math', 'DejaVu Serif', serif;
+  color: #93c5fd;
+  line-height: 1;
+}
+
+math mi {
+  font-style: italic;
+  color: #93c5fd;
+}
+
+math mn {
+  color: #f8fafc;
+}
+
+math mo {
+  color: #38bdf8;
+  padding: 0 1px;
+}
+
+math mtext {
+  font-style: normal;
+  color: #cbd5e1;
+  font-family: var(--font-sans);
+  font-size: 0.9em;
+}
+
+.dpi-math-inline {
+  display: inline-block;
+  padding: 0 2px;
+  vertical-align: middle;
+}
+
+.dpi-math-inline math {
+  font-size: 1.05em;
+}
+
+.dpi-math-block {
+  display: block;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin: 1.75rem 0;
+  text-align: center;
+  box-shadow: var(--shadow-md);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+.dpi-math-block math {
+  font-size: 1.28rem;
+  color: #60a5fa;
+}
+
+/* ─── Seznamy ───────────────────────────────────────────────────────────── */
+ul, ol {
+  padding-left: 1.5rem;
+  margin: 1rem 0;
+  color: #cbd5e1;
+}
+
+li {
+  margin: 0.45rem 0;
+}
+
+/* ==============================================================================
+   RESPONZIVNÍ PRAVIDLA PRO ULTRA-WIDE MONITORY (21:9, 32:9, 4K)
+   ============================================================================== */
+@media (min-width: 1600px) {
+  body {
+    background-image:
+      radial-gradient(ellipse 80% 40% at 50% -10%, rgba(59, 130, 246, 0.12), transparent 70%),
+      radial-gradient(ellipse 60% 30% at 50% 100%, rgba(16, 185, 129, 0.06), transparent 70%);
+    background-attachment: fixed;
+  }
+}
+
+@media (min-width: 2200px) {
+  .dpi-container {
+    max-width: 1200px;
+    padding: 3.5rem 2rem 8rem 2rem;
+  }
+
+  p, li {
+    font-size: 17px;
+    line-height: 1.75;
+    max-width: 95ch;
+  }
+
+  .dpi-hero-title {
+    font-size: 3rem;
+  }
+
+  .dpi-hero-subtitle {
+    font-size: 1.25rem;
+  }
+}
+
+/* ==============================================================================
+   RESPONZIVNÍ PRAVIDLA PRO TABLETY A STŘEDNÍ OBRAZOVKY (&lt;= 768px)
+   ============================================================================== */
+@media (max-width: 768px) {
+  .dpi-container {
+    padding: 1.25rem 1rem 4rem 1rem;
+  }
+
+  .dpi-hero {
+    padding: 2rem 1.25rem;
+    border-radius: 14px;
+    margin-bottom: 2rem;
+  }
+
+  .dpi-hero-title {
+    font-size: clamp(1.75rem, 6vw, 2.25rem);
+  }
+
+  .dpi-hero-cards {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  h2 {
+    margin-top: 2.75rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .dpi-toc {
+    padding: 1.25rem 1.5rem;
+    margin: 2rem 0 2.5rem 0;
+  }
+
+  .dpi-toc-item.lvl-2 {
+    padding-left: 0.85rem;
+  }
+
+  .dpi-toc-item.lvl-3 {
+    padding-left: 1.6rem;
+  }
+
+  .dpi-alert {
+    padding: 0.95rem 1.15rem;
+    margin: 1.35rem 0;
+  }
+
+  th, td {
+    padding: 10px 14px;
+    font-size: 0.88rem;
+  }
+}
+
+/* ==============================================================================
+   RESPONZIVNÍ PRAVIDLA PRO MOBILNÍ ZAŘÍZENÍ (&lt;= 480px)
+   ============================================================================== */
+@media (max-width: 480px) {
+  body {
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
+  .dpi-container {
+    padding: 0.85rem 0.75rem 3.5rem 0.75rem;
+  }
+
+  .dpi-hero {
+    padding: 1.5rem 0.85rem;
+    border-radius: 12px;
+    margin-bottom: 1.75rem;
+  }
+
+  .dpi-hero-pill {
+    font-size: 0.7rem;
+    padding: 0.25rem 0.65rem;
+    margin-bottom: 1rem;
+    display: inline-block;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .dpi-hero-title {
+    font-size: 1.65rem;
+    margin: 0.25rem 0 0.75rem 0;
+  }
+
+  .dpi-hero-subtitle {
+    font-size: 0.95rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .dpi-author-card {
+    width: 100%;
+    padding: 0.6rem 0.85rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .dpi-author-name {
+    font-size: 0.95rem;
+  }
+
+  .dpi-author-email {
+    font-size: 0.85rem;
+  }
+
+  .dpi-hero-card {
+    padding: 1rem;
+  }
+
+  .dpi-card-val {
+    font-size: 1rem;
+  }
+
+  .dpi-card-sub {
+    font-size: 0.8rem;
+  }
+
+  .dpi-hero-meta {
+    gap: 0.4rem;
+    padding-top: 1rem;
+  }
+
+  .dpi-pill {
+    font-size: 0.72rem;
+    padding: 0.2rem 0.5rem;
+  }
+
+  .dpi-toc {
+    padding: 1rem 0.85rem;
+    margin: 1.5rem 0 2rem 0;
+    border-radius: 10px;
+  }
+
+  .dpi-toc-title {
+    font-size: 1.15rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .dpi-toc-item {
+    font-size: 0.88rem;
+    padding: 0.35rem 0;
+  }
+
+  .dpi-toc-item.lvl-1 {
+    margin-top: 0.6rem;
+    font-size: 0.95rem;
+  }
+
+  .dpi-toc-item.lvl-2 {
+    padding-left: 0.65rem;
+    font-size: 0.86rem;
+  }
+
+  .dpi-toc-item.lvl-3 {
+    padding-left: 1.15rem;
+    font-size: 0.82rem;
+  }
+
+  .dpi-alert {
+    padding: 0.85rem 0.95rem;
+    margin: 1.15rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .dpi-alert-header {
+    font-size: 0.92rem;
+    gap: 0.4rem;
+  }
+
+  .dpi-alert-body {
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+
+  th, td {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+  }
+
+  pre {
+    padding: 0.85rem;
+    font-size: 0.8em;
+    border-radius: 8px;
+    margin: 1.15rem 0;
+  }
+
+  .dpi-math-block {
+    padding: 0.75rem 0.85rem;
+    margin: 1.15rem 0;
+  }
+
+  .dpi-math-block code {
+    font-size: 0.9em;
+  }
+
+  .dpi-figure {
+    margin: 1.75rem 0;
+  }
+
+  .dpi-figure-img {
+    border-radius: 8px;
+  }
+
+  ul, ol {
+    padding-left: 1.25rem;
+  }
+}
+</style>
+    <main class="dpi-container">
+      <header class="dpi-hero">
+        <div class="dpi-hero-pill">💧 OPEN-SOURCE MIKRODÁVKOVACÍ ROZHRANÍ PRO 3D TISKÁRNY</div>
+        <h1 class="dpi-hero-title">Droplet Printing Interface (DPI)</h1>
+        <p class="dpi-hero-subtitle">Uživatelský manuál a laboratorní příručka pro mikrodávkování roztoků na modifikovaných 3D tiskárnách</p>
+        <div class="dpi-author-card">
+          <div class="dpi-author-name">Autor: Cyril Veverka</div>
+          <p><a href="mailto:cyrilveverka@email.cz" class="dpi-author-email">cyrilveverka@email.cz</a></p>
+        </div>
+        <div class="dpi-hero-cards">
+          <div class="dpi-hero-card">
+            <div class="dpi-card-label">Referenční hardware</div>
+            <div class="dpi-card-val">Prusa i3 MK3S / Marlin</div>
+            <div class="dpi-card-sub">Stříkačkový dávkovač &amp; mikroskop</div>
+          </div>
+          <div class="dpi-hero-card">
+            <div class="dpi-card-label">Řídicí aplikace</div>
+            <div class="dpi-card-val">DPI Desktop (Linux &amp; Windows)</div>
+            <div class="dpi-card-sub">Tauri v2 + Svelte 5 rozhraní</div>
+          </div>
+        </div>
+        <div class="dpi-hero-meta"><span class="dpi-pill">Verze 2.2.4</span> <span class="dpi-pill">Září 2026</span> <span class="dpi-pill">Licence GPLv2 / Komerční duální licence</span></div>
+      </header>
+      <nav class="dpi-toc">
+        <h2 class="dpi-toc-title">Obsah manuálu</h2>
+        <div class="dpi-toc-item lvl-1"><a href="#1-Úvod-a-bezpečnostní-zásady-obsluhy" class="dpi-toc-link">1. Úvod a bezpečnostní zásady obsluhy</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#1-1-Účel-programu-Droplet-Printing-InterfaceDPI" class="dpi-toc-link">1.1 Účel programu Droplet Printing Interface (DPI)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#1-2-Bezpečnostní-zásady-při-obsluze-tiskárny" class="dpi-toc-link">1.2 Bezpečnostní zásady při obsluze tiskárny</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#2-Příprava-a-součásti-modifikované-tiskárnyPrusa-MK3S" class="dpi-toc-link">2. Příprava a součásti modifikované tiskárny (Prusa MK3S)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#2-1-Komponenty-tiskové-hlavy" class="dpi-toc-link">2.1 Komponenty tiskové hlavy</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#2-2-Volba-stříkaček-a-dávkovacích-jehel" class="dpi-toc-link">2.2 Volba stříkaček a dávkovacích jehel</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#2-3-Kalibrační-faktor-stříkačkycalibration_factor" class="dpi-toc-link">2.3 Kalibrační faktor stříkačky (<span style="display: inline-block;"><code>calibration_factor</code></span>)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Nastavení-faktoru-v-programu" class="dpi-toc-link">Nastavení faktoru v programu:</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#2-4-Pravidla-pro-obsluhu-indukční-sondy-PINDA" class="dpi-toc-link">2.4 Pravidla pro obsluhu indukční sondy PINDA</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#2-5-Ovládání-USB-mikroskopu-v-aplikaci" class="dpi-toc-link">2.5 Ovládání USB mikroskopu v aplikaci</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#3-Připojení-a-první-spuštění" class="dpi-toc-link">3. Připojení a první spuštění</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-1-Spuštění-aplikace" class="dpi-toc-link">3.1 Spuštění aplikace</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-2-Připojení-k-tiskárněSériová-linka-USB" class="dpi-toc-link">3.2 Připojení k tiskárně (Sériová linka USB)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-3-Diagnostika-tiskárny-a-ověření-spojení" class="dpi-toc-link">3.3 Diagnostika tiskárny a ověření spojení</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-4-Uvítací-obrazovka-a-vzdálený-mobilní-náhledQR-Kód" class="dpi-toc-link">3.4 Uvítací obrazovka a vzdálený mobilní náhled (QR Kód)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-5-Kontrola-a-instalace-aktualizací-aplikace" class="dpi-toc-link">3.5 Kontrola a instalace aktualizací aplikace</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#3-6-Odesílání-laboratorní-zpětné-vazbyFeedback" class="dpi-toc-link">3.6 Odesílání laboratorní zpětné vazby (Feedback)</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#4-Podrobný-průvodce-uživatelským-rozhraním" class="dpi-toc-link">4. Podrobný průvodce uživatelským rozhraním</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#4-1-Hlavní-okno-aplikacePřehled" class="dpi-toc-link">4.1 Hlavní okno aplikace (Přehled)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#4-2-Levý-panelProcesní-a-tiskové-parametry" class="dpi-toc-link">4.2 Levý panel: Procesní a tiskové parametry</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#4-3-Centrální-plátnoCanvas2D" class="dpi-toc-link">4.3 Centrální plátno (Canvas2D)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Horní-nástrojová-lišta-plátnaCanvas-Toolbar" class="dpi-toc-link">Horní nástrojová lišta plátna (Canvas Toolbar)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Kontextová-nabídka-a-ovládání-objektů-na-plátně" class="dpi-toc-link">Kontextová nabídka a ovládání objektů na plátně</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Mikropozicování-z-klávesnice-a-režimy-transformace" class="dpi-toc-link">Mikropozicování z klávesnice a režimy transformace</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#4-4-Pravý-panelSlide-Overrides-a-přímé-ovládání" class="dpi-toc-link">4.4 Pravý panel: Slide Overrides a přímé ovládání</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Detailní-parametry-lokálního-přepisuSlide-Overrides" class="dpi-toc-link">Detailní parametry lokálního přepisu (Slide Overrides)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Manuální-ovládání-tiskárnyJog-Widget" class="dpi-toc-link">Manuální ovládání tiskárny (Jog Widget)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Bezpečnostní-systém-tiskových-výzev-a-dialogů" class="dpi-toc-link">Bezpečnostní systém tiskových výzev a dialogů</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#4-5-Konfigurace-aplikace-a-expertní-režimSettings-Modal" class="dpi-toc-link">4.5 Konfigurace aplikace a expertní režim (Settings Modal)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Expertní-režim-a-editace-G-kódů" class="dpi-toc-link">Expertní režim a editace G-kódů</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Chování-funkce„Obnovit-výchozí“" class="dpi-toc-link">Chování funkce „Obnovit výchozí“</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#5-Příprava-tiskové-úlohy-a-procesní-parametry" class="dpi-toc-link">5. Příprava tiskové úlohy a procesní parametry</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-1-Import-vektorové-předlohySVG-a-DXF" class="dpi-toc-link">5.1 Import vektorové předlohy (SVG a DXF)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Postup-importu" class="dpi-toc-link">Postup importu</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-2-Automatické-škálování-a-bezpečnostní-okraje" class="dpi-toc-link">5.2 Automatické škálování a bezpečnostní okraje</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-3-Multiplikace-vzorků-a-mřížka-podložky" class="dpi-toc-link">5.3 Multiplikace vzorků a mřížka podložky</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-4-Význam-a-konfigurace-úvodního-odplivuPrime-Feature" class="dpi-toc-link">5.4 Význam a konfigurace úvodního odplivu (Prime Feature)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-5-Výběr-a-správa-kapalinLiquid-Profiles" class="dpi-toc-link">5.5 Výběr a správa kapalin (Liquid Profiles)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-6-Styly-výplněInfill-Styles" class="dpi-toc-link">5.6 Styly výplně (Infill Styles)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-7-Svařování-uzlů-a-čištění-drahMerge-Nodes" class="dpi-toc-link">5.7 Svařování uzlů a čištění drah (Merge Nodes)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-8-Víceobjektový-tisk-a-přiřazení-trysek-k-objektům" class="dpi-toc-link">5.8 Víceobjektový tisk a přiřazení trysek k objektům</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-9-Řízení-teploty-podložky-a-prahová-hodnotabed_min_temp" class="dpi-toc-link">5.9 Řízení teploty podložky a prahová hodnota (<span style="display: inline-block;"><code>bed_min_temp</code></span>)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#5-10-Přímé-kreslení-geometrických-tvarů-na-plátně" class="dpi-toc-link">5.10 Přímé kreslení geometrických tvarů na plátně</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#6-Kalibrace,-Z-Shift-a-tiskový-proces" class="dpi-toc-link">6. Kalibrace, Z-Shift a tiskový proces</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#6-1-Princip-výškového-nastaveníZ-Shift" class="dpi-toc-link">6.1 Princip výškového nastavení (Z-Shift)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#6-2-Interaktivní-optická-kalibraceZ-Calibration-Modal" class="dpi-toc-link">6.2 Interaktivní optická kalibrace (Z-Calibration Modal)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#6-3-Nivelace-podložkyBed-Leveling-a-testovací-jízda-bodů" class="dpi-toc-link">6.3 Nivelace podložky (Bed Leveling) a testovací jízda bodů</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Interaktivní-ověření-bodů-na-tiskárněTest-bodů" class="dpi-toc-link">Interaktivní ověření bodů na tiskárně (Test bodů)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#6-4-Průběh-tisku-a-správa-plánovaných-pauzPrint-Pause" class="dpi-toc-link">6.4 Průběh tisku a správa plánovaných pauz (Print Pause)</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Obsluha-plánovaných-pauzM0-M1-M601" class="dpi-toc-link">Obsluha plánovaných pauz (M0 / M1 / M601)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#6-5-Export-laboratorního-protokoluCSV" class="dpi-toc-link">6.5 Export laboratorního protokolu (CSV)</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#7-Výroba-příslušenstvíModul-Bracket-ExportDržáky-sklíček" class="dpi-toc-link">7. Výroba příslušenství: Modul Bracket Export (Držáky sklíček)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#7-1-Princip-magnetických-pružných-držáků" class="dpi-toc-link">7.1 Princip magnetických pružných držáků</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#7-2-Klíčová-konstrukční-pravidla-pro-3D-tisk-držáku" class="dpi-toc-link">7.2 Klíčová konstrukční pravidla pro 3D tisk držáku</a></div>
+        <div class="dpi-toc-item lvl-3"><a href="#Doporučené-tiskové-parametry-pro-výrobu-držáku-na-Prusa-MK3S" class="dpi-toc-link">Doporučené tiskové parametry pro výrobu držáku na Prusa MK3S:</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#8-Praktický-průvodce-experimentem-krok-za-krokem" class="dpi-toc-link">8. Praktický průvodce experimentem krok za krokem</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-1Příprava-roztoku-a-naplnění-stříkačky" class="dpi-toc-link">Krok 1: Příprava roztoku a naplnění stříkačky</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-2Příprava-tiskové-podložky-a-substrátů" class="dpi-toc-link">Krok 2: Příprava tiskové podložky a substrátů</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-3Spuštění-DPI-a-připojení-tiskárny" class="dpi-toc-link">Krok 3: Spuštění DPI a připojení tiskárny</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-4Načtení-vzoru-a-konfigurace-parametrů" class="dpi-toc-link">Krok 4: Načtení vzoru a konfigurace parametrů</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-5Demontáž-sondy-PINDA-a-optická-Z-kalibrace" class="dpi-toc-link">Krok 5: Demontáž sondy PINDA a optická Z-kalibrace</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-6Dohled-nad-tiskem" class="dpi-toc-link">Krok 6: Dohled nad tiskem</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-7Vyjmutí-vzorků-a-export-protokolu" class="dpi-toc-link">Krok 7: Vyjmutí vzorků a export protokolu</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#Krok-8Údržba-a-proplach-soustavy-po-tisku" class="dpi-toc-link">Krok 8: Údržba a proplach soustavy po tisku</a></div>
+        <div class="dpi-toc-item lvl-1"><a href="#9-Laboratorní-TroubleshootingŘešení-potíží" class="dpi-toc-link">9. Laboratorní Troubleshooting (Řešení potíží)</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#9-1-Přehledná-diagnostická-tabulka-problémů" class="dpi-toc-link">9.1 Přehledná diagnostická tabulka problémů</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#9-2-Co-dělat-při-ucpání-dávkovací-jehly" class="dpi-toc-link">9.2 Co dělat při ucpání dávkovací jehly</a></div>
+        <div class="dpi-toc-item lvl-2"><a href="#9-3-Přehled-klávesových-zkratek-aplikace-DPI" class="dpi-toc-link">9.3 Přehled klávesových zkratek aplikace DPI</a></div>
+      </nav>
+      <h2 id="1-Úvod-a-bezpečnostní-zásady-obsluhy" class="dpi-h1">1. Úvod a bezpečnostní zásady obsluhy</h2>
+      <h3 id="1-1-Účel-programu-Droplet-Printing-InterfaceDPI" class="dpi-h2">1.1 Účel programu Droplet Printing Interface (DPI)</h3>
+      <p><strong>Droplet Printing Interface (DPI)</strong> je řídicí desktopová aplikace pro mikrodávkování roztoků a suspenzí na skleněné substráty pomocí modifikované 3D tiskárny (referenční model <strong>Prusa i3 MK3S</strong>).</p>
+      <p>Aplikace umožňuje obsluze:</p>
+      <ul>
+        <li>Připojit se k tiskárně přes USB a řídit její pohyby i dávkování.</li>
+        <li>Načítat vektorové předlohy kapek a drah (SVG, DXF) nebo je přímo kreslit na plátně.</li>
+        <li>Konfigurovat dávkovací parametry (Z-offset, rychlost pojezdu, dávkovaný objem v nl/mm či µl/mm).</li>
+        <li>Provádět přesnou optickou kalibraci výšky jehly nad sklem pomocí USB mikroskopu.</li>
+        <li>Řídit tisk na jedno nebo více podložních sklíček současně s možností individuálního nastavení pro každý vzorek.</li>
+      </ul>
+      <div class="dpi-alert alert-note">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">ℹ️</span> <span>Lokální provoz aplikace</span></div>
+        <div class="dpi-alert-body">DPI funguje jako plně lokální aplikace bez nutnosti připojení k internetu. Veškeré tiskové úlohy a nastavení zůstávají uloženy výhradně v počítači.</div>
+      </div>
+      <h3 id="1-2-Bezpečnostní-zásady-při-obsluze-tiskárny" class="dpi-h2">1.2 Bezpečnostní zásady při obsluze tiskárny</h3>
+      <p>Při práci s modifikovanou tiskárnou je nutné dbát zvýšené opatrnosti kvůli přítomnosti křehkých skleněných substrátů a ostrých dávkovacích jehel:</p>
+      <div class="dpi-alert alert-important">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⭐</span> <span>Prevence mechanických kolizí křehkého skla</span></div>
+        <div class="dpi-alert-body">
+          <p>Skleněná podložní sklíčka a FTO substráty jsou křehké. Náraz kovové jehly nebo tiskové hlavy může způsobit roztříštění skla a poškození mechaniky tiskárny.</p>
+          <ul>
+            <li>Před každým spuštěním tisku vždy proveďte optickou kontrolu Z-kalibrace pomocí kamery.</li>
+            <li>Ujistěte se, že sklíčka jsou správně a pevně usazena v držácích.</li>
+            <li>V případě hrozící kolize okamžitě stiskněte červené tlačítko <strong>Nouzové zastavení (STOP)</strong> v levém panelu aplikace.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="dpi-alert alert-warning">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⚠️</span> <span>Manipulace s dávkovací soustavou</span></div>
+        <div class="dpi-alert-body">
+          <ul>
+            <li><strong>Ostré jehly:</strong> Dávkovací jehly mají ostrý nebo zúžený kovový hrot. Při nasazování a manipulaci v pracovním prostoru dbejte opatrnosti, aby nedošlo k poranění.</li>
+            <li><strong>Pohybující se osy:</strong> Během tisku nezasahujte rukama do pracovního prostoru tiskárny. Pro manuální manipulaci s tiskovou hlavou vždy nejve uvolněte motory příkazem <strong>Uvolnit motory (M84)</strong> v diagnostickém okně.</li>
+          </ul>
+        </div>
+      </div>
+      <h2 id="2-Příprava-a-součásti-modifikované-tiskárnyPrusa-MK3S" class="dpi-h1">2. Příprava a součásti modifikované tiskárny (Prusa MK3S)</h2>
+      <p>Tato kapitola popisuje fyzické komponenty dávkovací soustavy, se kterými obsluha manipuluje při přípravě a provozu tiskárny.</p>
+      <h3 id="2-1-Komponenty-tiskové-hlavy" class="dpi-h2">2.1 Komponenty tiskové hlavy</h3>
+      <p>Původní tisková hlava je vybavena stříkačkovým dávkovačem, kde posuv pístu zajišťuje krokový motor osy E:</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig08_syringe_hardware.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 2.1: Schéma tiskové hlavy s popisem klíčových prvků</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Pohon pístu stříkačky</td>
+            <td>Krokový motor s lineárním šroubem, který tlačí přímo na píst upevněné stříkačky.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Tělo stříkačky (1 ml / 5 ml)</td>
+            <td>Laboratorní stříkačka (skleněná Hamilton nebo polypropylenová) sevřená v úchytu tiskové hlavy.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Dávkovací Luer-Lock jehla</td>
+            <td>Výměnná ocelová dávkovací jehla s barevnou paticí.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Indukční sonda PINDA</td>
+            <td>Senzor výšky pro referenční homing – <strong>měří výhradně ocelový plát mimo skleněné substráty</strong>.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>USB mikroskopická kamera</td>
+            <td>Kamera zaměřená na hrot jehly pro optickou kalibraci Z-výšky a vizuální kontrolu kapek.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 id="2-2-Volba-stříkaček-a-dávkovacích-jehel" class="dpi-h2">2.2 Volba stříkaček a dávkovacích jehel</h3>
+      <p>V nastavení DPI jsou předdefinovány profily nejčastěji používaných laboratorních jehel:</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Označení jehly</strong></th>
+            <th><strong>Délka (<span style="display: inline-block;"><code>nozzle_height</code></span>)</strong></th>
+            <th><strong>Vnitřní průměr</strong></th>
+            <th><strong>Barevný kód</strong></th>
+            <th><strong>Typické laboratorní použití</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Modrá jehla</td>
+            <td>31.0 mm</td>
+            <td>0.41 mm (Gauge 22)</td>
+            <td>Modrá</td>
+            <td>Viskóznější roztoky, polymery, širší linky</td>
+          </tr>
+          <tr>
+            <td>Červená jehla</td>
+            <td>31.1 mm</td>
+            <td>0.30 mm (Gauge 25)</td>
+            <td>Červená</td>
+            <td>Nízkoviskózní kapaliny, jemné kapky, vysoké rozlišení</td>
+          </tr>
+          <tr>
+            <td>Vlastní (Custom)</td>
+            <td>Dle měření</td>
+            <td>Dle měření</td>
+            <td>Volitelná</td>
+            <td>Jakákoliv speciální jehla nebo kapilára</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="dpi-alert alert-tip">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">💡</span> <span>Měření délky trysky (nozzle_height)</span></div>
+        <div class="dpi-alert-body">Délka trysky se měří posuvným měřítkem od dosedacího čela držáku až po hrot jehly. Hodnota <span style="display: inline-block;"><code>nozzle_hidden</code></span> (výchozí 4.0 mm) představuje část patice zapuštěnou uvnitř upínacího bloku.</div>
+      </div>
+      <h3 id="2-3-Kalibrační-faktor-stříkačkycalibration_factor" class="dpi-h2">2.3 Kalibrační faktor stříkačky (<span style="display: inline-block;"><code>calibration_factor</code></span>)</h3>
+      <p>Aby program DPI správně převedl zadaný objem v mikrolitrech (<span style="display: inline-block;"><code>µl</code></span>) nebo nanolitrech (<span style="display: inline-block;"><code>nl</code></span>) na přesný posuv pístu stříkačky v milimetrech (osa E tiskárny), využívá kalibrační faktor <span class="dpi-math-inline"><math display="inline"><mi>k</mi></math></span> v jednotkách <span class="dpi-math-inline"><math display="inline"><mrow><mrow><mo>[</mo><mtext> </mtext><mspace width="0.22em"></mspace><mfrac><mrow><mtext>mm posuvu pístu</mtext></mrow><mrow><mtext>µl dávkovaného objemu</mtext></mrow></mfrac><mspace width="0.22em"></mspace><mtext> </mtext><mo>]</mo></mrow></mrow></math></span>.</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Typ stříkačky</strong></th>
+            <th><strong>Vnitřní průměr válce</strong></th>
+            <th><strong>Kalibrační faktor (<span style="display: inline-block;"><code>k</code></span>)</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hamilton 1 ml (skleněná mikrostříkačka)</td>
+            <td>1.98 mm</td>
+            <td>0.3239 mm/µl (výchozí hodnota)</td>
+          </tr>
+          <tr>
+            <td>Standardní 5 ml (plastová)</td>
+            <td>9.50 mm</td>
+            <td>0.0141 mm/µl</td>
+          </tr>
+        </tbody>
+      </table>
+      <h4 id="Nastavení-faktoru-v-programu" class="dpi-h3">Nastavení faktoru v programu:</h4>
+      <ol>
+        <li value="1">V horní liště otevřete <strong>Nastavení</strong> -> <strong>Tiskárna</strong>.</li>
+        <li value="2">Do pole <strong>Kalibrační faktor</strong> zadejte příslušnou hodnotu <span class="dpi-math-inline"><math display="inline"><mi>k</mi></math></span> pro vaši stříkačku.</li>
+        <li value="3"><strong>Alternativně:</strong> Zadejte přímo vnitřní průměr válce stříkačky v milimetrech do pole <strong>Průměr stříkačky</strong> – program faktor <span class="dpi-math-inline"><math display="inline"><mi>k</mi></math></span> dopočítá automaticky.</li>
+        <li value="4">Pro novou nestandardní stříkačku lze faktor snadno určit: změřte posuvným měřítkem délku stupnice v mm pro známý objem v µl a vydělte je (<span class="dpi-math-inline"><math display="inline"><mrow><mi>k</mi><mspace width="0.22em"></mspace><mo>=</mo><mspace width="0.22em"></mspace><mfrac><mrow><mtext>posuv v mm</mtext></mrow><mrow><mtext>objem v µl</mtext></mrow></mfrac></mrow></math></span>).</li>
+      </ol>
+      <h3 id="2-4-Pravidla-pro-obsluhu-indukční-sondy-PINDA" class="dpi-h2">2.4 Pravidla pro obsluhu indukční sondy PINDA</h3>
+      <div class="dpi-alert alert-warning">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⚠️</span> <span>KRITICKÉ: PINDA nedetekuje sklo a vyžaduje uvolnění před tiskem!</span></div>
+        <div class="dpi-alert-body">
+          <p>Indukční sonda PINDA reaguje pouze na kovový ocelový plát. <strong>Skleněná podložní sklíčka jsou pro sondu neviditelná!</strong></p>
+          <p>Jelikož sklíčko i držák vystupují nad úroveň plátu, nesmí sonda zůstat ve spodní pracovní poloze, jinak by při přejezdu narazila do držáku nebo skla.</p>
+          <p><strong>Postup obsluhy:</strong></p>
+          <ol>
+            <li value="1"><strong>Homing:</strong> Tiskárna provede referenční sjezd osy Z (<span style="display: inline-block;"><code>G28 W</code></span>) nad obnaženým ocelovým plátem v bezpečném rohu mimo držáky skel.</li>
+            <li value="2"><strong>Výzva k uvolnění:</strong> Program automaticky pozastaví činnost a zobrazí výzvu na obrazovce: <em>„Odstraňte PINDA sondu z podložky (tiskové hlavy), než bude zahájen tisk.“</em></li>
+            <li value="3"><strong>Vysunutí sondy:</strong> Obsluha imbusovým klíčem povolí aretační šroubek sondy PINDA na tiskové hlavě a vysune ji nahoru (nebo odklopí do servisní polohy), aby byl nejnižším bodem hlavy pouze hrot dávkovací jehly.</li>
+            <li value="4"><strong>Potvrzení:</strong> Teprve po mechanickém zajištění sondy v horní poloze klikněte na <strong>Pokračovat</strong> v aplikaci.</li>
+          </ol>
+        </div>
+      </div>
+      <h3 id="2-5-Ovládání-USB-mikroskopu-v-aplikaci" class="dpi-h2">2.5 Ovládání USB mikroskopu v aplikaci</h3>
+      <p>Pro sledování dávkování a přesnou optickou kalibraci výšky slouží video stream z USB mikroskopu v pravém panelu aplikace:</p>
+      <ul>
+        <li><strong>Volba kamery:</strong> V rozbalovací nabídce vyberte připojený USB mikroskop.</li>
+        <li><strong>Orientace obrazu:</strong> Pomocí tlačítek můžete obraz otočit o 90°, 180° nebo 270° a horizontálně zrcadlit tak, aby směr na monitoru odpovídal skutečnému pohybu tiskárny.</li>
+        <li><strong>Snímek (Snapshot):</strong> Kliknutím na ikonu fotoaparátu uložíte aktuální snímek rozhraní jehla-substrát do souboru <span style="display: inline-block;"><code>.png</code></span>.</li>
+        <li><strong>Záznam videa:</strong> Tlačítko nahrávání umožňuje zaznamenat průběh dávkování kapek do formátu <span style="display: inline-block;"><code>.webm</code></span>.</li>
+        <li><strong>Plovoucí okno (Pop-out):</strong> Tlačítkem zvětšení otevřete video stream v samostatném okně, které lze umístit na druhý monitor pro nepřetržitý dohled nad tiskem.</li>
+      </ul>
+      <h2 id="3-Připojení-a-první-spuštění" class="dpi-h1">3. Připojení a první spuštění</h2>
+      <p>Tato kapitola vás provede spuštěním aplikace, navázáním obousměrné komunikace s tiskárnou Prusa MK3S a ověřením základních diagnostických funkcí.</p>
+      <h3 id="3-1-Spuštění-aplikace" class="dpi-h2">3.1 Spuštění aplikace</h3>
+      <p>DPI je dodáváno jako nativní binární balíček:</p>
+      <ul>
+        <li><strong>Linux:</strong> Spusťte spustitelný soubor <span style="display: inline-block;"><code>dpi</code></span> nebo nainstalujte balíček <span style="display: inline-block;"><code>.deb</code></span> / <span style="display: inline-block;"><code>.rpm</code></span> / AppImage.</li>
+        <li><strong>Windows:</strong> Spusťte instalátor <span style="display: inline-block;"><code>DPI_Setup.exe</code></span>, který vytvoří zástupce na ploše a v nabídce Start.</li>
+      </ul>
+      <div class="dpi-alert alert-note">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">ℹ️</span> <span>Oprávnění k sériovému portu na Linuxu</span></div>
+        <div class="dpi-alert-body">
+          <p>Pokud se po spuštění na Linuxu nezobrazují žádné sériové porty, ujistěte se, že váš uživatelský účet je členem skupiny <span style="display: inline-block;"><code>dialout</code></span> (Ubuntu/Debian) nebo <span style="display: inline-block;"><code>uucp</code></span> (Arch/Manjaro):</p>
+          <div>
+            <pre>sudo usermod -a -G dialout $USER</pre>
+          </div>
+          <p>Po přidání do skupiny je nutné se odhlásit a znovu přihlásit do systému.</p>
+        </div>
+      </div>
+      <h3 id="3-2-Připojení-k-tiskárněSériová-linka-USB" class="dpi-h2">3.2 Připojení k tiskárně (Sériová linka USB)</h3>
+      <p>Tiskárna Prusa MK3S se k řídícímu počítači připojuje standardním kabelem USB typu B.</p>
+      <p>V levém horním rohu aplikace (Levý panel) se nachází sekce <strong>Připojení k tiskárně</strong>:</p>
+      <ol>
+        <li value="1">
+          <p><strong>Výběr portu:</strong></p>
+          <ul>
+            <li>Možnost <strong>"Automaticky"</strong> (doporučeno): Aplikace postupně projde všechny dostupné porty a odešle příkaz <span style="display: inline-block;"><code>M115</code></span>. První port, který odpoví validním identifikačním řetězcem firmwaru Marlin, je automaticky připojen.</li>
+            <li><strong>Manuální výběr:</strong> Vyberte konkrétní port z rozbalovacího seznamu (např. <span style="display: inline-block;"><code>/dev/ttyACM0</code></span> na Linuxu nebo <span style="display: inline-block;"><code>COM3</code></span> na Windows).</li>
+          </ul>
+        </li>
+        <li value="2"><strong>Baudrate:</strong> Výchozí přenosová rychlost pro firmware Marlin na Prusa tiskárnách je <strong>115200 Bd</strong>.</li>
+        <li value="3"><strong>Tlačítko Připojit:</strong> Klikněte na tlačítko se symbolem řetězu. Po úspěšném navázání spojení se ikona zbarví do zelena, tlačítko zobrazí <strong>"Odpojit"</strong> a v telemetrickém bloku pod ním se začnou živě aktualizovat souřadnice X, Y, Z a teploty.</li>
+      </ol>
+      <h3 id="3-3-Diagnostika-tiskárny-a-ověření-spojení" class="dpi-h2">3.3 Diagnostika tiskárny a ověření spojení</h3>
+      <p>Před zahájením práce se doporučuje ověřit základní funkce tiskárny prostřednictvím okna <strong>Diagnostika tiskárny</strong> (dostupné z horního menu: <strong>Nástroje</strong> -> <strong>Diagnostika tiskárny</strong> nebo kliknutím na stavový řádek):</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig06_diagnostics_modal.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 3.1: Diagnostické okno s rychlými příkazy a terminálem</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Informace a stav (M115, M119, M114)</td>
+            <td>Ověření verze firmware (<span style="display: inline-block;"><code>M115</code></span>), kontrola stavu koncových spínačů (<span style="display: inline-block;"><code>M119</code></span>) a zjištění aktuální fyzické polohy (<span style="display: inline-block;"><code>M114</code></span>).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Pohyb a dávkování (G28, G92, M84)</td>
+            <td>Základní homing všech os (<span style="display: inline-block;"><code>G28</code></span>), rychlý homing bez měření sítě (<span style="display: inline-block;"><code>G28 W</code></span>), vynulování extruderu po výměně stříkačky (<span style="display: inline-block;"><code>G92 E0</code></span>) a uvolnění krokových motorů (<span style="display: inline-block;"><code>M84</code></span>).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Teplota a chlazení (M140, M106)</td>
+            <td>Okamžité a bezpečné vypnutí výhřevu podložky (<span style="display: inline-block;"><code>M140 S0</code></span>) a spuštění ofukového větráčku pro urychlení odparu rozpouštědla (<span style="display: inline-block;"><code>M106 S255</code></span>).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Interaktivní terminál G-kódu</td>
+            <td>Přímé odesílání vlastních G-kódových příkazů do tiskárny s okamžitým výpisem odpovědí firmware a historií příkazů.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="dpi-alert alert-tip">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">💡</span> <span>Uvolnění motorů při čištění jehly</span></div>
+        <div class="dpi-alert-body">Při manuální výměně stříkačky nebo čištění dávkovací jehly klikněte na tlačítko <strong>Uvolnit motory (M84)</strong>. Tím se odpojí napájení krokových motorů a tiskovou hlavou lze rukou lehce pohybovat bez namáhání mechaniky.</div>
+      </div>
+      <h3 id="3-4-Uvítací-obrazovka-a-vzdálený-mobilní-náhledQR-Kód" class="dpi-h2">3.4 Uvítací obrazovka a vzdálený mobilní náhled (QR Kód)</h3>
+      <p>Při prvním spuštění (nebo z horního menu <strong>Nápověda</strong> -> <strong>Vítejte v DPI</strong>) se otevírá uvítací centrum aplikace:</p>
+      <ul>
+        <li><strong>Rychlý start a nedávné projekty:</strong> Umožňuje jedním kliknutím otevřít naposledy zpracovávané experimenty s přehledem data a času jejich uložení.</li>
+        <li>
+          <p><strong>Mobilní laboratorní náhled (QR kód):</strong></p>
+          <ul>
+            <li>DPI automaticky zjistí lokální IP adresu počítače v síti a vygeneruje unikátní QR kód.</li>
+            <li>Naskenováním tohoto kódu fotoaparátem mobilního telefonu nebo tabletu připojeného na stejnou laboratorní Wi-Fi síť se otevře webové rozhraní aplikace (<span style="display: inline-block;"><code>http://&lt;ip>:5173</code></span>).</li>
+            <li>Webové rozhraní v reálném čase přebírá telemetrii z tiskárny (aktuální souřadnice, teploty podložky, stav dávkování), takže laborant může dohlížet na průběh experimentu z kteréhokoliv koutu laboratoře.</li>
+          </ul>
+        </li>
+      </ul>
+      <h3 id="3-5-Kontrola-a-instalace-aktualizací-aplikace" class="dpi-h2">3.5 Kontrola a instalace aktualizací aplikace</h3>
+      <p>DPI obsahuje integrovanou kontrolu aktualizací:</p>
+      <ol>
+        <li value="1"><strong>Automatická kontrola:</strong> Krátce po spuštění aplikace automaticky ověří dostupnost novější verze. Pokud je nalezena nová verze, zobrazí se dialog s přehledem změn a možností instalace.</li>
+        <li value="2"><strong>Ruční kontrola:</strong> Aktualizaci můžete kdykoliv zkontrolovat v horním menu <strong>Nápověda</strong> -> <strong>Zkontrolovat aktualizace</strong>.</li>
+      </ol>
+      <h3 id="3-6-Odesílání-laboratorní-zpětné-vazbyFeedback" class="dpi-h2">3.6 Odesílání laboratorní zpětné vazby (Feedback)</h3>
+      <p>Přímo z aplikace lze komunikovat s vývojovým týmem:</p>
+      <ul>
+        <li>V horním menu zvolte <strong>Nápověda</strong> -> <strong>Odeslat zpětnou vazbu</strong>.</li>
+        <li>Otevře se formulář, kam můžete popsat své postřehy, navrhnout novou funkci nebo nahlásit nestandardní chování. Zpráva je bezpečně uložena a přeposlána přes šifrovaný protokol vývojářům.</li>
+      </ul>
+      <h2 id="4-Podrobný-průvodce-uživatelským-rozhraním" class="dpi-h1">4. Podrobný průvodce uživatelským rozhraním</h2>
+      <p>Uživatelské rozhraní DPI je navrženo s důrazem na přehlednost v laboratorním prostředí. Využívá třísloupcový layout s tmavou laboratorní estetikou šetřící zrak obsluhy.</p>
+      <h3 id="4-1-Hlavní-okno-aplikacePřehled" class="dpi-h2">4.1 Hlavní okno aplikace (Přehled)</h3>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig01_ui_main_overview.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 4.1: Hlavní okno DPI s vyznačenými funkčními zónami</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Hlavička aplikace (Header)</td>
+            <td>Hlavní menu <strong>Soubor</strong> (projekty, import, export CSV), výběr <strong>Kapaliny</strong>, menu <strong>Nástroje</strong> (Bracket Export, Diagnostika), <strong>Nastavení</strong> a nápověda.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Správa připojení tiskárny</td>
+            <td>Výběr sériového portu, baudrate, stav spojení a živá telemetrie tiskárny (aktuální souřadnice X/Y/Z a teplota podložky).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Procesní parametry a krájení (Slicing)</td>
+            <td>Volba typu podložního skla, konfigurace jehly/trysky, výška Z-offsetu, dávkovací rychlost (nl/mm), styl výplně a tlačítka spuštění tisku.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Centrální grafické plátno (Canvas2D)</td>
+            <td>Interaktivní vizualizace tiskové podložky Prusa MK3S (250 × 210 mm), rozložení sklíček, odplivové linky a aktuální polohy trysky.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>Lokální přepisy sklíček (Slide Overrides)</td>
+            <td>Individuální nastavení Z-offsetu, dávkování, rychlosti nebo stylu výplně pro každé jednotlivé sklíčko zvlášť.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">6</span></td>
+            <td>Ovládací panely (Kamera, Jog, Terminál)</td>
+            <td>Živý obraz z USB mikroskopu s možností rotace o 180°, manuální krokovací klávesnice (Jog) a vestavěný terminál.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 id="4-2-Levý-panelProcesní-a-tiskové-parametry" class="dpi-h2">4.2 Levý panel: Procesní a tiskové parametry</h3>
+      <p>Levý panel je řídícím centrem pro přípravu tiskové úlohy a její odeslání do tiskárny.</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig02_left_panel_controls.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 4.2: Detail ovládacích prvků levého panelu</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Sériový port a připojení</td>
+            <td>Výběr portu tiskárny a tlačítko Připojit/Odpojit. Po připojení indikuje stav zelenou barvou.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Telemetrie pozice a teplot</td>
+            <td>Živý odečet souřadnic X, Y, Z a teploty vyhřívané podložky Prusa v reálném čase.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Volba podložního skla</td>
+            <td>Výběr geometrie substrátu: <strong>Laboratorní sklo (76 × 26 × 1 mm)</strong>, <strong>FTO (76 × 50 × 1 mm)</strong> nebo <strong>Vlastní</strong> rozměr.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Konfigurace dávkovací trysky</td>
+            <td>Presety jehel: <strong>Modrá (0.41 mm)</strong>, <strong>Červená (0.30 mm)</strong> nebo <strong>Vlastní</strong> s automatickým načtením výšky a zapuštění.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>Z-Offset a volba jednotek</td>
+            <td>Klíčový parametr výšky dávkování nad sklem. Možnost přepínání mezi mikrometry (<span style="display: inline-block;"><code>µm</code></span>) a milimetry (<span style="display: inline-block;"><code>mm</code></span>).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">6</span></td>
+            <td>Rychlost tisku a extruze</td>
+            <td>Rychlost pojezdu osy X/Y v mm/min a dávkovací rychlost s volbou jednotek (<span style="display: inline-block;"><code>nl/mm</code></span>, <span style="display: inline-block;"><code>µl/mm</code></span> nebo kroky/mm).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">7</span></td>
+            <td>Styl výplně a šrafování</td>
+            <td>Možnost volby: <strong>Pouze obrysy</strong>, <strong>Pouze výplň</strong>, nebo <strong>Okraje + Výplň</strong>. Nastavení hustoty rozestupů a úhlu natočení šrafů.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">8</span></td>
+            <td>Tlačítka řízení tisku</td>
+            <td>Zelené tlačítko <strong>Spustit tisk</strong>, žluté <strong>Pozastavit</strong> a červené <strong>Nouzové zastavení (STOP)</strong> s automatickým odjezdem hlavy.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 id="4-3-Centrální-plátnoCanvas2D" class="dpi-h2">4.3 Centrální plátno (Canvas2D)</h3>
+      <p>Plátno věrně simuluje pracovní prostor tiskárny Prusa MK3S:</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig03_canvas_multislide.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 4.3: Vizualizace tiskové podložky a rozložení substrátů na plátně</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Ohraničení podložky (Bed Limits)</td>
+            <td>Modrý obdélník reprezentující fyzické rozměry ocelového plátu Prusa MK3S (výchozí 250 × 210 mm).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Odplivová dráha (Prime Line)</td>
+            <td>Svislá linie na levém okraji podložky. Zde tiskárna před tiskem vytlačí definovaný objem kapaliny pro ustavení menisku.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Matrice podložních sklíček</td>
+            <td>Automaticky vypočtená mřížka skel uspořádaná do sloupců a řad s respektováním nastavených rozestupů (<span style="display: inline-block;"><code>multi_spacing</code></span>).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Vektorový vzor kapek</td>
+            <td>Vizuální náhled drah kapek. Čárkované čáry znázorňují rychlopřejezdy bez dávkování, plné čáry aktivní extruzi.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>Počátek souřadnic [0, 0]</td>
+            <td>Levý přední roh podložky (Home pozice os X a Y).</td>
+          </tr>
+        </tbody>
+      </table>
+      <h4 id="Horní-nástrojová-lišta-plátnaCanvas-Toolbar" class="dpi-h3">Horní nástrojová lišta plátna (Canvas Toolbar)</h4>
+      <p>V záhlaví plátna se nachází rychlá nástrojová lišta s interaktivními funkcemi:</p>
+      <ul>
+        <li><strong>Zobrazení mřížky (Grid):</strong> Zapne nebo vypne souřadnou mřížku tiskové podložky.</li>
+        <li><strong>Pravítko (Měření vzdáleností):</strong> Aktivuje interaktivní měřicí režim. Kliknutím na dva libovolné body na plátně se zobrazí přesná vzdálenost v milimetrech včetně složek <span class="dpi-math-inline"><math display="inline"><mrow><mi>Δ</mi><mspace width="0.22em"></mspace><mi>X</mi></mrow></math></span> a <span class="dpi-math-inline"><math display="inline"><mrow><mi>Δ</mi><mspace width="0.22em"></mspace><mi>Y</mi></mrow></math></span>.</li>
+        <li><strong>Vycentrovat (Fit View):</strong> Vycentruje celou tiskovou desku do okna plátna.</li>
+        <li><strong>Na sklíčko (Center on Slide):</strong> Přiblíží a vycentruje pohled na konkrétní vybrané podložní sklíčko.</li>
+        <li><strong>Sloučit uzly (Merge Nodes):</strong> Otevře vyskakovací okno pro vyhlazení a svaření rozpojených vektorových drah.</li>
+        <li><strong>Kreslicí nástroje (Obdélník, Elipsa, Úsečka):</strong> Umožňují nakreslit geometrické tvary přímo na sklíčko bez nutnosti otevírat externí grafický editor.</li>
+      </ul>
+      <h4 id="Kontextová-nabídka-a-ovládání-objektů-na-plátně" class="dpi-h3">Kontextová nabídka a ovládání objektů na plátně</h4>
+      <p>Kliknutím pravým tlačítkem myši na libovolný objekt se zobrazí kontextové menu:</p>
+      <ul>
+        <li><strong>Vycentrovat:</strong> Posune objekt přesně na geometrický střed daného sklíčka.</li>
+        <li><strong>Resetovat:</strong> Vrátí objekt do výchozího měřítka, natočení a pozice.</li>
+        <li><strong>Otočit o 90°:</strong> Rychlá rotace po směru hodinových ručiček.</li>
+        <li><strong>Zrcadlit (Vodorovně / Svisle):</strong> Horizontální a vertikální překlopení trajektorie.</li>
+        <li><strong>Aplikovat na všechna skla:</strong> Replikuje aktuální polohu, měřítko a rotaci vybraného objektu na všechny ostatní vzorky v tiskové dávce.</li>
+        <li><strong>Skrýt z tohoto skla (<kbd class="dpi-kbd">Delete</kbd> / <kbd class="dpi-kbd">Backspace</kbd>):</strong> Vratně deaktivuje objekt pouze na konkrétním sklíčku.</li>
+      </ul>
+      <h4 id="Mikropozicování-z-klávesnice-a-režimy-transformace" class="dpi-h3">Mikropozicování z klávesnice a režimy transformace</h4>
+      <p>Pro přesné laboratorní usazení nabízí plátno pokročilé interakce:</p>
+      <ul>
+        <li><strong>Dvojklik na vybraný objekt:</strong> Přepíná interaktivní transformační režim mezi <strong>Scale</strong> (úchopové čtverečky v rozích pro změnu velikosti) a <strong>Rotate</strong> (kruhové úchopy pro plynulé otáčení).</li>
+        <li>
+          <p><strong>Modifikátory myši při transformaci:</strong></p>
+          <ul>
+            <li>Přidržením klávesy <kbd class="dpi-kbd">Alt</kbd>: <strong>Synchronizovaný pohyb</strong> – tažení vybraného objektu na jednom sklíčku současně posune tentýž objekt na všech ostatních substrátech o stejný relativní vektor.</li>
+            <li>Přidržením klávesy <kbd class="dpi-kbd">Ctrl</kbd>: Kvantování transformace – rotace skáče přesně po <strong>15°</strong>, měřítko po krocích <strong>0.1</strong> a poloha se přichytává k mřížce.</li>
+            <li>Přidržením klávesy <kbd class="dpi-kbd">Shift</kbd>: Kotva ve středu geometrie (škálování symetricky vůči těžišti namísto protilehlého rohu).</li>
+          </ul>
+        </li>
+        <li>
+          <p><strong>Posun z klávesnice:</strong></p>
+          <ul>
+            <li>Samotné šipky <kbd class="dpi-kbd">←</kbd> <kbd class="dpi-kbd">→</kbd> <kbd class="dpi-kbd">↑</kbd> <kbd class="dpi-kbd">↓</kbd>: Krok <strong>1.0 mm</strong>.</li>
+            <li>Se stisknutou klávesou <kbd class="dpi-kbd">Shift</kbd>: Jemný laboratorní posuv <strong>0.1 mm</strong> (100 µm).</li>
+          </ul>
+        </li>
+      </ul>
+      <h3 id="4-4-Pravý-panelSlide-Overrides-a-přímé-ovládání" class="dpi-h2">4.4 Pravý panel: Slide Overrides a přímé ovládání</h3>
+      <p>Pravý panel nabízí pokročilé laboratorní funkce a přímou správu jednotlivých vzorků:</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig04_right_panel_overrides.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 4.4: Pravý panel s lokálními přepisy sklíček, kamerou a Jog ovládáním</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Accordion sklíček (Vzorky)</td>
+            <td>Rozbalovací karty pro jednotlivé vzorky (Sample 1, Sample 2…). Umožňuje nezávislou konfiguraci každého skla v jedné tiskové dávce.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Lokální přepis parametrů (Overrides)</td>
+            <td>Aktivace lokálního Z-offsetu, jiné dávkovací rychlosti (<span style="display: inline-block;"><code>nl/mm</code></span>) nebo hustoty výplně pro daný vzorek (např. gradientní experimenty).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Správa objektů a viditelnosti</td>
+            <td>Seznam vektorových tvarů na substrátu s možností dočasného skrytí oka nebo přiřazení jiné trysce.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Živý obraz z mikroskopu</td>
+            <td>Video stream z USB mikroskopu s tlačítky pro otočení o 180° a zrcadlení horizontální osy.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>Krokovací klávesnice (Jog)</td>
+            <td>Manuální pojezd v osách X, Y a Z s volbou kroku (0.1 mm, 1 mm, 10 mm, 50 mm) a tlačítkem Home (G28).</td>
+          </tr>
+        </tbody>
+      </table>
+      <h4 id="Detailní-parametry-lokálního-přepisuSlide-Overrides" class="dpi-h3">Detailní parametry lokálního přepisu (Slide Overrides)</h4>
+      <p>V rozbalovací kartě každého vzorku lze přepsat globální procesní hodnoty:</p>
+      <ul>
+        <li><strong>Uživatelský název a poznámka:</strong> Vložení popisku vzorku (např. „Vzorek B2 – 20 mM koncentrace“), který se promítne do exportovaného laboratorního protokolu (CSV).</li>
+        <li><strong>Lokální Z-Offset:</strong> Umožňuje nastavit odlišnou tiskovou výšku (v µm nebo mm) pro každé sklo zvlášť, což je ideální pro testování smáčivosti a stability menisku v gradientních řadách.</li>
+        <li><strong>Dávkování a rychlost:</strong> Přepis extruze (<span style="display: inline-block;"><code>nl/mm</code></span>, <span style="display: inline-block;"><code>µl/mm</code></span> nebo kroky/mm) a pojezdové rychlosti (mm/min).</li>
+        <li><strong>Přepis výplně:</strong> Volba vlastního rozestupu šrafování (<span style="display: inline-block;"><code>mm</code></span>, <span style="display: inline-block;"><code>%</code></span> nebo celkový počet drah) a stylu výplně (Pouze obrysy, Výplň, Obrysy + Výplň).</li>
+        <li><strong>Správa objektů na substrátu:</strong> Zobrazení fyzických rozměrů objektu v milimetrech, přepínání viditelnosti a přiřazení specifické jehly s okamžitým barevným odlišením dráhy.</li>
+      </ul>
+      <h4 id="Manuální-ovládání-tiskárnyJog-Widget" class="dpi-h3">Manuální ovládání tiskárny (Jog Widget)</h4>
+      <p>Spodní část pravého panelu obsahuje přímé řízení pohonů tiskárny, které je aktivní pouze tehdy, když je stroj připojen a právě netiskne:</p>
+      <ul>
+        <li><strong>Krokový přírůstek:</strong> Volba vzdálenosti jednoho pojezdu: <span style="display: inline-block;"><code>0.1 mm</code></span> (jemné dostavení), <span style="display: inline-block;"><code>1.0 mm</code></span>, <span style="display: inline-block;"><code>10.0 mm</code></span> a <span style="display: inline-block;"><code>50.0 mm</code></span> (rychlé přejíždění).</li>
+        <li>
+          <p><strong>Nezávislé parkování os:</strong></p>
+          <ul>
+            <li><strong>Home XY (<span style="display: inline-block;"><code>G28 X Y</code></span>):</strong> Zaparkuje podložku a hlavu bez pohybu svislé osy Z.</li>
+            <li><strong>Home Z (<span style="display: inline-block;"><code>G28 Z</code></span>):</strong> Samostatný referenční sjezd osy Z na ocelovém plátu.</li>
+            <li><strong>Kalibrace sítě podložky (<span style="display: inline-block;"><code>G80</code></span>):</strong> Spustí automatické měření nerovností podložky firmwarem Marlin.</li>
+          </ul>
+        </li>
+        <li><strong>Příkazová řádka G-kódu:</strong> Vstupní pole pro okamžité odeslání jakéhokoliv manuálního Marlin příkazu přímo do základní desky Einsy.</li>
+      </ul>
+      <h4 id="Bezpečnostní-systém-tiskových-výzev-a-dialogů" class="dpi-h3">Bezpečnostní systém tiskových výzev a dialogů</h4>
+      <p>Během přípravy a tisku mohou nastat situace vyžadující zásah obsluhy (pauza tisku, výzva k uvolnění sondy PINDA, výměna jehly či potvrzení operace). Aplikace obsahuje bezpečnostní pojistky:</p>
+      <ul>
+        <li><strong>Fronta výzev:</strong> Pokud nastane více událostí za sebou, dialogy se zobrazují postupně. Žádná výzva se nepřeskočí.</li>
+        <li><strong>Ochrana proti nechtěnému kliknutí:</strong> Po otevření dialogového okna je potvrzovací tlačítko na zlomek sekundy (400 ms) neaktivní. Tím je zabráněno nechtěnému potvrzení kroku překliknutím z předchozí práce.</li>
+      </ul>
+      <h3 id="4-5-Konfigurace-aplikace-a-expertní-režimSettings-Modal" class="dpi-h2">4.5 Konfigurace aplikace a expertní režim (Settings Modal)</h3>
+      <p>Do hlavního okna konfigurace vstoupíte kliknutím na <strong>Nastavení</strong> v horní liště. Konfigurační okno je rozděleno do tematických záložek:</p>
+      <ul>
+        <li><strong>Tryska:</strong> Správa profilů dávkovacích jehel (délka, vnitřní průměr, zapuštěná část, barva).</li>
+        <li><strong>Skla:</strong> Knihovna rozměrů substrátů (šířka, výška, tloušťka v ose Z).</li>
+        <li><strong>Kapaliny:</strong> Chemické profily roztoků (procesní Z-offsety, rychlosti extruze, povolené trysky a teploty).</li>
+        <li><strong>Tiskárna:</strong> Fyzické limity podložky, kalibrační faktor stříkačky, výška bloku hlavy a přechod do konfigurace Nivelace podložky.</li>
+        <li><strong>Tisk:</strong> Globální strategie pojezdu (<span style="display: inline-block;"><code>route_mode</code></span>: nejrychlejší vs. <span style="display: inline-block;"><code>no_cross</code></span>) a priorita tisku (<span style="display: inline-block;"><code>substrate_major</code></span> vs. <span style="display: inline-block;"><code>nozzle_major</code></span>).</li>
+        <li><strong>Program:</strong> Přepínání tmavého a světlého motivu, sezónní animace a aktivace <strong>Expertního režimu</strong>.</li>
+      </ul>
+      <h4 id="Expertní-režim-a-editace-G-kódů" class="dpi-h3">Expertní režim a editace G-kódů</h4>
+      <p>Expertní režim je zabezpečený mód určený pro servisní techniky a vývojáře procesů:</p>
+      <ol>
+        <li value="1"><strong>Aktivace:</strong> V záložce <strong>Program</strong> přepněte přepínač <strong>Aktivovat expertní režim</strong> a potvrďte bezpečnostní varování.</li>
+        <li value="2"><strong>Záložka G-kódy:</strong> Po aktivaci se v levém menu nastavení zpřístupní nová záložka <strong>G-kódy</strong>, kde lze přímo editovat šablony <span style="display: inline-block;"><code>start_gcode</code></span>, <span style="display: inline-block;"><code>end_gcode</code></span>, <span style="display: inline-block;"><code>loop_start_gcode</code></span>, <span style="display: inline-block;"><code>loop_end_gcode</code></span> a makro výměny trysky <span style="display: inline-block;"><code>nozzle_change_gcode</code></span>.</li>
+        <li value="3"><strong>Trvalé ukládání (Persistence):</strong> Veškeré úpravy G-kódů se po stisku <strong>Uložit</strong> zapisují <strong>trvale</strong> do konfiguračního souboru <span style="display: inline-block;"><code>settings.json</code></span>. Změny zůstávají v platnosti napořád, i po vypnutí expertního režimu či restartu aplikace.</li>
+        <li value="4"><strong>Bezpečnostní zámek:</strong> Samotný přepínač expertního režimu se po ukončení aplikace z bezpečnostních důvodů automaticky vrací do vypnutého stavu, aby běžný uživatel nemohl omylem poškodit strojní makra.</li>
+      </ol>
+      <h4 id="Chování-funkce„Obnovit-výchozí“" class="dpi-h3">Chování funkce „Obnovit výchozí“</h4>
+      <p>V levém dolním rohu okna nastavení se nachází tlačítko <strong>Obnovit výchozí</strong>:</p>
+      <ul>
+        <li><strong>Je-li expertní režim ZAPNUTÝ:</strong> Obnoví se kompletní tovární nastavení tiskárny <strong>včetně</strong> výchozích Marlin šablon G-kódů.</li>
+        <li><strong>Je-li expertní režim VYPNUTÝ:</strong> Obnoví se pouze běžné fyzické limity tiskárny, rychlosti a body nivelace. Uživatelsky přizpůsobené G-kódy v expertní sekci zůstanou <strong>zcela nedotčeny</strong>!</li>
+      </ul>
+      <h2 id="5-Příprava-tiskové-úlohy-a-procesní-parametry" class="dpi-h1">5. Příprava tiskové úlohy a procesní parametry</h2>
+      <p>Příprava tiskového experimentu v DPI probíhá zcela digitálně prostřednictvím importu standardní vektorové grafiky a konfigurace chemicko-fyzikálních vlastností použitého roztoku.</p>
+      <h3 id="5-1-Import-vektorové-předlohySVG-a-DXF" class="dpi-h2">5.1 Import vektorové předlohy (SVG a DXF)</h3>
+      <p>DPI podporuje dva průmyslové a vědecké formáty vektorové grafiky:</p>
+      <ul>
+        <li><strong>SVG (Scalable Vector Graphics):</strong> Standardní otevřený formát exportovatelný z grafických editorů jako je Inkscape, Adobe Illustrator, CorelDRAW či Python knihoven (např. <span style="display: inline-block;"><code>matplotlib</code></span>). DPI podporuje úsečky, lomené čáry, obdélníky, kružnice, elipsy a kubické i kvadratické Bézierovy křivky.</li>
+        <li><strong>DXF (Drawing Exchange Format):</strong> Standardní CAD formát používaný v AutoCADu, FreeCADu či SolidWorks pro přesné mikrofluidní kanálky a čipy.</li>
+      </ul>
+      <h4 id="Postup-importu" class="dpi-h3">Postup importu</h4>
+      <ol>
+        <li value="1">V horní nabídce klikněte na <strong>Soubor</strong> -> <strong>Načíst vzorek</strong> nebo stiskněte <kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">O</kbd>.</li>
+        <li value="2">Vyberte soubor <span style="display: inline-block;"><code>.svg</code></span> nebo <span style="display: inline-block;"><code>.dxf</code></span>. Program automaticky načte a zpracuje křivky do tiskových trajektorií.</li>
+        <li value="3"><strong>Přidání dalšího objektu:</strong> Pokud chcete na stejné substráty přidat další nezávislý vzor (např. druhou vrstvu pro tisk s jinou jehlou nebo roztokem), zvolte <strong>Soubor</strong> -> <strong>Přidat objekt</strong> (<kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Shift</kbd> + <kbd class="dpi-kbd">O</kbd>).</li>
+      </ol>
+      <div class="dpi-alert alert-tip">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">💡</span> <span>Doporučení pro kreslení v Inkscape</span></div>
+        <div class="dpi-alert-body">Při přípravě předlohy v Inkscape nastavte jednotky dokumentu na milimetry (<span style="display: inline-block;"><code>mm</code></span>) v měřítku 1:1 k reálnému podložnímu sklíčku. Všechny texty a speciální objekty před exportem převeďte na křivky (<strong>Křivka</strong> -> <strong>Objekt na křivku</strong>).</div>
+      </div>
+      <h3 id="5-2-Automatické-škálování-a-bezpečnostní-okraje" class="dpi-h2">5.2 Automatické škálování a bezpečnostní okraje</h3>
+      <p>Při načtení grafiky DPI automaticky provádí analýzu rozměrů:</p>
+      <ul>
+        <li>Pokud vzor přesahuje fyzické rozměry zvoleného sklíčka (např. 76 × 26 mm), aplikace automaticky nabídne proporční zmenšení.</li>
+        <li><strong>Hlídání okrajů skla:</strong> Tryska má určitý vnější průměr. DPI automaticky hlídá, aby žádná část kapky ani kovové patice jehly nezasáhla okraj sklíčka. Při změně průměru jehly na větší velikost aplikace upozorní na nutnost přizpůsobení geometrie.</li>
+      </ul>
+      <h3 id="5-3-Multiplikace-vzorků-a-mřížka-podložky" class="dpi-h2">5.3 Multiplikace vzorků a mřížka podložky</h3>
+      <p>V laboratorní praxi je nutné zpracovávat desítky identických nebo mírně modifikovaných vzorků najednou. V poli <strong>Počet vzorků (Sample count)</strong> v levém panelu můžete zvolit libovolný počet sklíček:</p>
+      <ul>
+        <li>
+          <p>DPI automaticky spočítá maximální kapacitu podložky Prusa MK3S na základě:</p>
+          <ul>
+            <li>Fyzických rozměrů podložky (250 × 210 mm).</li>
+            <li>Počátečních odsazení od okrajů (<span style="display: inline-block;"><code>start_offset_x = 18 mm</code></span>, <span style="display: inline-block;"><code>start_offset_y = 11 mm</code></span>).</li>
+            <li>Bezpečnostních mezer mezi sousedními sklíčky (<span style="display: inline-block;"><code>multi_spacing = 5 mm</code></span>).</li>
+          </ul>
+        </li>
+        <li>Sklíčka jsou řazena do sloupců od levého okraje směrem doprava. Každé sklíčko v plátně obdrží své identifikační číslo vzorku.</li>
+      </ul>
+      <h3 id="5-4-Význam-a-konfigurace-úvodního-odplivuPrime-Feature" class="dpi-h2">5.4 Význam a konfigurace úvodního odplivu (Prime Feature)</h3>
+      <p>Před zahájením samotného tisku mikrokapek na čistá sklíčka je kriticky nutné provést tzv. <strong>Odpliv (Prime)</strong>:</p>
+      <div class="dpi-alert alert-important">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⭐</span> <span>Proč je odpliv pro kapaliny zásadní?</span></div>
+        <div class="dpi-alert-body">
+          <ol>
+            <li value="1"><strong>Zasychání menisku:</strong> Na hrotu jehly dochází během přípravy k částečnému odpaření rozpouštědla, což vede ke zahuštění kapaliny a vytvoření tuhé kapilární zátky.</li>
+            <li value="2"><strong>Vzduchová kapsa:</strong> Po nasazení nové jehly je vnitřní kanálek vyplněn vzduchem. Bez odplivu by prvních několik milimetrů dráhy netisklo vůbec nic.</li>
+            <li value="3"><strong>Ustavení hydrodynamického tlaku:</strong> Pružnost pístu a stlačitelnost mikrobublin vyžaduje natlakování soustavy.</li>
+          </ol>
+        </div>
+      </div>
+      <p>V levém panelu zaškrtněte volbu <strong>Aktivovat odpliv (Prime)</strong>:</p>
+      <ul>
+        <li>Tiskárna před najetím nad první sklíčko sjede na bezpečnou zónu při levém okraji podložky (mimo skla) a vytlačí úzkou souvislou čistící linku o délce cca 30 mm.</li>
+        <li>Teprve po ustavení stabilního kapkového menisku provede tisková hlava přejezd (Z-hop) na první sklíčko.</li>
+      </ul>
+      <h3 id="5-5-Výběr-a-správa-kapalinLiquid-Profiles" class="dpi-h2">5.5 Výběr a správa kapalin (Liquid Profiles)</h3>
+      <p>Různá rozpouštědla a suspenze mají odlišnou viskozitu, povrchové napětí a smáčivost. V horní liště aplikace naleznete menu <strong>Kapaliny</strong>:</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Kapalina</strong></th>
+            <th><strong>Doporučený Z-offset</strong></th>
+            <th><strong>Max. rychlost</strong></th>
+            <th><strong>Specifika chování při dávkování</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Voda / Pufry</td>
+            <td>0.15–0.25 mm</td>
+            <td>1200 mm/min</td>
+            <td>Vysoké povrchové napětí, tvoří vyšší zaoblené kapky, nízká smáčivost</td>
+          </tr>
+          <tr>
+            <td>Ethanol / IPA</td>
+            <td>0.08–0.15 mm</td>
+            <td>800 mm/min</td>
+            <td>Extrémní smáčivost, rychlý samovolný rozliv po skle, rychlý odpar</td>
+          </tr>
+          <tr>
+            <td>DMSO / DMF</td>
+            <td>0.20–0.30 mm</td>
+            <td>1500 mm/min</td>
+            <td>Vysoká viskozita, pomalý odpar, nutný pomalejší náběh tlaku</td>
+          </tr>
+          <tr>
+            <td>Polymerní roztok (PEDOT:PSS)</td>
+            <td>0.10–0.20 mm</td>
+            <td>600 mm/min</td>
+            <td>Náchylnost k tvorbě vláken (stringing), nutná delší prodleva</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Profil kapaliny umožňuje v konfiguračním okně (<strong>Nastavení</strong> -> <strong>Kapaliny</strong>) nastavit přísné laboratorní mantinely (<strong>Guard Limits</strong>), které brání chybě lidského faktoru při přípravě tisku:</p>
+      <ul>
+        <li><strong>Kategorie kapalin:</strong> Chemické roztoky lze organizovat do skupin (např. <em>Prekurzory solárních článků</em>, <em>Biologické pufry</em>, <em>Vodivé polymery</em>). V rozbalovacích nabídkách se profily přehledně seskupují.</li>
+        <li><strong>Bezpečnostní rozsah Z-offsetu (<span style="display: inline-block;"><code>z_offset_min</code></span> / <span style="display: inline-block;"><code>z_offset_max</code></span>):</strong> Pokud laborant v panelu zadá hodnotu mimo tento interval, aplikace vstup odmítne. Tím je fyzicky vyloučeno poškrábání skla jehlou při nechtěném překlepu.</li>
+        <li><strong>Limity dávkovací rychlosti a pojezdu:</strong> Nastavení povoleného intervalu extruze (<span style="display: inline-block;"><code>extrusion_min/max</code></span>) a pojezdové rychlosti (<span style="display: inline-block;"><code>print_speed_min/max</code></span>).</li>
+        <li><strong>Teplotní okno podložky (<span style="display: inline-block;"><code>bed_temp_min/max</code></span>):</strong> Stanovuje povolený rozsah temperování substrátu pro dané rozpouštědlo.</li>
+        <li><strong>Zakázané trysky (<span style="display: inline-block;"><code>forbidden_nozzles</code></span>):</strong> Přetažením myší lze pro konkrétní kapalinu zakázat nevhodné jehly (např. pro suspenzi s nanočásticemi zakázat jehlu s malým průměrem 0.30 mm kvůli vysokému riziku zanesení). Pokud je zakázaná tryska vybrána, aplikace obsluhu ihned vizuálně varuje.</li>
+        <li><strong>Barevné kódování:</strong> Každému roztoku je přiřazen specifický barevný odstín usnadňující orientaci v multi-materiálových projektech.</li>
+      </ul>
+      <h3 id="5-6-Styly-výplněInfill-Styles" class="dpi-h2">5.6 Styly výplně (Infill Styles)</h3>
+      <p>Pro uzavřené tvary (polygony, kružnice, obdélníky) nabízí DPI tři tiskové režimy:</p>
+      <ol>
+        <li value="1"><strong>Pouze obrysy (Contour only):</strong> Jehla vykreslí pouze vnější obvodové křivky. Ideální pro mikrofluidní stěny a oddělovací hráze.</li>
+        <li value="2"><strong>Pouze výplň (Infill only):</strong> Plocha je vyplněna paralelními tahy s nastaveným rozestupem (např. 1.0 mm) pod zadaným úhlem (výchozí 0°, volitelně 45° či 90°).</li>
+        <li value="3"><strong>Okraje + Výplň (Contour + Infill):</strong> Nejprve je vykreslen přesný obrys, který zabrání nežádoucímu přetékání kapalin, a následně je vnitřek vyplněn rastrem.</li>
+      </ol>
+      <h3 id="5-7-Svařování-uzlů-a-čištění-drahMerge-Nodes" class="dpi-h2">5.7 Svařování uzlů a čištění drah (Merge Nodes)</h3>
+      <p>Při importu z CAD programů nebo vektorových editorů se stává, že křivky nejsou exportovány jako souvislé lomené čáry (polylines), nýbrž jako stovky drobných rozpojených úseček. Bez optimalizace by tiskárna na každém uzlu zvedala jehlu (Z-hop), což způsobuje nežádoucí kapání a trhání tekuté stopy.</p>
+      <p>DPI obsahuje integrovaný nástroj <strong>Sloučit uzly (Merge Nodes)</strong>:</p>
+      <ul>
+        <li>V nástrojové liště plátna klikněte na ikonu spojení uzlů.</li>
+        <li>Zadejte toleranci vzdálenosti v milimetrech (např. <span style="display: inline-block;"><code>0.05 mm</code></span> nebo <span style="display: inline-block;"><code>0.10 mm</code></span>).</li>
+        <li>Aplikace vyhledá sousedící koncové body v rámci zadaného poloměru a spojí je do jediné plynulé křivky. Tím se dramaticky sníží počet nutných přejezdů a zrychlí tisk.</li>
+      </ul>
+      <h3 id="5-8-Víceobjektový-tisk-a-přiřazení-trysek-k-objektům" class="dpi-h2">5.8 Víceobjektový tisk a přiřazení trysek k objektům</h3>
+      <p>Pokud tiskový experiment vyžaduje nanesení více různých činidel na jedno sklíčko (např. nanesení elektrodového materiálu a následně biologického senzoru):</p>
+      <ol>
+        <li value="1">Přidejte do projektu další vektorový objekt přes <strong>Soubor</strong> -> <strong>Přidat objekt</strong>.</li>
+        <li value="2">V pravém panelu v sekci <strong>Objekty</strong> rozklikněte požadovaný objekt a v rozbalovací nabídce <strong>Tryska</strong> mu přiřaďte konkrétní jehlu (např. <strong>Objekt 1</strong> = Červená 0.3 mm, <strong>Objekt 2</strong> = Modrá 0.41 mm).</li>
+        <li value="3">Tiskárna vytiskne všechny geometrie první trysky, poté vyvolá pauzu pro výměnu jehly a stříkačky, obsluha nasadí novou jehlu se stříkačkou a po potvrzení tiskárna provede homing a pokračuje druhým objektem.</li>
+      </ol>
+      <h3 id="5-9-Řízení-teploty-podložky-a-prahová-hodnotabed_min_temp" class="dpi-h2">5.9 Řízení teploty podložky a prahová hodnota (<span style="display: inline-block;"><code>bed_min_temp</code></span>)</h3>
+      <p>Některé laboratorní procesy (např. krystalizace solí či rychlé odpaření rozpouštědla) vyžadují temperování podložních skel:</p>
+      <ul>
+        <li>V profilu kapaliny nebo v nastavení tisku lze zadat cílovou teplotu vyhřívané podložky (<span style="display: inline-block;"><code>bed_temp</code></span>).</li>
+        <li><strong>Prahová hodnota (šedá zóna 30 °C):</strong> DPI implementuje bezpečnostní prahové pravidlo <span style="display: inline-block;"><code>bed_min_temp</code></span> (výchozí 30.0 °C). Pokud je požadovaná teplota nastavena na hodnotu menší než 30 °C (např. 0 °C nebo 25 °C), vyhřívání se považuje za neaktivní a do G-kódu se negenerují žádné příkazy pro čekání na teplotu (<span style="display: inline-block;"><code>M190</code></span>/<span style="display: inline-block;"><code>M140</code></span>).</li>
+        <li>Je-li teplota nastavena na <span class="dpi-math-inline"><math display="inline"><mrow><mo>≥</mo><mspace width="0.22em"></mspace><mn>30</mn><mspace width="0.22em"></mspace><mtext> </mtext><mspace width="0.22em"></mspace><mtext>°</mtext><mspace width="0.22em"></mspace><mi>C</mi></mrow></math></span>, tiskárna před zahájením tisku zapne vyhřívání a počká na dosažení stabilní teploty sklíček.</li>
+      </ul>
+      <h3 id="5-10-Přímé-kreslení-geometrických-tvarů-na-plátně" class="dpi-h2">5.10 Přímé kreslení geometrických tvarů na plátně</h3>
+      <p>Kromě importu externích SVG a DXF souborů umožňuje DPI navrhovat základní tvary přímo v aplikaci bez nutnosti otevírat CAD software:</p>
+      <ol>
+        <li value="1">
+          <p><strong>Výběr nástroje:</strong> V pravé části horní lišty plátna klikněte na ikonu:</p>
+          <ul>
+            <li><strong>Obdélník (Square):</strong> Pro ohraničené obdélníkové zóny či plošná pole.</li>
+            <li><strong>Elipsa (Circle):</strong> Pro kruhová terčíková pole a kapilární rezervoáry.</li>
+            <li><strong>Čára (Line):</strong> Pro rovné dělící linie či odplivové stopy.</li>
+          </ul>
+        </li>
+        <li value="2"><strong>Kreslení tažením myši:</strong> Klikněte na plochu vybraného sklíčka a tažením myši definujte rozměry.</li>
+        <li value="3">
+          <p><strong>Klávesové modifikátory během kreslení:</strong></p>
+          <ul>
+            <li><kbd class="dpi-kbd">Ctrl</kbd>: Aktivuje magnetické přichytávání k souřadné mřížce (Grid Snap).</li>
+            <li><kbd class="dpi-kbd">Alt</kbd>: Kreslí tvar symetricky od středu (namísto od rohu).</li>
+            <li><kbd class="dpi-kbd">Shift</kbd>: Zamkne poměr stran na 1:1 (vytvoří dokonalý čtverec či kružnici) nebo u úsečky zaokrouhlí úhel po 45°.</li>
+            <li><kbd class="dpi-kbd">Escape</kbd>: Okamžitě zruší rozkreslený tvar nebo opustí kreslicí režim.</li>
+          </ul>
+        </li>
+        <li value="4"><strong>Automatická integrace:</strong> Nakreslený tvar je okamžitě přidán do seznamu objektů jako samostatná plnohodnotná vektorová stopa, pro kterou lze volit styl výplně, rychlost extruze i přiřazenou jehlu.</li>
+      </ol>
+      <h2 id="6-Kalibrace,-Z-Shift-a-tiskový-proces" class="dpi-h1">6. Kalibrace, Z-Shift a tiskový proces</h2>
+      <p>Přesnost v ose Z je u dávkování kapalin naprosto kritická. Odchylka pouhých 50 mikrometrů může způsobit buď rozstříknutí kapky a nechtěné rozlití do stran, nebo naopak to, že kapka neukápne z jehly a zůstane viset na hrotu vlivem povrchového napětí.</p>
+      <h3 id="6-1-Princip-výškového-nastaveníZ-Shift" class="dpi-h2">6.1 Princip výškového nastavení (Z-Shift)</h3>
+      <p>Dávkovací jehla upevněná ve stříkačkovém držáku sahá níže než původní tryska tiskárny a skleněný substrát má určitou tloušťku.</p>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig09_z_shift_principle.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 6.1: Vzájemná geometrie tiskové hlavy, jehly a povrchu skla</p>
+      <p>Aplikace DPI automaticky provádí přepočet souřadnic (tzv. <strong>Z-Shift</strong>), aby se tiskárna mohla bezpečně pohybovat nad sklem bez kolizí a bez blokování koncovými spínači. Skutečná tisková výška je pak dána součtem zkalibrované polohy povrchu skla a procesního Z-offsetu (např. 180 µm nad sklem pro stabilní meniskus kapky).</p>
+      <p>Obsluha nemusí provádět žádné ruční výpočty – veškeré přesné doladění probíhá interaktivně v kalibračním okně pomocí kamery.</p>
+      <h3 id="6-2-Interaktivní-optická-kalibraceZ-Calibration-Modal" class="dpi-h2">6.2 Interaktivní optická kalibrace (Z-Calibration Modal)</h3>
+      <p>Před spuštěním první tiskové úlohy (nebo po každé fyzické výměně jehly/stříkačky) se automaticky otevírá okno <strong>Přesná kalibrace skla (Z-Shift)</strong>:</p>
+      <ol>
+        <li value="1">Tiskárna automaticky provede homing (<span style="display: inline-block;"><code>G28 W</code></span>) a najede hrotem jehly nad bezpečný referenční roh prvního podložního sklíčka do bezpečné výšky.</li>
+        <li value="2">V okně kalibrace se zobrazí živý video stream z USB mikroskopu namířeného na rozhraní jehla-sklo.</li>
+        <li value="3">
+          <p><strong>Jemný posuv:</strong></p>
+          <ul>
+            <li>Zvolte krok posunu: <span style="display: inline-block;"><code>0.5 mm</code></span>, <span style="display: inline-block;"><code>0.1 mm</code></span>, <span style="display: inline-block;"><code>0.05 mm</code></span> nebo ultra-jemný <span style="display: inline-block;"><code>0.01 mm</code></span> (10 µm).</li>
+            <li>Pomocí tlačítek na obrazovce nebo kláves <kbd class="dpi-kbd">↑</kbd> / <kbd class="dpi-kbd">↓</kbd> sjíždějte jehlou dolů.</li>
+            <li>Na obrazovce mikroskopu sledujte dotyk hrotu jehly (nebo jeho odrazu na lesklém povrchu skla). V momentě, kdy se hrot jehly právě dotkne povrchu skla, je dosaženo nulové relativní výšky.</li>
+          </ul>
+        </li>
+        <li value="4">Klikněte na zelené tlačítko <strong>Potvrdit a spustit tisk</strong>. Vypočtená hodnota korekce <span style="display: inline-block;"><code>z_shift</code></span> se uloží do paměti a aplikuje na celou tiskovou úlohu.</li>
+      </ol>
+      <div class="dpi-alert alert-tip">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">💡</span> <span>Z-Hop pro bezpečné přejezdy</span></div>
+        <div class="dpi-alert-body">Během tisku tiskárna při každém přejezdu mezi jednotlivými kapkami nebo sklíčky automaticky nadzvedne trysku o hodnotu <span style="display: inline-block;"><code>default_z_hop</code></span> (výchozí 2.0 mm) a při přejezdu celé podložky na bezpečnou výšku <span style="display: inline-block;"><code>safe_z</code></span> (20.0 mm), aby nedošlo k poškrábání vzorků.</div>
+      </div>
+      <h3 id="6-3-Nivelace-podložkyBed-Leveling-a-testovací-jízda-bodů" class="dpi-h2">6.3 Nivelace podložky (Bed Leveling) a testovací jízda bodů</h3>
+      <p>Pokud má vyhřívaná podložka tiskárny drobné mechanické nerovnosti, lze v konfiguraci aktivovat automatickou nivelaci sítě:</p>
+      <ul>
+        <li>V záložce <strong>Nastavení</strong> -> <strong>Nivelace</strong> je definována síť bodů (výchozí matice 3 × 3 = 9 bodů).</li>
+        <li>Všechny tyto body musí ležet na obnaženém ocelovém plátu mimo prostor držáků sklíček. V náhledu je každý bod znázorněn kruhovým terčíkem o nastavitelném průměru <span style="display: inline-block;"><code>leveling_circle_diameter</code></span> (výchozí 8.0 mm).</li>
+        <li><strong>Optimalizace přejezdů:</strong> Body jsou automaticky seřazeny meandrovitě (střídavě zleva doprava a zprava doleva), aby byl přejezd hlavy co nejrychlejší a nejplynulejší.</li>
+      </ul>
+      <h4 id="Interaktivní-ověření-bodů-na-tiskárněTest-bodů" class="dpi-h3">Interaktivní ověření bodů na tiskárně (Test bodů)</h4>
+      <p>Pro naprostou laboratorní jistotu, že sonda PINDA při nivelaci nezasáhne sklo, obsahuje DPI interaktivní testovací režim:</p>
+      <ol>
+        <li value="1">V záložce <strong>Nivelace</strong> klikněte na tlačítko <strong>Otestovat body na tiskárně</strong>.</li>
+        <li value="2">Aplikace zobrazí bezpečnostní upozornění a po potvrzení se automaticky připojí k tiskárně.</li>
+        <li value="3">Tiskárna provede rychlý homing (<span style="display: inline-block;"><code>G28 W</code></span>) a následně postupně najíždí sondou nad jednotlivé definované body (<span style="display: inline-block;"><code>G0 X... Y... F3000</code></span>).</li>
+        <li value="4">Laborant vizuálně zkontroluje, že se hrot sondy nachází bezpečně nad ocelovým plechem s dostatečnou vzdáleností od hrany plastového držáku skla.</li>
+        <li value="5">Pokud je bod příliš blízko držáku, lze jeho souřadnice přímo v okně testu okamžitě jemně posunout a přeměřit.</li>
+      </ol>
+      <h3 id="6-4-Průběh-tisku-a-správa-plánovaných-pauzPrint-Pause" class="dpi-h2">6.4 Průběh tisku a správa plánovaných pauz (Print Pause)</h3>
+      <p>Po spuštění tisku DPI zobrazuje:</p>
+      <ul>
+        <li>Průběžný ukazatel v procentech a zbývající čas v minutách a sekundách.</li>
+        <li>Animovanou aktuální polohu trysky přímo na plátně.</li>
+      </ul>
+      <h4 id="Obsluha-plánovaných-pauzM0-M1-M601" class="dpi-h3">Obsluha plánovaných pauz (M0 / M1 / M601)</h4>
+      <p>Pokud tisková úloha obsahuje více vrstev, vyžaduje výměnu činidla nebo jehly:</p>
+      <ol>
+        <li value="1">Tiskárna dokončí stávající segment, zvedne trysku na bezpečnou výšku a zaparkuje na kraji podložky.</li>
+        <li value="2">Na obrazovce se otevře modální okno <strong>Pauza tisku (Požadavek obsluhy)</strong> s popisem kroku.</li>
+        <li value="3">Obsluha provede potřebný laboratorní úkon (např. nasazení nové stříkačky s dalším činidlem).</li>
+        <li value="4">Kliknutím na <strong>Pokračovat v tisku</strong> tiskárna automaticky provede příkaz definovaný v <span style="display: inline-block;"><code>nozzle_change_gcode</code></span> (výchozí bezpečný homing <span style="display: inline-block;"><code>G28</code></span>) a plynule naváže přesně v místě přerušení.</li>
+      </ol>
+      <h3 id="6-5-Export-laboratorního-protokoluCSV" class="dpi-h2">6.5 Export laboratorního protokolu (CSV)</h3>
+      <p>Pro potřeby vědecké archivace a laboratorních deníků umožňuje DPI vygenerovat detailní strukturovaný CSV protokol:</p>
+      <ul>
+        <li>V horním menu zvolte <strong>Soubor</strong> -> <strong>Uložit protokol (CSV)</strong>.</li>
+        <li>Protokol obsahuje: datum a čas experimentu, verzi DPI, typ použitého skla a trysek, celkovou ujetou vzdálenost, tiskový čas a přehlednou tabulku všech vzorků včetně jejich individuálních Z-offsetů a dávkovacích objemů.</li>
+      </ul>
+      <h2 id="7-Výroba-příslušenstvíModul-Bracket-ExportDržáky-sklíček" class="dpi-h1">7. Výroba příslušenství: Modul Bracket Export (Držáky sklíček)</h2>
+      <p>Při rychlých pohybech tiskové podložky v ose Y (až 3000 mm/min) by volně položená sklíčka okamžitě sklouzla. DPI proto obsahuje unikátní vestavěný generátor laboratorních montážních matric – modul <strong>Bracket Export</strong>.</p>
+      <h3 id="7-1-Princip-magnetických-pružných-držáků" class="dpi-h2">7.1 Princip magnetických pružných držáků</h3>
+      <p>Držák generovaný v DPI zajišťuje spolehlivé usazení skla:</p>
+      <ol>
+        <li value="1"><strong>Pevné L-rameno:</strong> Tvoří pevnou referenční zarážku pro dva kolmé okraje sklíčka.</li>
+        <li value="2"><strong>Flexibilní meandrové pružiny:</strong> Pružná ramena z tištěného plastu jemně, ale pevně dotlačují sklíčko do referenčního rohu, čímž kompenzují výrobní tolerance řezaných skel (obvykle <span class="dpi-math-inline"><math display="inline"><mrow><mo>±</mo><mspace width="0.22em"></mspace><mn>0.3</mn><mspace width="0.22em"></mspace><mtext>mm</mtext></mrow></math></span>).</li>
+        <li value="3"><strong>Neodymové magnety:</strong> Vespod držáku jsou kapsy pro malé neodymové magnety (např. válečky <span class="dpi-math-inline"><math display="inline"><mrow><mtext>⌀</mtext><mspace width="0.22em"></mspace><mn>3</mn><mspace width="0.22em"></mspace><mo>×</mo><mspace width="0.22em"></mspace><mn>2</mn><mspace width="0.22em"></mspace><mtext>mm</mtext></mrow></math></span>), které celou matrici pevně přichytí k pružnému ocelovému plátu Prusa MK3S bez nutnosti šroubování.</li>
+      </ol>
+      <div class="dpi-figure-img-wrap"><img src="assets/figures/fig05_bracket_export.svg" alt="Schéma DPI" class="dpi-figure-img"></div>
+      <p>Obrázek 7.1: Okno modulu Bracket Export pro návrh a generování držáků</p>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Bod</strong></th>
+            <th><strong>Ovládací prvek / Oblast</strong></th>
+            <th><strong>Funkce a laboratorní význam</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">1</span></td>
+            <td>Volba rozměrů substrátu</td>
+            <td>Výběr geometrie skla. Automaticky načte délku, šířku a nominální tloušťku skla (např. 1.0 mm).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">2</span></td>
+            <td>Parametry pevných stěn</td>
+            <td>Nastavení tloušťky základních stěn L-profilu a možnost rozšíření okrajů pro stabilní dosednutí na podložku.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">3</span></td>
+            <td>Geometrie pružinových meandrů</td>
+            <td>Počet ohybů pružiny, šířka prvku a kompenzace mezer pro tiskové tolerance.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">4</span></td>
+            <td>Otvory pro neodymové magnety</td>
+            <td>Volba tvaru (kruhové vrtání vs. čtvercová kapsa) a průměru otvorů pro vlisování magnetů (výchozí 3.0 mm).</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">5</span></td>
+            <td>Interaktivní 2D náhled</td>
+            <td>Okamžitá vizualizace generované geometrie držáku, pružin a magnetických kapes v reálném čase.</td>
+          </tr>
+          <tr>
+            <td><span class="dpi-badge" style="background-color: #3b82f6;">6</span></td>
+            <td>Tlačítka exportu (STL a SVG)</td>
+            <td>Přímý export do 3D modelu <span style="display: inline-block;"><code>.stl</code></span> pro tisk na 3D tiskárně nebo do vektorového <span style="display: inline-block;"><code>.svg</code></span> pro laserové vyřezání.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 id="7-2-Klíčová-konstrukční-pravidla-pro-3D-tisk-držáku" class="dpi-h2">7.2 Klíčová konstrukční pravidla pro 3D tisk držáku</h3>
+      <p>Při generování držáku je nutné respektovat pravidla navržená v DPI:</p>
+      <div class="dpi-alert alert-important">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⭐</span> <span>Tloušťka držáku nesmí přesáhnout tloušťku skla!</span></div>
+        <div class="dpi-alert-body">Výška držáku v ose Z je v DPI záměrně automaticky omezena maximálně na tloušťku skla (<span style="display: inline-block;"><code>glassThickness</code></span>, obvykle 1.0 mm). Pokud by plastový rámeček přečníval nad horní rovinu sklíčka, hrozilo by, že dávkovací jehla při nízkém Z-offsetu (např. 150 µm) narazí do plastové hrany držáku.</div>
+      </div>
+      <h4 id="Doporučené-tiskové-parametry-pro-výrobu-držáku-na-Prusa-MK3S" class="dpi-h3">Doporučené tiskové parametry pro výrobu držáku na Prusa MK3S:</h4>
+      <ul>
+        <li><strong>Materiál:</strong> PETG nebo ASA (vynikající pružnost meandrů a vysoká chemická odolnost vůči kapkám rozpouštědel; PLA je příliš křehké).</li>
+        <li><strong>Výška vrstvy:</strong> 0.15 mm nebo 0.20 mm.</li>
+        <li><strong>Výplň:</strong> 100 % (plný perimetr pro maximální tuhost stěn).</li>
+        <li><strong>Magnety:</strong> Neodymové magnety <span class="dpi-math-inline"><math display="inline"><mrow><mtext>⌀</mtext><mspace width="0.22em"></mspace><mn>3</mn><mspace width="0.22em"></mspace><mo>×</mo><mspace width="0.22em"></mspace><mn>2</mn><mspace width="0.22em"></mspace><mtext>mm</mtext></mrow></math></span> vtlačte do otvorů na spodní straně matrice. Pro jistotu je lze zajistit kapkou vteřinového lepidla.</li>
+      </ul>
+      <h2 id="8-Praktický-průvodce-experimentem-krok-za-krokem" class="dpi-h1">8. Praktický průvodce experimentem krok za krokem</h2>
+      <p>Tato kapitola slouží jako rychlý standardní operační postup (SOP) pro laboranta, který provádí tiskovou dávku od prázdné tiskárny až po hotový vzorek a vygenerovaný protokol.</p>
+      <h3 id="Krok-1Příprava-roztoku-a-naplnění-stříkačky" class="dpi-h2">Krok 1: Příprava roztoku a naplnění stříkačky</h3>
+      <ol>
+        <li value="1">Připravte požadovaný roztok (např. 1 ml suspenze perovskitového prekurzoru).</li>
+        <li value="2">Natáhněte roztok do stříkačky (ideálně přes tenkou kanylu nebo filtr).</li>
+        <li value="3">
+          <p><strong>Kritický krok – Odstranění mikrobublin:</strong></p>
+          <ul>
+            <li>Otočte stříkačku hrotem vzhůru a lehkým poklepáváním vytlačte veškerý vzduch.</li>
+            <li>Jakákoliv vzduchová bublina uvnitř válce stříkačky působí jako pružina a způsobí nekontrolované odkapávání kapaliny i po zastavení motoru!</li>
+          </ul>
+        </li>
+        <li value="4">Našroubujte zvolenou Luer-Lock dávkovací jehlu (např. modrou 0.41 mm).</li>
+        <li value="5">Vložte stříkačku do držáku na ose X tiskárny a dotáhněte aretační šrouby. Přitlačte píst k jezdci lineárního šroubu.</li>
+      </ol>
+      <h3 id="Krok-2Příprava-tiskové-podložky-a-substrátů" class="dpi-h2">Krok 2: Příprava tiskové podložky a substrátů</h3>
+      <ol>
+        <li value="1">Očistěte pružný ocelový plát tiskárny Prusa MK3S isopropanolem (IPA).</li>
+        <li value="2">Položte na ocelový plát 3D tištěný držák (matrici). Neodymové magnety držák okamžitě pevně zafixují.</li>
+        <li value="3">Vložte čistá laboratorní podložní sklíčka (76 × 26 mm) do matrice. Ujistěte se, že meandrové pružiny skla pevně domáčkly do referenčního rohu.</li>
+      </ol>
+      <h3 id="Krok-3Spuštění-DPI-a-připojení-tiskárny" class="dpi-h2">Krok 3: Spuštění DPI a připojení tiskárny</h3>
+      <ol>
+        <li value="1">Zapněte tiskárnu hlavním vypínačem a propojte ji USB kabelem s počítačem.</li>
+        <li value="2">Spusťte aplikaci DPI.</li>
+        <li value="3">V levém panelu zkontrolujte nastavení portu (<strong>"Automaticky"</strong> nebo <span style="display: inline-block;"><code>/dev/ttyACM0</code></span> / <span style="display: inline-block;"><code>COM3</code></span>) a klikněte na tlačítko <strong>Připojit</strong>.</li>
+        <li value="4">Jakmile se rozsvítí zelený indikátor a načtou souřadnice, otevřete horní menu <strong>Nástroje</strong> -> <strong>Diagnostika tiskárny</strong> a klikněte na <strong>Najetí domů (Bez kalibrace podložky) [G28 W]</strong>. Tiskárna bezpečně zkalibruje koncové spínače.</li>
+      </ol>
+      <h3 id="Krok-4Načtení-vzoru-a-konfigurace-parametrů" class="dpi-h2">Krok 4: Načtení vzoru a konfigurace parametrů</h3>
+      <ol>
+        <li value="1">Klikněte na <strong>Soubor</strong> -> <strong>Načíst vzorek</strong> (<kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">O</kbd>) a vyberte připravený soubor SVG.</li>
+        <li value="2">Zkontrolujte na plátně rozložení sklíček. Nastavte <strong>Počet vzorků</strong> (např. 4 sklíčka).</li>
+        <li value="3">
+          <p>V levém panelu zkontrolujte:</p>
+          <ul>
+            <li><strong>Sklo:</strong> Laboratorní sklo (76 × 26 × 1 mm).</li>
+            <li><strong>Tryska:</strong> Modrá (0.41 mm).</li>
+            <li><strong>Z-Offset:</strong> Nastavte např. <span style="display: inline-block;"><code>180 µm</code></span> (výchozí laboratorní hodnota).</li>
+            <li><strong>Extruze:</strong> Zadejte dávkovací poměr, např. <span style="display: inline-block;"><code>200 nl/mm</code></span>.</li>
+            <li><strong>Rychlost:</strong> 600 mm/min.</li>
+            <li><strong>Odpliv:</strong> Ujistěte se, že volba <strong>Aktivovat odpliv</strong> je zaškrtnuta!</li>
+          </ul>
+        </li>
+      </ol>
+      <h3 id="Krok-5Demontáž-sondy-PINDA-a-optická-Z-kalibrace" class="dpi-h2">Krok 5: Demontáž sondy PINDA a optická Z-kalibrace</h3>
+      <ol>
+        <li value="1">V levém panelu klikněte na zelené tlačítko <strong>Spustit tisk</strong>.</li>
+        <li value="2">Tiskárna provede referenční homing všech os (<span style="display: inline-block;"><code>G28 W</code></span>) nad obnaženým ocelovým plátem.</li>
+        <li value="3">
+          <p><strong>Kritický bezpečnostní krok – Demontáž sondy PINDA:</strong></p>
+          <ul>
+            <li>Jakmile se hlava zastaví, na obrazovce se zobrazí modální výzva: <em>„Odstraňte PINDA sondu z podložky (tiskové hlavy), než bude zahájen tisk.“</em></li>
+            <li>Imbusovým klíčem povolte upínací šroubek držáku sondy na tiskové hlavě a vysuňte sondu PINDA nahoru (nebo odklopte do servisní polohy), aby byl nejnižším bodem hlavy výhradně hrot dávkovací jehly.</li>
+            <li>V dialogu klikněte na <strong>Pokračovat</strong>.</li>
+          </ul>
+        </li>
+        <li value="4">Tiskárna najede tryskou nad roh prvního sklíčka do bezpečné výšky a otevře se okno <strong>Přesná kalibrace skla (Z-Shift)</strong> se živým obrazem z mikroskopu.</li>
+        <li value="5">Zvolte krok <span style="display: inline-block;"><code>0.1 mm</code></span> a poté jemný <span style="display: inline-block;"><code>0.01 mm</code></span> (10 µm). Pomocí tlačítek na obrazovce nebo klávesy <kbd class="dpi-kbd">↓</kbd> sjíždějte jehlou dolů.</li>
+        <li value="6">Sledujte obraz: Jakmile se hrot jehly dotkne skla (hrot se spojí se svým zrcadlovým odrazem na povrchu skla), okamžitě zastavte posuv.</li>
+        <li value="7">Klikněte na zelené tlačítko <strong>Potvrdit a spustit tisk</strong>. Vypočtená hodnota Z-Shift se uloží do tiskové úlohy.</li>
+      </ol>
+      <h3 id="Krok-6Dohled-nad-tiskem" class="dpi-h2">Krok 6: Dohled nad tiskem</h3>
+      <ol>
+        <li value="1">Tiskárna sjede na levou stranu a provede odplivovou čistící linku na ocelovém plátu pro ustavení menisku.</li>
+        <li value="2">Následně přejede na první sklíčko a začne nanášet vzor mikrokapek.</li>
+        <li value="3">V průběhu tisku můžete na plátně sledovat zelenou tečku indikující přesnou polohu jehly a v levém panelu odečítat zbývající čas experimentu.</li>
+        <li value="4"><strong>V případě nouze:</strong> Kdykoliv můžete stisknout červené tlačítko <strong>Nouzové zastavení (STOP)</strong> v levém panelu – tiskárna okamžitě zastaví veškerý posuv (<span style="display: inline-block;"><code>M410</code></span>), bezpečně přizvedne trysku o 15 mm (<span style="display: inline-block;"><code>G0 Z15</code></span>) a odjede na parkovací pozici mimo substráty.</li>
+      </ol>
+      <h3 id="Krok-7Vyjmutí-vzorků-a-export-protokolu" class="dpi-h2">Krok 7: Vyjmutí vzorků a export protokolu</h3>
+      <ol>
+        <li value="1">Po dokončení tiskárna zaparkuje hlavu vzadu a vysune podložku dopředu.</li>
+        <li value="2">Opatrně pinzetou vyjměte potištěná sklíčka a přeneste je k sušení či analýze.</li>
+        <li value="3">V menu DPI klikněte na <strong>Soubor</strong> -> <strong>Uložit protokol (CSV)</strong> a uložte záznam o šarži do složky projektu.</li>
+      </ol>
+      <h3 id="Krok-8Údržba-a-proplach-soustavy-po-tisku" class="dpi-h2">Krok 8: Údržba a proplach soustavy po tisku</h3>
+      <div class="dpi-alert alert-warning">
+        <div class="dpi-alert-header"><span class="dpi-alert-icon">⚠️</span> <span>Neponechávejte roztoky v jehle!</span></div>
+        <div class="dpi-alert-body">Po skončení práce ihned vyjměte stříkačku a propláchněte dávkovací jehlu 2–3 ml čistého rozpouštědla (např. acetonem či ethanolem) a následně profoukněte vzduchem. Zaschlé činidlo v jehle o průměru 0.3 mm obvykle již nelze rozpustit a jehlu je nutné vyřadit.</div>
+      </div>
+      <h2 id="9-Laboratorní-TroubleshootingŘešení-potíží" class="dpi-h1">9. Laboratorní Troubleshooting (Řešení potíží)</h2>
+      <p>V této kapitole naleznete postupy pro rychlé řešení nejčastějších laboratorních a technických komplikací, se kterými se můžete při provozu DPI setkat.</p>
+      <h3 id="9-1-Přehledná-diagnostická-tabulka-problémů" class="dpi-h2">9.1 Přehledná diagnostická tabulka problémů</h3>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Symptom / Problém</strong></th>
+            <th><strong>Pravděpodobná příčina</strong></th>
+            <th><strong>Doporučené řešení</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Kapalina samovolně odkapává při přejezdech</td>
+            <td>Stlačený vzduch/bublina ve stříkačce nebo hydrostatický tlak sloupce</td>
+            <td>
+              <ol>
+                <li value="1">Důkladně odvzdušněte stříkačku.<br>2. Zvyšte hodnotu Z-Hopu.<br>3. Zkontrolujte těsnost pístu.</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Jehla na začátku skla netiskne nic (vynechává)</td>
+            <td>Zaschnutý meniskus v ústí trysky nebo prázdný objem jehly</td>
+            <td>
+              <ol>
+                <li value="1">Ujistěte se, že je zapnutá funkce <strong>Odpliv (Prime)</strong>.<br>2. Před tiskem jehlu otřete netkanou textilií navlhčenou v rozpouštědle.</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Kapalina se na skle slévá do jedné velké louže</td>
+            <td>
+              <ol>
+                <li value="1">Z-offset je příliš malý (jehla drtí kapku).<br>2. Mastné či hydrofilní sklo</li>
+              </ol>
+            </td>
+            <td>
+              <ol>
+                <li value="1">Zvyšte Z-offset o 50–100 µm v nastavení nebo Overrides.<br>2. Vyčistěte skla v lázni IPA / piranha / UV-ozon.</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Kapky neulpívají a táhnou se za jehlou</td>
+            <td>Z-offset je příliš velký, kapka nedosáhne na povrch skla</td>
+            <td>
+              <ol>
+                <li value="1">Proveďte znovu Z-kalibraci pomocí mikroskopu.<br>2. Snižte Z-offset o 30–50 µm.<br>3. Mírně zvyšte dávkovací rychlost (nl/mm).</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Ztráta spojení / Zamrznutí komunikace</td>
+            <td>Uvolněný USB kabel, rušení od spínaného zdroje nebo sleep režim OS</td>
+            <td>
+              <ol>
+                <li value="1">Zkontrolujte kvalitní stíněný USB kabel.<br>2. Vypněte v systému úsporný režim USB řadiče.<br>3. Znovu klikněte na <strong>Připojit</strong>.</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Tiskárna naráží do držáku sklíček</td>
+            <td>Nesprávně zadané rozměry podložky nebo posunutý držák</td>
+            <td>
+              <ol>
+                <li value="1">Ověřte v Nastavení -> Tiskárna (Limity) hodnoty <span style="display: inline-block;"><code>start_offset_x/y</code></span>.<br>2. Zkontrolujte, zda je držák plně dosednutý na dorazy ocelového plátu Prusa.</li>
+              </ol>
+            </td>
+          </tr>
+          <tr>
+            <td>Sonda PINDA zachytila o sklo nebo držák</td>
+            <td>Sonda nebyla po Z-homingu vysunuta/odklopena</td>
+            <td>Vždy po provedení Z-homingu na ocelovém plátu povolte aretační šroubek a vysuňte sondu PINDA do horní servisní polohy podle výzvy na obrazovce.</td>
+          </tr>
+          <tr>
+            <td>Chyba pohybu pod Z=0 / Omezení endstopu</td>
+            <td>Firmware odmítá záporné souřadnice bez příkazu M211 S0</td>
+            <td>Ujistěte se, že v G-kódu je aktivní vypnutí softwarových koncových spínačů <span style="display: inline-block;"><code>M211 S0</code></span> a posuv <span style="display: inline-block;"><code>z_shift</code></span>. V expertním režimu případně obnovte výchozí G-kódy.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 id="9-2-Co-dělat-při-ucpání-dávkovací-jehly" class="dpi-h2">9.2 Co dělat při ucpání dávkovací jehly</h3>
+      <p>Ucpání tenké jehly (0.30 mm) je v laboratorní praxi běžným jevem, zejména u koloidních suspenzí:</p>
+      <ol>
+        <li value="1"><strong>Okamžité zastavení:</strong> Stiskněte tlačítko <strong>Pozastavit</strong> v levém panelu.</li>
+        <li value="2"><strong>Demontáž jehly:</strong> Povolte bajonet Luer-Lock a sejměte ucpanou jehlu.</li>
+        <li value="3">
+          <p><strong>Vyčištění:</strong></p>
+          <ul>
+            <li>Ponořte hrot jehly do ultrazvukové lázně s vhodným rozpouštědlem na 2–3 minuty.</li>
+            <li>Pomocí čisté stříkačky protlačte rozpouštědlo v protisměru (ze strany hrotu směrem do patice).</li>
+            <li>Nikdy nepoužívejte tvrdý ocelový drát, který by deformoval přesný vnitřní průměr trysky!</li>
+          </ul>
+        </li>
+        <li value="4"><strong>Nasazení a obnovení:</strong> Po nasazení jehly stiskněte <strong>Pokračovat v tisku</strong>. Tiskárna provede homing a bude pokračovat v experimentu.</li>
+      </ol>
+      <h3 id="9-3-Přehled-klávesových-zkratek-aplikace-DPI" class="dpi-h2">9.3 Přehled klávesových zkratek aplikace DPI</h3>
+      <table>
+        <thead>
+          <tr>
+            <th><strong>Klávesová zkratka</strong></th>
+            <th><strong>Kontext / Oblast</strong></th>
+            <th><strong>Vyvolaná akce</strong></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">O</kbd></td>
+            <td>Aplikace</td>
+            <td>Otevřít dialog pro načtení nového vzorku (SVG/DXF)</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Shift</kbd> + <kbd class="dpi-kbd">O</kbd></td>
+            <td>Aplikace</td>
+            <td>Přidat další objekt/vrstvu ke stávajícím substrátům</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">S</kbd></td>
+            <td>Aplikace</td>
+            <td>Uložit projekt / Vygenerovat G-kód</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Shift</kbd> + <kbd class="dpi-kbd">S</kbd></td>
+            <td>Aplikace</td>
+            <td>Uložit projekt jako nový soubor (<span style="display: inline-block;"><code>.gcode</code></span>)</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Z</kbd></td>
+            <td>Aplikace / Plátno</td>
+            <td>Krok zpět v historii změn projektu (Undo)</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Shift</kbd> + <kbd class="dpi-kbd">Z</kbd></td>
+            <td>Aplikace / Plátno</td>
+            <td>Krok vpřed v historii změn projektu (Redo)</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Ctrl</kbd> + <kbd class="dpi-kbd">Q</kbd></td>
+            <td>Aplikace</td>
+            <td>Bezpečně ukončit aplikaci</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">←</kbd> <kbd class="dpi-kbd">→</kbd> <kbd class="dpi-kbd">↑</kbd> <kbd class="dpi-kbd">↓</kbd></td>
+            <td>Plátno (Objekt)</td>
+            <td>Posun vybraného objektu po ploše sklíčka o 1.0 mm</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Shift</kbd> + <kbd class="dpi-kbd">Šipky</kbd></td>
+            <td>Plátno (Objekt)</td>
+            <td>Jemný laboratorní posuv objektu s krokem 0.1 mm (100 µm)</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Delete</kbd> / <kbd class="dpi-kbd">Backspace</kbd></td>
+            <td>Plátno (Objekt)</td>
+            <td>Skrýt / odebrat vybraný objekt z aktuálního sklíčka</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">↑</kbd> / <kbd class="dpi-kbd">↓</kbd></td>
+            <td>Z-Kalibrace modal</td>
+            <td>Krokový vertikální posuv trysky vůči sklu</td>
+          </tr>
+          <tr>
+            <td><kbd class="dpi-kbd">Escape</kbd></td>
+            <td>Aplikace / Plátno</td>
+            <td>Zavřít otevřené modální okno nebo zrušit kreslení tvaru</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

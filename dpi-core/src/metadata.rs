@@ -1,12 +1,47 @@
-use crate::types::{ProcessParams, SlideOverride, Transform};
+use crate::types::{PlacementState, ProcessParams, SlideOverride, Transform};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Zdrojový soubor importu. Geometrie se neukládá — při obnově se soubor znovu
+/// naparsuje a rozdělí na objekty (`split_into_objects` je deterministické).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceMeta {
+    pub id: String,
+    pub name: String,
+    pub ext: String,
+    pub content: String,
+    #[serde(default)]
+    pub auto_scale: bool,
+    #[serde(default = "default_fineness")]
+    pub fineness: f64,
+}
+
+/// Objekt scény — odkaz do zdroje plus pořadí v něm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectMeta {
+    pub id: String,
+    pub source_id: String,
+    /// Index objektu ve výsledku `split_into_objects` nad zdrojem.
+    pub index: usize,
+    #[serde(default)]
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GCodeMetadata {
     pub params: ProcessParams,
     #[serde(default)]
     pub overrides: HashMap<String, SlideOverride>,
+    #[serde(default)]
+    pub sources: Vec<SourceMeta>,
+    #[serde(default)]
+    pub objects: Vec<ObjectMeta>,
+    /// Umístění objektů na sklíčkách: `slides[i]` = stav i-tého vzorkového skla.
+    #[serde(default)]
+    pub slides: Vec<Vec<PlacementState>>,
+    // ─── Pole formátu v2 ────────────────────────────────────────────────────
+    // Čtou se ze starších souborů a zapisují se jen u projektů s jediným
+    // objektem, aby je otevřela i starší verze aplikace.
     #[serde(default)]
     pub transforms: Vec<Transform>,
     #[serde(default)]
@@ -30,9 +65,12 @@ fn default_fineness() -> f64 {
 /// Serializuje metadata do G-kód hlavičky vkládané na začátek souboru.
 pub fn serialize_metadata(meta: &GCodeMetadata) -> String {
     let wrapped = serde_json::json!({
-        "dpi_version": 2,
+        "dpi_version": 3,
         "params": meta.params,
         "overrides": meta.overrides,
+        "sources": meta.sources,
+        "objects": meta.objects,
+        "slides": meta.slides,
         "transforms": meta.transforms,
         "baked_scales": meta.baked_scales,
         "source_file_name": meta.source_file_name,
@@ -105,9 +143,57 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
         .unwrap_or(false);
     let fineness = raw.get("fineness").and_then(|v| v.as_f64()).unwrap_or(1.0);
 
+    let mut sources: Vec<SourceMeta> = raw
+        .get("sources")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let mut objects: Vec<ObjectMeta> = raw
+        .get("objects")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let mut slides: Vec<Vec<PlacementState>> = raw
+        .get("slides")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    // Migrace v2 → v3: jediný zdroj s jediným objektem na každém sklíčku.
+    if objects.is_empty() && !source_file_content.is_empty() {
+        sources = vec![SourceMeta {
+            id: "src-0".to_string(),
+            name: source_file_name.clone(),
+            ext: source_file_ext.clone(),
+            content: source_file_content.clone(),
+            auto_scale,
+            fineness,
+        }];
+        objects = vec![ObjectMeta {
+            id: "obj-0".to_string(),
+            source_id: "src-0".to_string(),
+            index: 0,
+            name: source_file_name.clone(),
+        }];
+        slides = transforms
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                vec![PlacementState {
+                    object_id: "obj-0".to_string(),
+                    enabled: true,
+                    transform: *t,
+                    baked_scale: baked_scales.get(i).copied().unwrap_or(1.0),
+                    nozzle_type: None,
+                    nozzle_diam: None,
+                }]
+            })
+            .collect();
+    }
+
     Some(GCodeMetadata {
         params,
         overrides,
+        sources,
+        objects,
+        slides,
         transforms,
         baked_scales,
         source_file_name,

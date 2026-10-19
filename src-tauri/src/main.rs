@@ -8,5 +8,13 @@ fn main() {
     #[allow(deprecated)]
     std::env::set_var("GST_PLUGIN_FEATURE_RANK", "v4l2src:MAX,pipewiresrc:0");
 
+    // Řeší pád na Linuxu pod Waylandem (Error 71 dispatching to Wayland display),
+    // který způsobuje WebKitGTK DMA-BUF renderer (zejména na NVIDIA / Mesa / Wayland compositorech).
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        #[allow(deprecated)]
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     dpi_app::run();
 }

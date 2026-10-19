@@ -1,4 +1,24 @@
 use dpi_core::*;
+use std::collections::HashMap;
+
+/// Sestaví umístění z dvojic (trasa, transformace) — jedno sklíčko, jeden objekt.
+fn slides_of(paths: &[SubstratePaths], transforms: &[Transform]) -> Vec<Vec<Placement>> {
+    paths
+        .iter()
+        .zip(transforms.iter())
+        .map(|(p, t)| {
+            vec![Placement {
+                object_id: "obj-0".to_string(),
+                enabled: true,
+                transform: *t,
+                baked_scale: 1.0,
+                nozzle_type: None,
+                nozzle_diam: None,
+                path: p.clone(),
+            }]
+        })
+        .collect()
+}
 
 #[test]
 fn test_dxf_circle_arc_parsing() {
@@ -225,11 +245,13 @@ fn test_gcode_generation_z_shift() {
         safe_z: 20.0,
         bed_max_temp: None,
         skip_z_shift_setup: false,
+        nozzle_change_gcode: String::new(),
+        print_order: "substrate_major".to_string(),
+        route_mode: "fastest".to_string(),
     };
     let res = generate_gcode(
-        &paths,
+        &slides_of(&paths, &transforms),
         &params,
-        &transforms,
         &std::collections::HashMap::new(),
         &machine,
     );
@@ -252,9 +274,8 @@ fn test_gcode_generation_z_shift() {
         ..machine.clone()
     };
     let (gcode_skip, _, _) = generate_gcode(
-        &paths,
+        &slides_of(&paths, &transforms),
         &params,
-        &transforms,
         &std::collections::HashMap::new(),
         &machine_skip,
     )
@@ -344,8 +365,11 @@ fn test_gcode_generation_with_overrides() {
         safe_z: 20.0,
         bed_max_temp: None,
         skip_z_shift_setup: false,
+        nozzle_change_gcode: String::new(),
+        print_order: "substrate_major".to_string(),
+        route_mode: "fastest".to_string(),
     };
-    let res = generate_gcode(&paths, &params, &transforms, &overrides, &machine);
+    let res = generate_gcode(&slides_of(&paths, &transforms), &params, &overrides, &machine);
 
     assert!(res.is_ok());
     let (gcode, _dist, _time) = res.unwrap();
@@ -475,6 +499,9 @@ fn test_metadata_round_trip() {
     let meta = GCodeMetadata {
         params,
         overrides: HashMap::new(),
+        sources: vec![],
+        objects: vec![],
+        slides: vec![],
         transforms: vec![],
         baked_scales: vec![1.0, 1.0],
         source_file_name: "test.svg".into(),
@@ -487,7 +514,7 @@ fn test_metadata_round_trip() {
     let header = serialize_metadata(&meta);
     assert!(header.contains("; --- EDITOR METADATA ---"));
     assert!(header.contains("; --- END METADATA ---"));
-    assert!(header.contains("\"dpi_version\":2"));
+    assert!(header.contains("\"dpi_version\":3"));
 
     // Deserializace musí vrátit shodná data
     let restored = deserialize_metadata(&header).expect("deserializace selhala");
@@ -589,6 +616,9 @@ fn test_metadata_overrides_round_trip() {
     let meta = GCodeMetadata {
         params,
         overrides,
+        sources: vec![],
+        objects: vec![],
+        slides: vec![],
         transforms,
         baked_scales: vec![1.5, 1.0, 0.8],
         source_file_name: "vzorky.dxf".into(),
@@ -703,6 +733,7 @@ fn test_infill_boustrophedon_order() {
         infill_angle: 0.0,
         nozzle_diam: 0.4,
         user_scale: 1.0,
+        frame: None,
     };
 
     let result = process_substrate_paths(&raw, &params);
@@ -770,6 +801,7 @@ fn test_object_rendering_order_left_to_right() {
         infill_angle: 0.0,
         nozzle_diam: 0.4,
         user_scale: 1.0,
+        frame: None,
     };
 
     let result = process_substrate_paths(&raw, &params);
@@ -864,6 +896,7 @@ fn test_infill_boustrophedon_with_hole() {
         infill_angle: 0.0,
         nozzle_diam: 0.4,
         user_scale: 1.0,
+        frame: None,
     };
 
     let result = process_substrate_paths(&raw, &params);
@@ -879,4 +912,678 @@ fn test_infill_boustrophedon_with_hole() {
         .collect();
 
     assert_boustrophedon(&infill, "polygon s dírou");
+}
+
+// ─── Více objektů na substrátu ───────────────────────────────────────────────
+
+fn rect(x1: f64, y1: f64, x2: f64, y2: f64) -> PathSegment {
+    PathSegment {
+        points: vec![
+            Point2D::new(x1, y1),
+            Point2D::new(x2, y1),
+            Point2D::new(x2, y2),
+            Point2D::new(x1, y2),
+            Point2D::new(x1, y1),
+        ],
+        is_filled: Some(true),
+        has_stroke: Some(true),
+    }
+}
+
+fn multi_params(sample_count: usize) -> ProcessParams {
+    ProcessParams {
+        sample_count,
+        prime_active: false,
+        slide_w: 25.0,
+        slide_h: 75.0,
+        slide_z: 1.0,
+        z_offset: 0.2,
+        z_unit: "mm".into(),
+        nozzle_height: 30.0,
+        nozzle_hidden: 4.0,
+        filament_diameter: 9.5,
+        flow_multiplier: 1.0,
+        bed_temp: 0.0,
+        extrusion_rate: 1.0,
+        extrusion_unit: "µl/mm".into(),
+        nozzle_diam: 0.4,
+        infill_style: "Okraje".into(),
+        infill_val: 1.0,
+        infill_type: "mm".into(),
+        infill_angle: 0.0,
+        print_speed: 1500.0,
+        nozzle_type: String::new(),
+    }
+}
+
+fn test_bed() -> BedConfig {
+    BedConfig {
+        max_x: 250.0,
+        max_y: 210.0,
+        min_x: 0.0,
+        offset_x: 18.0,
+        offset_y: 11.0,
+    }
+}
+
+fn scene_object(id: &str, raw: SubstratePaths, frame: [f64; 4]) -> SceneObject {
+    SceneObject {
+        id: id.into(),
+        name: id.into(),
+        raw,
+        frame,
+        auto_scale: false,
+    }
+}
+
+#[test]
+fn test_split_into_objects_separates_disjoint_shapes() {
+    // Dva oddělené obdélníky → dva objekty
+    let raw = SubstratePaths::new(vec![rect(0.0, 0.0, 5.0, 5.0), rect(20.0, 0.0, 25.0, 5.0)]);
+    let objects = split_into_objects(&raw);
+    assert_eq!(objects.len(), 2);
+    // Řazení podle těžiště: zleva doprava
+    let cx = |o: &SubstratePaths| {
+        let pts: Vec<_> = o.segments.iter().flat_map(|s| s.points.iter()).collect();
+        pts.iter().map(|p| p.x).sum::<f64>() / pts.len() as f64
+    };
+    assert!(cx(&objects[0]) < cx(&objects[1]));
+}
+
+#[test]
+fn test_split_into_objects_keeps_hole_with_its_shape() {
+    // Mezikruží: díra leží uvnitř obrysu → jeden objekt, aby výplň dál
+    // fungovala podle even-odd pravidla
+    let raw = SubstratePaths::new(vec![rect(0.0, 0.0, 20.0, 20.0), rect(5.0, 5.0, 15.0, 15.0)]);
+    let objects = split_into_objects(&raw);
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].segments.len(), 2);
+}
+
+#[test]
+fn test_shared_frame_preserves_relative_layout() {
+    // Dva objekty z jednoho importu se normalizují vůči společnému rámu,
+    // takže si zachovají vzájemný odstup ze souboru.
+    let raw = SubstratePaths::new(vec![rect(0.0, 0.0, 5.0, 5.0), rect(15.0, 0.0, 20.0, 5.0)]);
+    let frame = [0.0, 20.0, 0.0, 5.0];
+    let objects = split_into_objects(&raw);
+    assert_eq!(objects.len(), 2);
+
+    let slice = |frame: Option<[f64; 4]>| SliceParams {
+        slide_w: 25.0,
+        slide_h: 75.0,
+        margin: 2.0,
+        auto_scale: false,
+        infill_style: "Okraje".into(),
+        infill_val: 1.0,
+        infill_type: "mm".into(),
+        infill_angle: 0.0,
+        nozzle_diam: 0.4,
+        user_scale: 1.0,
+        frame,
+    };
+
+    let min_x = |p: &SubstratePaths| {
+        p.segments
+            .iter()
+            .flat_map(|s| s.points.iter())
+            .map(|pt| pt.x)
+            .fold(f64::INFINITY, f64::min)
+    };
+
+    let a = process_substrate_paths(&objects[0], &slice(Some(frame)));
+    let b = process_substrate_paths(&objects[1], &slice(Some(frame)));
+    // Odstup levých hran zůstává 15 mm jako v souboru
+    assert!((min_x(&b) - min_x(&a) - 15.0).abs() < 1e-6, "odstup {}", min_x(&b) - min_x(&a));
+
+    // Bez společného rámu se oba vycentrují na sebe a odstup zmizí
+    let a2 = process_substrate_paths(&objects[0], &slice(None));
+    let b2 = process_substrate_paths(&objects[1], &slice(None));
+    assert!((min_x(&b2) - min_x(&a2)).abs() < 1e-6);
+}
+
+#[test]
+fn test_update_layout_places_objects_on_every_slide() {
+    let raw = SubstratePaths::new(vec![rect(0.0, 0.0, 5.0, 5.0)]);
+    let objects = vec![
+        scene_object("a", raw.clone(), [0.0, 5.0, 0.0, 5.0]),
+        scene_object("b", raw.clone(), [0.0, 5.0, 0.0, 5.0]),
+    ];
+
+    let res = dpi_core::update_layout(
+        &multi_params(2),
+        &HashMap::new(),
+        &objects,
+        &[],
+        &[],
+        &test_bed(),
+        5.0,
+    );
+
+    assert_eq!(res.slides.len(), 2);
+    for row in &res.slides {
+        // Každé sklíčko nese položku pro každý objekt, ve stejném pořadí
+        assert_eq!(row.len(), 2);
+        assert_eq!(row[0].object_id, "a");
+        assert_eq!(row[1].object_id, "b");
+        assert!(row.iter().all(|p| p.enabled));
+        assert!(row.iter().all(|p| !p.path.segments.is_empty()));
+    }
+}
+
+#[test]
+fn test_update_layout_skips_hidden_object_and_inherits_to_new_slide() {
+    let raw = SubstratePaths::new(vec![rect(0.0, 0.0, 5.0, 5.0)]);
+    let objects = vec![scene_object("a", raw, [0.0, 5.0, 0.0, 5.0])];
+
+    // Výchozí layout pro jedno sklíčko
+    let first = dpi_core::update_layout(
+        &multi_params(1),
+        &HashMap::new(),
+        &objects,
+        &[],
+        &[],
+        &test_bed(),
+        5.0,
+    );
+    let pos0 = first.positions[0];
+
+    // Objekt posuneme o 3 mm doprava a přidáme druhý substrát
+    let mut state = first.slides[0][0].state();
+    state.transform.gui_dx += 3.0;
+    let second = dpi_core::update_layout(
+        &multi_params(2),
+        &HashMap::new(),
+        &objects,
+        &[vec![state.clone()]],
+        &first.positions,
+        &test_bed(),
+        5.0,
+    );
+
+    assert_eq!(second.slides.len(), 2);
+    // Nové sklíčko objekt zdědí se stejným relativním posunem
+    let new_pos = second.positions[1];
+    let rel_old = second.slides[0][0].transform.gui_dx - pos0.x;
+    let rel_new = second.slides[1][0].transform.gui_dx - new_pos.x;
+    assert!((rel_old - 3.0).abs() < 1e-6, "rel_old={rel_old}");
+    assert!((rel_new - 3.0).abs() < 1e-6, "rel_new={rel_new}");
+
+    // Skrytý objekt trasu negeneruje
+    let mut hidden = state.clone();
+    hidden.enabled = false;
+    let third = dpi_core::update_layout(
+        &multi_params(1),
+        &HashMap::new(),
+        &objects,
+        &[vec![hidden]],
+        &first.positions,
+        &test_bed(),
+        5.0,
+    );
+    assert!(!third.slides[0][0].enabled);
+    assert!(third.slides[0][0].path.segments.is_empty());
+}
+
+#[test]
+fn test_gcode_prints_all_visible_objects() {
+    let params = multi_params(1);
+    let machine = MachineConfig {
+        bed: test_bed(),
+        start_gcode: String::new(),
+        end_gcode: String::new(),
+        loop_start_gcode: String::new(),
+        loop_end_gcode: String::new(),
+        multi_spacing: 5.0,
+        block_height: 34.0,
+        calibration_factor: 0.0141,
+        z_hop: 2.0,
+        safe_z: 20.0,
+        bed_max_temp: None,
+        skip_z_shift_setup: false,
+        nozzle_change_gcode: String::new(),
+        print_order: "substrate_major".to_string(),
+        route_mode: "fastest".to_string(),
+    };
+
+    let mk = |id: &str, y: f64, nozzle: Option<&str>| Placement {
+        object_id: id.into(),
+        enabled: true,
+        transform: Transform {
+            scale: 1.0,
+            rotation: 0.0,
+            gui_dx: 18.0,
+            gui_dy: 11.0,
+            cx: 12.5,
+            cy: 37.5,
+        },
+        baked_scale: 1.0,
+        nozzle_type: nozzle.map(|s| s.to_string()),
+        nozzle_diam: nozzle.map(|_| 0.3),
+        path: SubstratePaths::new(vec![PathSegment::new(vec![
+            Point2D::new(1.0, y),
+            Point2D::new(9.0, y),
+        ])]),
+    };
+
+    let slides = vec![vec![mk("a", 2.0, None), mk("b", 40.0, Some("Modrá"))]];
+    let (gcode, dist, _) =
+        generate_gcode(&slides, &params, &HashMap::new(), &machine).expect("generování selhalo");
+
+    // Obě trasy se vytisknou v rámci jednoho sklíčka
+    assert_eq!(gcode.matches("; --- VZOREK 1 ---").count(), 1);
+    assert!(dist > 15.0, "dist={dist}");
+    // Objekt s vlastní tryskou vyvolá výměnu s pauzou pro obsluhu
+    assert!(gcode.contains("; --- VYMENA TRYSKY: Modrá (prumer 0.30 mm) ---"));
+    assert!(gcode.contains("M0 Vymente trysku za: Modrá"));
+
+    // Skrytý objekt se netiskne
+    let mut hidden = slides.clone();
+    hidden[0][1].enabled = false;
+    let (_, dist_hidden, _) =
+        generate_gcode(&hidden, &params, &HashMap::new(), &machine).expect("generování selhalo");
+    assert!(dist_hidden < dist, "{dist_hidden} < {dist}");
+}
+
+#[test]
+fn test_metadata_v2_migrates_to_objects() {
+    // Starý soubor bez pole `objects` se načte jako jeden zdroj s jedním
+    // objektem na každém sklíčku.
+    let meta = GCodeMetadata {
+        params: multi_params(2),
+        overrides: HashMap::new(),
+        sources: vec![],
+        objects: vec![],
+        slides: vec![],
+        transforms: vec![
+            Transform { scale: 1.0, rotation: 0.0, gui_dx: 18.0, gui_dy: 11.0, cx: 12.5, cy: 37.5 },
+            Transform { scale: 1.0, rotation: 90.0, gui_dx: 18.0, gui_dy: 91.0, cx: 12.5, cy: 37.5 },
+        ],
+        baked_scales: vec![1.0, 1.5],
+        source_file_name: "vzorek.svg".into(),
+        source_file_ext: "svg".into(),
+        source_file_content: "<svg/>".into(),
+        auto_scale: true,
+        fineness: 1.0,
+    };
+
+    let restored = deserialize_metadata(&serialize_metadata(&meta)).expect("deserializace selhala");
+
+    assert_eq!(restored.sources.len(), 1);
+    assert_eq!(restored.sources[0].content, "<svg/>");
+    assert!(restored.sources[0].auto_scale);
+    assert_eq!(restored.objects.len(), 1);
+    assert_eq!(restored.objects[0].index, 0);
+    assert_eq!(restored.slides.len(), 2);
+    assert_eq!(restored.slides[1][0].object_id, restored.objects[0].id);
+    assert!(restored.slides[1][0].enabled);
+    assert!((restored.slides[1][0].baked_scale - 1.5).abs() < 1e-9);
+    assert!((restored.slides[1][0].transform.rotation - 90.0).abs() < 1e-9);
+    assert!(restored.slides[0][0].nozzle_type.is_none());
+}
+
+#[test]
+fn test_metadata_v3_round_trip_with_objects() {
+    let meta = GCodeMetadata {
+        params: multi_params(1),
+        overrides: HashMap::new(),
+        sources: vec![SourceMeta {
+            id: "src-1".into(),
+            name: "dva.svg".into(),
+            ext: "svg".into(),
+            content: "<svg/>".into(),
+            auto_scale: false,
+            fineness: 1.0,
+        }],
+        objects: vec![
+            ObjectMeta { id: "o1".into(), source_id: "src-1".into(), index: 0, name: "dva.svg #1".into() },
+            ObjectMeta { id: "o2".into(), source_id: "src-1".into(), index: 1, name: "dva.svg #2".into() },
+        ],
+        slides: vec![vec![
+            PlacementState {
+                object_id: "o1".into(),
+                enabled: true,
+                transform: Transform { scale: 1.0, rotation: 0.0, gui_dx: 18.0, gui_dy: 11.0, cx: 12.5, cy: 37.5 },
+                baked_scale: 1.0,
+                nozzle_type: None,
+                nozzle_diam: None,
+            },
+            PlacementState {
+                object_id: "o2".into(),
+                enabled: false,
+                transform: Transform { scale: 1.0, rotation: 0.0, gui_dx: 20.0, gui_dy: 11.0, cx: 12.5, cy: 37.5 },
+                baked_scale: 1.0,
+                nozzle_type: Some("Modrá".into()),
+                nozzle_diam: Some(0.41),
+            },
+        ]],
+        transforms: vec![],
+        baked_scales: vec![],
+        source_file_name: String::new(),
+        source_file_ext: String::new(),
+        source_file_content: String::new(),
+        auto_scale: false,
+        fineness: 1.0,
+    };
+
+    let restored = deserialize_metadata(&serialize_metadata(&meta)).expect("deserializace selhala");
+    assert_eq!(restored.objects.len(), 2);
+    assert_eq!(restored.objects[1].index, 1);
+    assert_eq!(restored.slides[0].len(), 2);
+    // Viditelnost i tryska konkrétního objektu přežijí uložení
+    assert!(!restored.slides[0][1].enabled);
+    assert_eq!(restored.slides[0][1].nozzle_type.as_deref(), Some("Modrá"));
+    assert!((restored.slides[0][1].nozzle_diam.unwrap() - 0.41).abs() < 1e-9);
+}
+
+#[test]
+fn test_svg_import_to_gcode_end_to_end() {
+    // Celá cesta jednoho importu se dvěma tvary: parse → rozdělení na objekty →
+    // layout na dvou substrátech → G-kód.
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 20 10">
+        <rect x="0" y="0" width="5" height="5" fill="black"/>
+        <rect x="15" y="0" width="5" height="5" fill="black"/>
+    </svg>"#;
+
+    let parsed = parse_svg(svg, 1.0);
+    let parts = split_into_objects(&parsed);
+    assert_eq!(parts.len(), 2, "import má obsahovat dva objekty");
+
+    let frame = {
+        let pts: Vec<_> = parsed.segments.iter().flat_map(|s| s.points.iter()).collect();
+        [
+            pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
+            pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max),
+            pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
+            pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max),
+        ]
+    };
+    let objects: Vec<SceneObject> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(k, raw)| scene_object(&format!("o{k}"), raw, frame))
+        .collect();
+
+    // Tvary mají v SVG jen výplň (fill bez stroke) — styl "Okraje" by je podle
+    // příznaků ze souboru vůbec nevykreslil, proto výchozí styl s výplní.
+    let mut params = multi_params(2);
+    params.infill_style = "Okraje + Výplň".into();
+
+    let res = dpi_core::update_layout(
+        &params,
+        &HashMap::new(),
+        &objects,
+        &[],
+        &[],
+        &test_bed(),
+        5.0,
+    );
+    assert_eq!(res.slides.len(), 2);
+    assert!(res.slides.iter().all(|row| row.len() == 2));
+    assert!(
+        res.slides.iter().all(|row| row.iter().all(|p| !p.path.segments.is_empty())),
+        "každý objekt má mít vlastní trasu"
+    );
+
+    let machine = MachineConfig {
+        bed: test_bed(),
+        start_gcode: String::new(),
+        end_gcode: String::new(),
+        loop_start_gcode: String::new(),
+        loop_end_gcode: String::new(),
+        multi_spacing: 5.0,
+        block_height: 34.0,
+        calibration_factor: 0.0141,
+        z_hop: 2.0,
+        safe_z: 20.0,
+        bed_max_temp: None,
+        skip_z_shift_setup: false,
+        nozzle_change_gcode: String::new(),
+        print_order: "substrate_major".to_string(),
+        route_mode: "fastest".to_string(),
+    };
+    let (gcode, dist, _) =
+        generate_gcode(&res.slides, &params, &HashMap::new(), &machine).expect("generování selhalo");
+
+    assert_eq!(gcode.matches("; --- VZOREK").count(), 2);
+    assert!(dist > 0.0);
+
+    // Skrytí jednoho objektu na prvním substrátu zkrátí dráhu, druhý zůstává
+    let mut hidden = res.slides.clone();
+    hidden[0][0].enabled = false;
+    hidden[0][0].path = SubstratePaths::new(vec![]);
+    let (_, dist_hidden, _) = generate_gcode(&hidden, &params, &HashMap::new(), &machine).unwrap();
+    assert!(dist_hidden < dist && dist_hidden > 0.0, "{dist_hidden} vs {dist}");
+}
+
+// ─── Výměna trysky ───────────────────────────────────────────────────────────
+
+fn machine_with(nozzle_change_gcode: &str) -> MachineConfig {
+    MachineConfig {
+        bed: test_bed(),
+        start_gcode: String::new(),
+        end_gcode: String::new(),
+        loop_start_gcode: String::new(),
+        loop_end_gcode: String::new(),
+        multi_spacing: 5.0,
+        block_height: 34.0,
+        calibration_factor: 0.0141,
+        z_hop: 2.0,
+        safe_z: 20.0,
+        bed_max_temp: None,
+        skip_z_shift_setup: false,
+        nozzle_change_gcode: nozzle_change_gcode.to_string(),
+        print_order: "substrate_major".to_string(),
+        route_mode: "fastest".to_string(),
+    }
+}
+
+fn placement_with_nozzle(id: &str, y: f64, nozzle: Option<(&str, f64)>) -> Placement {
+    Placement {
+        object_id: id.into(),
+        enabled: true,
+        transform: Transform {
+            scale: 1.0,
+            rotation: 0.0,
+            gui_dx: 18.0,
+            gui_dy: 11.0,
+            cx: 12.5,
+            cy: 37.5,
+        },
+        baked_scale: 1.0,
+        nozzle_type: nozzle.map(|(n, _)| n.to_string()),
+        nozzle_diam: nozzle.map(|(_, d)| d),
+        path: SubstratePaths::new(vec![PathSegment::new(vec![
+            Point2D::new(1.0, y),
+            Point2D::new(9.0, y),
+        ])]),
+    }
+}
+
+#[test]
+fn test_nozzle_change_emits_pause_homing_and_align_hook() {
+    let mut params = multi_params(1);
+    params.nozzle_type = "Červená".into();
+
+    // Červená, Modrá, Červená v poli — `machine_with` nastavuje
+    // `print_order: "substrate_major"`, který i v rámci jednoho substrátu
+    // seskupuje objekty podle trysky (viz schedule::schedule_print), takže
+    // "a" a "c" (obě implicitně Červená) se vytisknou před "b" (Modrá) —
+    // jediná výměna trysky, ne dvě jako by vyšlo z pevného pořadí pole.
+    let slides = vec![vec![
+        placement_with_nozzle("a", 2.0, None),
+        placement_with_nozzle("b", 20.0, Some(("Modrá", 0.41))),
+        placement_with_nozzle("c", 40.0, None),
+    ]];
+
+    let (gcode, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine_with(""))
+        .expect("generování selhalo");
+
+    assert_eq!(gcode.matches("; --- VYMENA TRYSKY").count(), 1);
+    assert_eq!(gcode.matches("M0 Vymente trysku za:").count(), 1);
+    // Homing je po výměně povinný a za ním následuje úchyt kontroly vyosení
+    assert_eq!(gcode.matches("G28 ; Homing po vymene trysky").count(), 1);
+    assert!(gcode.contains(&format!("{NOZZLE_ALIGN_MARKER}Modrá")));
+    // Pořadí: pauza → homing → kontrola vyosení
+    let pause = gcode.find("M0 Vymente trysku za: Modrá").unwrap();
+    let homing = gcode[pause..].find("G28").unwrap();
+    let align = gcode[pause..].find(NOZZLE_ALIGN_MARKER).unwrap();
+    assert!(homing < align, "kontrola vyosení musí následovat až po homingu");
+}
+
+#[test]
+fn test_print_order_nozzle_major_reduces_nozzle_changes_across_substrates() {
+    let mut params = multi_params(2);
+    params.nozzle_type = "Červená".into();
+
+    // Prokládané trysky napříč substráty: substrát 0 = Červená,Modrá;
+    // substrát 1 = Modrá,Červená. Pevné pořadí pole by dalo 2 výměny;
+    // "nozzle_major" by je mělo seskupit na 1 (viz schedule::schedule_print).
+    let slides = vec![
+        vec![
+            placement_with_nozzle("s0-a", 2.0, None),
+            placement_with_nozzle("s0-b", 20.0, Some(("Modrá", 0.41))),
+        ],
+        vec![
+            placement_with_nozzle("s1-a", 2.0, Some(("Modrá", 0.41))),
+            placement_with_nozzle("s1-b", 20.0, None),
+        ],
+    ];
+
+    let mut machine = machine_with("");
+    machine.print_order = "substrate_major".to_string();
+    let (gcode_substrate, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine)
+        .expect("generování selhalo");
+
+    machine.print_order = "nozzle_major".to_string();
+    let (gcode_nozzle, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine)
+        .expect("generování selhalo");
+
+    let changes_substrate = gcode_substrate.matches("; --- VYMENA TRYSKY").count();
+    let changes_nozzle = gcode_nozzle.matches("; --- VYMENA TRYSKY").count();
+
+    assert_eq!(changes_nozzle, 1);
+    assert!(
+        changes_nozzle < changes_substrate,
+        "nozzle_major ({changes_nozzle}) by mělo mít méně výměn než substrate_major ({changes_substrate})"
+    );
+}
+
+#[test]
+fn test_preview_and_gcode_visit_order_agree() {
+    // Regresní pojistka: `compute_preview_segments` (náhled na plátně) a
+    // `generate_gcode` MUSÍ sdílet stejné pořadí (schedule::schedule_print),
+    // jinak se poloha náhledové trysky rozejde se skutečným výstupem.
+    let mut params = multi_params(2);
+    params.nozzle_type = "Červená".into();
+
+    let slides = vec![
+        vec![
+            placement_with_nozzle("s0-a", 2.0, None),
+            placement_with_nozzle("s0-b", 20.0, Some(("Modrá", 0.41))),
+        ],
+        vec![
+            placement_with_nozzle("s1-a", 2.0, Some(("Modrá", 0.41))),
+            placement_with_nozzle("s1-b", 20.0, None),
+        ],
+    ];
+
+    let mut machine = machine_with("");
+    machine.print_order = "nozzle_major".to_string();
+
+    let positions = get_layout_positions(
+        params.sample_count,
+        params.slide_w,
+        params.slide_h,
+        machine.multi_spacing,
+        params.prime_active,
+        None,
+        &machine.bed,
+    );
+
+    let preview = compute_preview_segments(
+        &positions,
+        &slides,
+        None,
+        &params.nozzle_type,
+        &machine.print_order,
+        &machine.route_mode,
+    );
+    let mut preview_run_order: Vec<usize> = preview.segs.iter().map(|s| s.slide_idx).collect();
+    preview_run_order.dedup();
+
+    let (gcode, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine)
+        .expect("generování selhalo");
+    let gcode_run_order: Vec<usize> = gcode
+        .match_indices("; --- VZOREK ")
+        .map(|(idx, marker)| {
+            let rest = &gcode[idx + marker.len()..];
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            num.parse::<usize>().unwrap() - 1
+        })
+        .collect();
+
+    assert_eq!(preview_run_order, gcode_run_order);
+    // Ujistíme se, že fixtura opravdu vynucuje návštěvu substrátu ve více
+    // "vlnách" (jinak by test prošel triviálně i s rozjetým pořadím).
+    assert!(
+        gcode_run_order.len() > 2,
+        "fixtura musí vynutit alespoň jedno opětovné navštívení substrátu"
+    );
+}
+
+#[test]
+fn test_no_nozzle_change_when_all_objects_use_global() {
+    let mut params = multi_params(1);
+    params.nozzle_type = "Červená".into();
+    let slides = vec![vec![
+        placement_with_nozzle("a", 2.0, None),
+        // Explicitní volba stejné trysky jako globální výměnu nevyvolá
+        placement_with_nozzle("b", 20.0, Some(("Červená", 0.3))),
+    ]];
+
+    let (gcode, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine_with(""))
+        .expect("generování selhalo");
+
+    assert!(!gcode.contains("VYMENA TRYSKY"));
+    assert!(!gcode.contains(NOZZLE_ALIGN_MARKER));
+}
+
+#[test]
+fn test_nozzle_change_restores_virtual_z_shift() {
+    // Nízká tryska → tiskové výšky jdou pod fyzickou nulu → virtuální posun Z.
+    // Homing ho zruší, takže ho výměna musí obnovit, jinak by další objekt
+    // najel o z_shift níž, tedy do skla.
+    let mut params = multi_params(1);
+    params.nozzle_type = "Červená".into();
+    let z_shift = compute_z_shift(&params, &HashMap::new(), 34.0);
+    assert!(z_shift > 0.0, "test potřebuje aktivní posun Z");
+
+    let slides = vec![vec![
+        placement_with_nozzle("a", 2.0, None),
+        placement_with_nozzle("b", 20.0, Some(("Modrá", 0.41))),
+    ]];
+    let (gcode, _, _) = generate_gcode(&slides, &params, &HashMap::new(), &machine_with(""))
+        .expect("generování selhalo");
+
+    let change = gcode.find("; --- VYMENA TRYSKY").unwrap();
+    let after = &gcode[change..];
+    assert!(after.contains("Obnoveni virtualniho posunu Z po homingu"));
+    assert!(after.contains(&format!("G92 Z{:.3}", 20.0 + z_shift)));
+    // Obnova musí přijít až po homingu
+    assert!(after.find("G28").unwrap() < after.find("G92 Z").unwrap());
+}
+
+#[test]
+fn test_nozzle_change_uses_configured_block() {
+    let mut params = multi_params(1);
+    params.nozzle_type = "Červená".into();
+    let slides = vec![vec![placement_with_nozzle("b", 20.0, Some(("Modrá", 0.41)))]];
+
+    let machine = machine_with("G28 X Y\nG28 Z\nM117 Vymeneno");
+    let (gcode, _, _) =
+        generate_gcode(&slides, &params, &HashMap::new(), &machine).expect("generování selhalo");
+
+    assert!(gcode.contains("G28 X Y\nG28 Z\nM117 Vymeneno"));
+    assert!(!gcode.contains("G28 ; Homing po vymene trysky"));
 }

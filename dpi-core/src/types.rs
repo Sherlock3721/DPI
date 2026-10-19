@@ -142,6 +142,21 @@ pub struct MachineConfig {
     /// Samotný z_shift se na tiskové výšky aplikuje vždy.
     #[serde(default)]
     pub skip_z_shift_setup: bool,
+    /// G-kód vkládaný po výměně trysky, než se pokračuje v tisku. Výchozí
+    /// (prázdná hodnota) = `G28` — homing je po výměně povinný, protože nová
+    /// jehla má jinou délku i vyosení. Za tento blok generátor vloží značku
+    /// `NOZZLE_ALIGN_MARKER` pro kontrolu vyosení.
+    #[serde(default)]
+    pub nozzle_change_gcode: String,
+    /// Pořadí tisku napříč substráty a tryskami — "substrate_major" | "nozzle_major".
+    /// Prázdné/neznámé se vyhodnotí jako "nozzle_major" (viz `schedule::PrintOrder::from_setting`).
+    #[serde(default)]
+    pub print_order: String,
+    /// Strategie přejezdů — "fastest" | "cross_allowed" (alias, stejný algoritmus)
+    /// nebo "no_cross". Prázdné/neznámé se vyhodnotí jako "no_cross"
+    /// (viz `schedule::RouteMode::from_setting`).
+    #[serde(default)]
+    pub route_mode: String,
 }
 
 /// Parametry pro slicování a zpracování vektorových drah do tiskového formátu.
@@ -157,6 +172,12 @@ pub struct SliceParams {
     pub infill_angle: f64,
     pub nozzle_diam: f64,
     pub user_scale: f64,
+    /// Rám pro normalizaci a centrování: `[min_x, max_x, min_y, max_y]` bboxu
+    /// celého importu. Díky němu drží objekty z jednoho souboru vzájemné
+    /// rozložení — každý se normalizuje vůči společnému rámu, ne vůči sobě.
+    /// `None` = rám se odvodí z vlastní geometrie (chování s jediným objektem).
+    #[serde(default)]
+    pub frame: Option<[f64; 4]>,
 }
 
 /// Výsledek `recalculate_layout` — nové pozice sklíček a přizpůsobené transformace.
@@ -171,6 +192,8 @@ pub struct LayoutWithTransforms {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreviewSegData {
     pub slide_idx: usize,
+    /// Index objektu (placementu) na sklíčku — u odplivu vždy 0.
+    pub obj_idx: usize,
     pub seg_idx: usize,
     pub path_start_dist: f64,
     pub point_dists: Vec<f64>,
@@ -182,6 +205,92 @@ pub struct PreviewSegData {
 pub struct PreviewDistResult {
     pub segs: Vec<PreviewSegData>,
     pub total_dist: f64,
+}
+
+/// Jeden objekt scény — samostatně umístitelný, skrývatelný a mazatelný tvar.
+/// Jeden import se na objekty rozpadá podle oddělených tvarů
+/// (`path_processing::split_into_objects`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneObject {
+    pub id: String,
+    pub name: String,
+    /// Surová geometrie JEN tohoto objektu (souřadnice zdrojového importu).
+    pub raw: SubstratePaths,
+    /// Bbox celého importu, ze kterého objekt pochází — viz `SliceParams::frame`.
+    pub frame: [f64; 4],
+    #[serde(default)]
+    pub auto_scale: bool,
+}
+
+/// Stav umístění objektu na jednom skle — vstup do `update_layout`.
+/// Neobsahuje geometrii; tu z něj layout teprve spočítá.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacementState {
+    pub object_id: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub transform: Transform,
+    #[serde(default = "default_one")]
+    pub baked_scale: f64,
+    /// Název trysky přenastavené jen pro tento objekt (klíč do `nozzle_defs`).
+    /// `None` = tryska z globálních parametrů.
+    #[serde(default)]
+    pub nozzle_type: Option<String>,
+    /// Průměr přenastavené trysky v mm — řídí rozestup výplně i inset okrajů.
+    #[serde(default)]
+    pub nozzle_diam: Option<f64>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_one() -> f64 {
+    1.0
+}
+
+/// Umístění objektu na jednom skle včetně spočtené trasy — výstup `update_layout`
+/// a vstup do generátoru G-kódu.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Placement {
+    pub object_id: String,
+    pub enabled: bool,
+    pub transform: Transform,
+    pub baked_scale: f64,
+    #[serde(default)]
+    pub nozzle_type: Option<String>,
+    #[serde(default)]
+    pub nozzle_diam: Option<f64>,
+    /// Zpracovaná trasa v lokálních souřadnicích sklíčka (po výplni a měřítku).
+    pub path: SubstratePaths,
+}
+
+impl Placement {
+    /// Stav bez geometrie — pro zpětné předání do `update_layout`.
+    pub fn state(&self) -> PlacementState {
+        PlacementState {
+            object_id: self.object_id.clone(),
+            enabled: self.enabled,
+            transform: self.transform,
+            baked_scale: self.baked_scale,
+            nozzle_type: self.nozzle_type.clone(),
+            nozzle_diam: self.nozzle_diam,
+        }
+    }
+}
+
+impl PlacementState {
+    /// Efektivní průměr trysky: override objektu, jinak globální hodnota.
+    pub fn effective_nozzle_diam(&self, global: f64) -> f64 {
+        self.nozzle_diam.filter(|d| *d > 0.0).unwrap_or(global)
+    }
+}
+
+impl Placement {
+    /// Efektivní průměr trysky: override objektu, jinak globální hodnota.
+    pub fn effective_nozzle_diam(&self, global: f64) -> f64 {
+        self.nozzle_diam.filter(|d| *d > 0.0).unwrap_or(global)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

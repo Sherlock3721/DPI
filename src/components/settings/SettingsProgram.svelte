@@ -37,7 +37,7 @@
           <ShieldAlert class="w-4 h-4 shrink-0 {expertModeActive ? 'text-labred' : 'text-slate-500'}" />
           <div>
             <p class="text-xs font-bold {expertModeActive ? 'text-labred' : 'text-slate-300'}">Aktivovat expertní režim</p>
-            <p class="text-[10px] text-slate-500 mt-0.5">Zpřístupní úpravu inicializačních G-kódů tiskárny. Platí jen pro toto spuštění.</p>
+            <p class="text-[10px] text-slate-500 mt-0.5">Zpřístupní trvalou úpravu inicializačních G-kódů tiskárny. Expertní zámek se resetuje při restartu aplikace.</p>
           </div>
         </div>
         <button

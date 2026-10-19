@@ -53,21 +53,43 @@ export const TAURI_MOCK_SCRIPT = `
       const p = (args && args.params) || {};
       const count = p.sample_count ?? 1;
       const w = p.slide_w ?? 76, h = p.slide_h ?? 26;
+      const objects = (args && args.objects) || [];
+      const prevSlides = (args && args.slides) || [];
       const positions = Array.from({ length: count }, (_, i) => ({
         x: 18 + i * (w + 5), y: 11,
         width: w, height: h, is_prime: false,
       }));
+      // Zrcadlí invariant Rustu: každé sklíčko nese položku pro každý objekt
+      // ve stejném pořadí; stav (viditelnost, tryska) se přebírá z předchozího.
+      const slides = positions.map((pos, i) =>
+        objects.map((obj) => {
+          const prev = (prevSlides[i] || []).find((q) => q.object_id === obj.id)
+            || (prevSlides[0] || []).find((q) => q.object_id === obj.id);
+          return {
+            object_id: obj.id,
+            enabled: prev ? prev.enabled !== false : true,
+            transform: prev
+              ? { ...prev.transform, cx: w / 2, cy: h / 2 }
+              : { scale: 1, rotation: 0, gui_dx: pos.x, gui_dy: pos.y, cx: w / 2, cy: h / 2 },
+            baked_scale: prev ? prev.baked_scale ?? 1 : 1,
+            nozzle_type: prev ? prev.nozzle_type ?? null : null,
+            nozzle_diam: prev ? prev.nozzle_diam ?? null : null,
+            path: { segments: [] },
+          };
+        })
+      );
       return {
         positions,
-        transforms: positions.map((pos) => ({
-          scale: 1, rotation: 0, gui_dx: pos.x, gui_dy: pos.y, cx: w / 2, cy: h / 2,
-        })),
-        paths: [],
+        slides,
         prime_path: null,
         final_sample_count: count,
-        baked_scales: positions.map(() => 1),
       };
     },
+    split_objects:       (args) => {
+      const segs = (args && args.rawPaths && args.rawPaths.segments) || [];
+      return segs.map((s) => ({ segments: [s] }));
+    },
+    find_free_offset:    () => null,
     generate_gcode_job:  () => ({ gcode: "; test gcode\\n", total_dist: 10, total_time: 5 }),
     process_paths:       (args) => args?.rawPaths ?? { segments: [] },
     parse_dxf_file:      () => ({ segments: [] }),

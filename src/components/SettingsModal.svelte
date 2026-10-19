@@ -9,6 +9,7 @@
   import SettingsLimits from "./settings/SettingsLimits.svelte";
   import SettingsLiquids from "./settings/SettingsLiquids.svelte";
   import SettingsLeveling from "./settings/SettingsLeveling.svelte";
+  import SettingsTisk from "./settings/SettingsTisk.svelte";
   import { createEventDispatcher } from "svelte";
 
   interface Props {
@@ -18,7 +19,7 @@
   let { isOpen = $bindable(false) }: Props = $props();
 
   const dispatch = createEventDispatcher();
-  let activeTab: "nozzles" | "glass" | "liquids" | "limits" | "leveling" | "gcode" | "program" = $state("nozzles");
+  let activeTab: "nozzles" | "glass" | "liquids" | "limits" | "leveling" | "tisk" | "gcode" | "program" = $state("nozzles");
 
   let settings: any = $state(null);
   let nozzleList: { name: string; h: number; d: number; s: number; c: string }[] = $state([]);
@@ -180,6 +181,8 @@
       // Výchozí hodnoty nových políček pokud nejsou v settings.json
       settings.bed_min_temp ??= 30;
       settings.bed_min_x ??= 0.0;
+      settings.print_order ??= "nozzle_major";
+      settings.route_mode ??= "no_cross";
 
       snowDisabled = settings.disable_snow ?? false;
     } catch (e: any) {
@@ -268,18 +271,23 @@
   async function restoreDefaults() {
     const confirmed = await import("@tauri-apps/plugin-dialog").then((m) =>
       m.ask(
-        "Opravdu chcete obnovit výchozí nastavení?\n\nPřepíšou se limitace tiskárny a inicializační G-kódy. Definice trysek a substrátů zůstanou zachovány.",
+        expertModeActive
+          ? "Opravdu chcete obnovit výchozí nastavení včetně G-kódů?\n\nPřepíšou se limitace tiskárny a inicializační G-kódy. Definice trysek a substrátů zůstanou zachovány."
+          : "Opravdu chcete obnovit výchozí nastavení tiskárny?\n\nPřepíšou se limitace tiskárny. Uživatelské G-kódy, definice trysek a substrátů zůstanou zachovány.",
         { title: "DPI", kind: "warning" }
       )
     );
     if (!confirmed) return;
 
-    settings.start_gcode =
-      ";FLAVOR:Marlin\n; --- INICIALIZACE TISKÁRNY PRO KAPALINY ---\nM201 X1000 Y1000 Z200 E5000\nM203 X200 Y200 Z12 E120\nM204 S1250 T1250\nM205 X8.00 Y8.00 Z0.40 E4.50\nM205 S0 T0\n\nG90 ; use absolute coordinates\nM83 ; extruder RELATIVE mode\nM302 P1 ; disable cold extrusion checking\nM302 S0 ; always allow extrusion\nM900 K0 ; disable Linear Advance for liquids\n\nG28\nG92 E0.0\n";
-    settings.end_gcode =
-      "G0 Z30 F1000 ; Zvednuti tiskove hlavy\nG0 X0 Y200 F3000 ; Vysunuti podlozky vpred\nM84 ; Vypnuti motoru\n";
-    settings.loop_start_gcode = "";
-    settings.loop_end_gcode = "";
+    if (expertModeActive) {
+      settings.start_gcode =
+        ";FLAVOR:Marlin\n; --- INICIALIZACE TISKÁRNY PRO KAPALINY ---\nM201 X1000 Y1000 Z200 E5000\nM203 X200 Y200 Z12 E120\nM204 S1250 T1250\nM205 X8.00 Y8.00 Z0.40 E4.50\nM205 S0 T0\n\nG90 ; use absolute coordinates\nM83 ; extruder RELATIVE mode\nM302 P1 ; disable cold extrusion checking\nM302 S0 ; always allow extrusion\nM900 K0 ; disable Linear Advance for liquids\n\nG28\nG92 E0.0\n";
+      settings.end_gcode =
+        "G0 Z30 F1000 ; Zvednuti tiskove hlavy\nG0 X0 Y200 F3000 ; Vysunuti podlozky vpred\nM84 ; Vypnuti motoru\n";
+      settings.loop_start_gcode = "";
+      settings.loop_end_gcode = "";
+      settings.nozzle_change_gcode = "G28 ; Homing po vymene trysky\n";
+    }
 
     settings.bed_max_x = 250.0;
     settings.bed_max_y = 210.0;
@@ -421,6 +429,10 @@
                 onclick={() => (activeTab = "limits")}
                 class="px-3 py-2 rounded-sm text-left text-xs font-bold transition-colors {activeTab === 'limits' || activeTab === 'leveling' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
               >Tiskárna</button>
+              <button
+                onclick={() => (activeTab = "tisk")}
+                class="px-3 py-2 rounded-sm text-left text-xs font-bold transition-colors {activeTab === 'tisk' ? 'bg-labaccent text-white' : 'text-slate-400 hover:bg-slate-900/40 hover:text-slate-200'}"
+              >Tisk</button>
               {#if expertModeActive}
                 <button
                   onclick={() => (activeTab = "gcode")}
@@ -651,6 +663,11 @@
             <!-- ═══ 4. BED LEVELING ═══ -->
             {#if activeTab === "leveling"}
               <SettingsLeveling bind:settings bind:levelingPoints />
+            {/if}
+
+            <!-- ═══ 5. TISK ═══ -->
+            {#if activeTab === "tisk"}
+              <SettingsTisk bind:settings />
             {/if}
 
             <!-- ═══ 6. G-KÓDY ═══ -->

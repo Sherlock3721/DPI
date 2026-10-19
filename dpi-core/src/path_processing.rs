@@ -231,6 +231,78 @@ fn uf_union(parent: &mut Vec<usize>, i: usize, j: usize) {
     }
 }
 
+// ─── Rozdělení importu na objekty ────────────────────────────────────────────
+
+/// Rozdělí surový import na samostatné objekty. Segmenty, jejichž bounding boxy
+/// se překrývají, patří do téhož objektu (union-find) — mezikruží nebo tvar
+/// s dírou tak zůstane pohromadě a výplň pro něj dál funguje podle even-odd
+/// pravidla. Stejné kritérium používá i seskupování komponent ve výplni.
+///
+/// Výsledek je seřazený podle těžiště (zleva dolů → doprava nahoru), takže je
+/// pořadí objektů deterministické — na tom stojí obnova projektu z G-kód
+/// metadat, která ukládají jen index objektu v importu.
+pub fn split_into_objects(raw: &SubstratePaths) -> Vec<SubstratePaths> {
+    let segs: Vec<&PathSegment> = raw.segments.iter().filter(|s| !s.is_empty()).collect();
+    let n = segs.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let boxes: Vec<(f64, f64, f64, f64)> = segs
+        .iter()
+        .map(|s| bbox_of_poly(&s.points).unwrap_or((0.0, 0.0, 0.0, 0.0)))
+        .collect();
+
+    // Zametání po ose X místo naivního O(n²): husté výplňové SVG má tisíce
+    // segmentů. Kandidáti se drží v aktivní sadě, dokud jejich max_x nepřejde
+    // za min_x právě zpracovávaného segmentu.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        boxes[a]
+            .0
+            .partial_cmp(&boxes[b].0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut active: Vec<usize> = Vec::new();
+    for &i in &order {
+        let (ax1, _, ay1, ay2) = boxes[i];
+        active.retain(|&j| boxes[j].1 >= ax1);
+        for &j in &active {
+            let (_, _, by1, by2) = boxes[j];
+            if !(ay2 < by1 || ay1 > by2) {
+                uf_union(&mut parent, i, j);
+            }
+        }
+        active.push(i);
+    }
+
+    let mut groups: HashMap<usize, Vec<PathSegment>> = HashMap::new();
+    for (i, seg) in segs.iter().enumerate() {
+        let root = uf_find(&mut parent, i);
+        groups.entry(root).or_default().push((*seg).clone());
+    }
+
+    let mut objects: Vec<SubstratePaths> = groups.into_values().map(SubstratePaths::new).collect();
+    objects.sort_by(|a, b| {
+        let c = |o: &SubstratePaths| -> (f64, f64) {
+            let pts: Vec<&Point2D> = o.segments.iter().flat_map(|s| s.points.iter()).collect();
+            let k = pts.len().max(1) as f64;
+            (
+                pts.iter().map(|p| p.x).sum::<f64>() / k,
+                pts.iter().map(|p| p.y).sum::<f64>() / k,
+            )
+        };
+        let (ax, ay) = c(a);
+        let (bx, by) = c(b);
+        ax.partial_cmp(&bx)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    objects
+}
+
 // ─── Had-infill (drátový odpor / wire-resistor pattern) ──────────────────────
 
 fn polygon_signed_area(poly: &[Point2D]) -> f64 {
@@ -243,7 +315,7 @@ fn polygon_signed_area(poly: &[Point2D]) -> f64 {
     area / 2.0
 }
 
-fn segs_cross(p1: Point2D, p2: Point2D, p3: Point2D, p4: Point2D) -> bool {
+pub(crate) fn segs_cross(p1: Point2D, p2: Point2D, p3: Point2D, p4: Point2D) -> bool {
     let dx1 = p2.x - p1.x;
     let dy1 = p2.y - p1.y;
     let dx2 = p4.x - p3.x;
@@ -418,9 +490,14 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
         return SubstratePaths::new(vec![]);
     }
 
-    let (min_x, max_x, min_y, max_y) = match bbox_of_paths(&raw.segments) {
-        Some(b) => b,
-        None => return SubstratePaths::new(vec![]),
+    // Rám: buď společný bbox celého importu (objekty z jednoho souboru pak drží
+    // vzájemné rozložení), nebo bbox vlastní geometrie.
+    let (min_x, max_x, min_y, max_y) = match p.frame {
+        Some([mn_x, mx_x, mn_y, mx_y]) => (mn_x, mx_x, mn_y, mx_y),
+        None => match bbox_of_paths(&raw.segments) {
+            Some(b) => b,
+            None => return SubstratePaths::new(vec![]),
+        },
     };
     let width = max_x - min_x;
     let height = max_y - min_y;
@@ -1482,6 +1559,7 @@ mod tests {
             infill_angle: 0.0,
             nozzle_diam: 0.4,
             user_scale: 1.0,
+            frame: None,
         }
     }
 

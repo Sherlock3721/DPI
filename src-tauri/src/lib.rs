@@ -37,19 +37,13 @@ struct ZCalibrationInfo {
 
 #[tauri::command]
 fn generate_gcode_job(
-    slide_paths: Vec<dpi_core::SubstratePaths>,
+    slides: Vec<Vec<dpi_core::Placement>>,
     params: dpi_core::ProcessParams,
-    transforms: Vec<dpi_core::Transform>,
     slide_overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
     machine: dpi_core::MachineConfig,
 ) -> Result<GCodeResponse, String> {
-    let (gcode, total_dist, total_time) = dpi_core::generate_gcode(
-        &slide_paths,
-        &params,
-        &transforms,
-        &slide_overrides,
-        &machine,
-    )?;
+    let (gcode, total_dist, total_time) =
+        dpi_core::generate_gcode(&slides, &params, &slide_overrides, &machine)?;
     Ok(GCodeResponse {
         gcode,
         total_dist,
@@ -236,25 +230,39 @@ async fn send_manual_gcode_blocking(
 fn update_layout(
     params: dpi_core::ProcessParams,
     overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
-    raw_paths: Option<dpi_core::SubstratePaths>,
-    auto_scale: bool,
-    baked_scales: Vec<f64>,
+    objects: Vec<dpi_core::SceneObject>,
+    slides: Vec<Vec<dpi_core::PlacementState>>,
     old_positions: Vec<dpi_core::LayoutPosition>,
-    current_transforms: Vec<dpi_core::Transform>,
     bed: dpi_core::BedConfig,
     multi_spacing: f64,
 ) -> dpi_core::LayoutUpdateResult {
     dpi_core::update_layout(
         &params,
         &overrides,
-        raw_paths.as_ref(),
-        auto_scale,
-        &baked_scales,
+        &objects,
+        &slides,
         &old_positions,
-        &current_transforms,
         &bed,
         multi_spacing,
     )
+}
+
+/// Rozdělí surový import na samostatné objekty podle oddělených tvarů.
+#[tauri::command]
+fn split_objects(raw_paths: dpi_core::SubstratePaths) -> Vec<dpi_core::SubstratePaths> {
+    dpi_core::split_into_objects(&raw_paths)
+}
+
+/// Najde volné místo na sklíčku pro nově přidanou skupinu objektů.
+/// Vrací `[dx, dy]`, nebo `null` když se skupina nikam nevejde.
+#[tauri::command]
+fn find_free_offset(
+    pos: dpi_core::LayoutPosition,
+    new_aabb: (f64, f64, f64, f64),
+    occupied: Vec<(f64, f64, f64, f64)>,
+    nozzle_diam: f64,
+) -> Option<(f64, f64)> {
+    dpi_core::find_free_offset(&pos, new_aabb, &occupied, nozzle_diam)
 }
 
 // ─── Metadata a export ───────────────────────────────────────────────────────
@@ -302,23 +310,31 @@ fn generate_csv_protocol(
 #[tauri::command]
 fn compute_preview_segments(
     positions: Vec<dpi_core::LayoutPosition>,
-    paths: Vec<dpi_core::SubstratePaths>,
-    transforms: Vec<dpi_core::Transform>,
+    slides: Vec<Vec<dpi_core::Placement>>,
     prime_path: Option<dpi_core::SubstratePaths>,
+    global_nozzle: String,
+    print_order: String,
+    route_mode: String,
 ) -> dpi_core::PreviewDistResult {
-    dpi_core::compute_preview_segments(&positions, &paths, &transforms, prime_path.as_ref())
+    dpi_core::compute_preview_segments(
+        &positions,
+        &slides,
+        prime_path.as_ref(),
+        &global_nozzle,
+        &print_order,
+        &route_mode,
+    )
 }
 
 /// Vrátí `true` pokud některá z transformovaných tras přesahuje okraj sklíčka s insetem trysky.
 /// Nahrazuje smyčky v `handleNozzleDiamGrew` v `App.svelte`.
 #[tauri::command]
 fn check_paths_overflow(
-    paths: Vec<dpi_core::SubstratePaths>,
-    transforms: Vec<dpi_core::Transform>,
+    slides: Vec<Vec<dpi_core::Placement>>,
     non_prime_positions: Vec<dpi_core::LayoutPosition>,
     nozzle_diam: f64,
 ) -> bool {
-    dpi_core::check_paths_overflow(&paths, &transforms, &non_prime_positions, nozzle_diam)
+    dpi_core::check_paths_overflow(&slides, &non_prime_positions, nozzle_diam)
 }
 
 // ─── Zpracování vektorových drah ──────────────────────────────────────────────
@@ -457,6 +473,8 @@ pub fn run() {
             compute_preview_segments,
             check_paths_overflow,
             update_layout,
+            split_objects,
+            find_free_offset,
             generate_gcode_job,
             compute_z_calibration,
             split_gcode_pauses,
@@ -485,6 +503,28 @@ pub fn run() {
             get_local_ip,
         ])
         .setup(|app| {
+            #[cfg(debug_assertions)]
+            {
+                // Kontrola dostupnosti dev serveru (Vite).
+                // Pokud uživatel spustil pouze `cargo run` bez spuštěného frontendu,
+                // okno by zůstalo neviditelné (visible: false). Upozorníme ho v terminálu.
+                use std::net::TcpStream;
+                use std::time::Duration;
+                if TcpStream::connect_timeout(
+                    &"127.0.0.1:5173".parse().unwrap(),
+                    Duration::from_millis(300),
+                )
+                .is_err()
+                {
+                    eprintln!("\n==================================================================");
+                    eprintln!("⚠️  UPOZORNĚNÍ: Frontend dev server na http://127.0.0.1:5173 neběží!");
+                    eprintln!("   Spustili jste aplikaci pouze přes `cargo run`?");
+                    eprintln!("   Okno aplikace je při startu skryté a čeká na načtení frontendu.");
+                    eprintln!("   👉 Pro správné spuštění použijte: npm run tauri dev");
+                    eprintln!("==================================================================\n");
+                }
+            }
+
             // Spusť WebSocket server pro sdílení stavu na pozadí
             tauri::async_runtime::spawn(async move {
                 sync::start_ws_server().await;

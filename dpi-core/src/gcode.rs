@@ -1,11 +1,71 @@
 use crate::extrusion::ExtrusionCalculator;
 use crate::layout::get_layout_positions;
+use crate::schedule::{self, PrintOrder, RouteMode};
 use crate::types::{
-    LayoutPosition, MachineConfig, PathSegment, Point2D, ProcessParams, SlideOverride,
+    LayoutPosition, MachineConfig, PathSegment, Placement, Point2D, ProcessParams, SlideOverride,
     SubstratePaths, Transform,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Značka pro kontrolu vyosení trysky, kterou generátor vloží za homing po
+/// každé výměně trysky.
+///
+/// Za značkou následuje jméno trysky. Sama o sobě je to komentář — tiskový
+/// front ji zahazuje spolu s ostatními komentáři, takže je dnes neaktivní a
+/// slouží jako připravený úchyt: až kontrola vyosení vznikne, bude ji
+/// `comms.rs` rozpoznávat stejně jako `; APP_PAUSE:` a předávat frontendu.
+/// Jediná definice pro generátor i budoucího konzumenta (zrcadlí ji
+/// `NOZZLE_ALIGN_MARKER` v `src/lib/tauri.ts`).
+pub const NOZZLE_ALIGN_MARKER: &str = "; DPI_NOZZLE_ALIGN:";
+
+/// Výchozí blok po výměně trysky, pokud ho nastavení nepřepíše.
+/// Homing je povinný — nová jehla má jinou délku i vyosení.
+pub const DEFAULT_NOZZLE_CHANGE_GCODE: &str = "G28 ; Homing po vymene trysky";
+
+/// Odhad doby homingu pro statistiku tisku (vlastní pauza na výměnu se nepočítá
+/// — trvá, jak dlouho obsluze trvá jehlu vyměnit).
+const HOMING_TIME_SEC: f64 = 10.0;
+
+/// Vloží kompletní sekvenci výměny trysky: výjezd do bezpečné výšky, pauza pro
+/// obsluhu, homing (konfigurovatelný blok) a značka pro kontrolu vyosení.
+///
+/// Po homingu se musí obnovit virtuální posun Z — `G28` fyzickou nulu vrátí
+/// zpět, takže bez obnovy by všechny další tiskové výšky mířily o `z_shift`
+/// níž, tedy do skla.
+fn push_nozzle_change(
+    out: &mut String,
+    nozzle_name: &str,
+    nozzle_diam: f64,
+    z_shift: f64,
+    machine: &MachineConfig,
+) {
+    let change_block = if machine.nozzle_change_gcode.trim().is_empty() {
+        DEFAULT_NOZZLE_CHANGE_GCODE
+    } else {
+        machine.nozzle_change_gcode.trim_end()
+    };
+
+    out.push_str(&format!(
+        "\n; --- VYMENA TRYSKY: {nozzle_name} (prumer {nozzle_diam:.2} mm) ---\n\
+         G1 Z{:.3} F1000 ; Vyjezd do bezpecne vysky pred vymenou\n\
+         M0 Vymente trysku za: {nozzle_name} ({nozzle_diam:.2} mm). Po potvrzeni probehne homing a kontrola vyoseni.\n",
+        machine.safe_z + z_shift,
+    ));
+    push_gcode_block(out, change_block);
+    out.push_str(&format!("{NOZZLE_ALIGN_MARKER}{nozzle_name}\n"));
+
+    if z_shift > 0.0 {
+        out.push_str(&format!(
+            "; Obnoveni virtualniho posunu Z po homingu (SHIFT {z_shift:.2}mm)\n\
+             G1 Z{:.3} F1000 ; Vyjezd do bezpecne vysky\n\
+             G92 Z{:.3} ; Nastaveni posunute nuly\n",
+            machine.safe_z,
+            machine.safe_z + z_shift
+        ));
+    }
+    out.push_str("G92 E0.0 ; Reset extruderu po vymene\n");
+}
 
 /// Společný generátor cik-cak bodů odplivového (prime) vzoru.
 ///
@@ -230,7 +290,7 @@ pub fn parse_gcode_paths(gcode: &str) -> SubstratePaths {
 
 /// Pomocná funkce pro transformaci bodu z lokálních souřadnic sklíčka
 /// do absolutních souřadnic tiskové plochy.
-fn transform_pt(x_orig: f64, y_orig: f64, t: &Transform, _bed_max_y: f64) -> Point2D {
+pub(crate) fn transform_pt(x_orig: f64, y_orig: f64, t: &Transform, _bed_max_y: f64) -> Point2D {
     let dx = x_orig - t.cx;
     let dy = y_orig - t.cy;
 
@@ -362,9 +422,8 @@ pub fn compute_z_shift(
 /// Hlavní generátor G-kódu pro laboratorní 2D tisk.
 /// Vrací trojici: (obsah G-kódu, celková tisková dráha v mm, odhadovaný čas v sekundách).
 pub fn generate_gcode(
-    slide_paths: &[SubstratePaths],
+    slides: &[Vec<Placement>],
     params: &ProcessParams,
-    transforms: &[Transform],
     slide_overrides: &HashMap<String, SlideOverride>,
     machine: &MachineConfig,
 ) -> Result<(String, f64, f64), String> {
@@ -417,23 +476,139 @@ pub fn generate_gcode(
         &machine.bed,
     );
 
-    let mut measurement_idx = 0;
     let mut last_abs_x = 0.0_f64;
     let mut last_abs_y = 0.0_f64;
     let mut total_dist = 0.0_f64;
+    // Tryska nasazená na začátku tisku = globální; objekty s vlastní tryskou ji
+    // v průběhu mění a generátor si drží, která je právě v hlavě.
+    let mut mounted_nozzle = params.nozzle_type.clone();
 
-    for pos in &positions {
+    // --- Odpliv: vždy positions[0] (viz layout::get_layout_positions), tiskne
+    // se jako první a mimo naplánované pořadí `schedule::schedule_print`. ---
+    if let Some(pos) = positions.first().filter(|p| p.is_prime) {
         push_gcode_block(&mut result, &machine.loop_start_gcode);
 
         result.push_str("G90 ; Absolutni souradnice pohybu\nM83 ; Relativni souradnice extruze\n");
 
-        // Načteme lokální override pro dané sklíčko
-        let key = if pos.is_prime {
-            "-1".to_string()
+        let current_overrides = slide_overrides.get("-1");
+
+        let loc_nozzle_h = current_overrides
+            .and_then(|o| o.nozzle_height)
+            .unwrap_or(params.nozzle_height);
+        let loc_ext = current_overrides
+            .and_then(|o| o.extrusion_rate)
+            .unwrap_or(params.extrusion_rate);
+        let loc_ext_unit = current_overrides
+            .and_then(|o| o.extrusion_unit.as_ref())
+            .unwrap_or(&params.extrusion_unit);
+        let loc_spd = current_overrides
+            .and_then(|o| o.print_speed)
+            .unwrap_or(params.print_speed);
+        let loc_z = current_overrides
+            .and_then(|o| o.z_offset)
+            .unwrap_or(params.z_offset);
+
+        let print_z = -machine.block_height + loc_nozzle_h - params.nozzle_hidden
+            + params.slide_z
+            + loc_z
+            + z_shift;
+
+        let e_per_mm = ext_calc.calculate_e_per_mm(loc_ext, loc_ext_unit);
+
+        result.push_str("\n; --- VZOREK (ODPLIV) ---\n");
+        result.push_str("G92 E0.0 ; Reset extruderu\n");
+
+        // Konfigurovatelný odplivový vzor
+        let prime_w = current_overrides.and_then(|o| o.slide_w).unwrap_or(15.0);
+        let prime_h = current_overrides.and_then(|o| o.slide_h).unwrap_or(15.0);
+
+        let infill_type = current_overrides
+            .and_then(|o| o.infill_type.clone())
+            .unwrap_or_else(|| params.infill_type.clone());
+        let infill_val = current_overrides
+            .and_then(|o| o.infill_val)
+            .unwrap_or(params.nozzle_diam);
+
+        // Rozestup odplivových linií — zrcadlí logiku generate_prime_preview
+        let prime_infill = if infill_type == "%" && infill_val > 0.0 {
+            params.nozzle_diam / (infill_val / 100.0)
+        } else if infill_type == "počet" && infill_val >= 1.0 {
+            prime_h / infill_val
+        } else if infill_val > 0.0 {
+            infill_val
         } else {
-            measurement_idx.to_string()
+            params.nozzle_diam
         };
-        let current_overrides = slide_overrides.get(&key);
+
+        let cx = pos.x + pos.width / 2.0;
+        let cy = pos.y + pos.height / 2.0;
+        let x1 = cx - prime_w / 2.0;
+        let x2 = cx + prime_w / 2.0;
+        let y1 = cy - prime_h / 2.0;
+        let y2 = cy + prime_h / 2.0;
+
+        let travel_dist = ((x1 - last_abs_x).powi(2) + (y1 - last_abs_y).powi(2)).sqrt();
+        total_time_sec += (travel_dist / 3000.0) * 60.0;
+
+        result.push_str(&format!(
+            "G1 Z{:.3} F1000 ; Z-hop pro odpliv\nG0 X{:.3} Y{:.3} F3000\nG1 Z{:.3} F1000\n",
+            print_z + machine.z_hop,
+            x1,
+            y1,
+            print_z
+        ));
+
+        // Sdílený cik-cak generátor — stejné body jako generate_prime_preview.
+        // Dlouhá linie extruduje podle své délky, příčná spojka podle průměru
+        // trysky (parita s původní Python implementací).
+        let line_dist = (x2 - x1).abs();
+        for (pt, is_connector) in prime_zigzag_waypoints(x1, y1, x2, y2, prime_infill) {
+            let dist = if is_connector { params.nozzle_diam } else { line_dist };
+            result.push_str(&format!(
+                "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
+                pt.x,
+                pt.y,
+                dist * e_per_mm,
+                loc_spd
+            ));
+            total_dist += dist;
+            total_time_sec += (dist / loc_spd) * 60.0;
+            last_abs_x = pt.x;
+            last_abs_y = pt.y;
+        }
+        result.push_str(&format!("G0 Z{:.3} F1000\n", print_z + machine.z_hop));
+
+        push_gcode_block(&mut result, &machine.loop_end_gcode);
+    }
+
+    let non_prime_positions: Vec<&LayoutPosition> =
+        positions.iter().filter(|p| !p.is_prime).collect();
+
+    // Naplánované pořadí napříč substráty/objekty/tryskami — sdíleno s
+    // `geometry::compute_preview_segments`, aby se náhled nikdy nerozešel
+    // se skutečným výstupem. Kroky mimo fyzickou kapacitu podložky (kdyby
+    // `slides` obsahovalo víc řádků, než kolik se na podložku vejde) se
+    // zahodí — přesně jako dřívější `for pos in &positions` smyčka, která
+    // taková data nikdy nenavštívila.
+    let print_order = PrintOrder::from_setting(&machine.print_order);
+    let route_mode = RouteMode::from_setting(&machine.route_mode);
+    let steps: Vec<_> = schedule::schedule_print(slides, &params.nozzle_type, print_order, route_mode)
+        .into_iter()
+        .filter(|s| s.measurement_idx < non_prime_positions.len())
+        .collect();
+
+    let mut i = 0;
+    while i < steps.len() {
+        let m_idx = steps[i].measurement_idx;
+        let run_end = i + steps[i..]
+            .iter()
+            .take_while(|s| s.measurement_idx == m_idx)
+            .count();
+
+        push_gcode_block(&mut result, &machine.loop_start_gcode);
+        result.push_str("G90 ; Absolutni souradnice pohybu\nM83 ; Relativni souradnice extruze\n");
+
+        let current_overrides = slide_overrides.get(&m_idx.to_string());
 
         let loc_z = current_overrides
             .and_then(|o| o.z_offset)
@@ -461,185 +636,140 @@ pub fn generate_gcode(
 
         let e_per_mm = ext_calc.calculate_e_per_mm(loc_ext, loc_ext_unit);
 
-        if pos.is_prime {
-            result.push_str("\n; --- VZOREK (ODPLIV) ---\n");
-            result.push_str("G92 E0.0 ; Reset extruderu\n");
+        result.push_str(&format!("\n; --- VZOREK {} ---\n", m_idx + 1));
+        result.push_str("G92 E0.0 ; Reset extruderu\n");
 
-            // Konfigurovatelný odplivový vzor
-            let prime_w = current_overrides.and_then(|o| o.slide_w).unwrap_or(15.0);
-            let prime_h = current_overrides.and_then(|o| o.slide_h).unwrap_or(15.0);
+        // Objekt po objektu, v naplánovaném pořadí; přejezdy mezi nimi řeší
+        // stejná Z-hop logika jako přejezdy mezi segmenty jednoho objektu.
+        for step in &steps[i..run_end] {
+            let placement = &slides[step.measurement_idx][step.obj_idx];
+            let paths = &placement.path;
+            let transform = placement.transform;
 
-            let infill_type = current_overrides
-                .and_then(|o| o.infill_type.clone())
-                .unwrap_or_else(|| params.infill_type.clone());
-            let infill_val = current_overrides
-                .and_then(|o| o.infill_val)
-                .unwrap_or(params.nozzle_diam);
-
-            // Rozestup odplivových linií — zrcadlí logiku generate_prime_preview
-            let prime_infill = if infill_type == "%" && infill_val > 0.0 {
-                params.nozzle_diam / (infill_val / 100.0)
-            } else if infill_type == "počet" && infill_val >= 1.0 {
-                prime_h / infill_val
-            } else if infill_val > 0.0 {
-                infill_val
-            } else {
-                params.nozzle_diam
-            };
-
-            let cx = pos.x + pos.width / 2.0;
-            let cy = pos.y + pos.height / 2.0;
-            let x1 = cx - prime_w / 2.0;
-            let x2 = cx + prime_w / 2.0;
-            let y1 = cy - prime_h / 2.0;
-            let y2 = cy + prime_h / 2.0;
-
-            let travel_dist = ((x1 - last_abs_x).powi(2) + (y1 - last_abs_y).powi(2)).sqrt();
-            total_time_sec += (travel_dist / 3000.0) * 60.0;
-
-            result.push_str(&format!(
-                "G1 Z{:.3} F1000 ; Z-hop pro odpliv\nG0 X{:.3} Y{:.3} F3000\nG1 Z{:.3} F1000\n",
-                print_z + machine.z_hop,
-                x1,
-                y1,
-                print_z
-            ));
-
-            // Sdílený cik-cak generátor — stejné body jako generate_prime_preview.
-            // Dlouhá linie extruduje podle své délky, příčná spojka podle průměru
-            // trysky (parita s původní Python implementací).
-            let line_dist = (x2 - x1).abs();
-            for (pt, is_connector) in prime_zigzag_waypoints(x1, y1, x2, y2, prime_infill) {
-                let dist = if is_connector { params.nozzle_diam } else { line_dist };
-                result.push_str(&format!(
-                    "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
-                    pt.x,
-                    pt.y,
-                    dist * e_per_mm,
-                    loc_spd
-                ));
-                total_dist += dist;
-                total_time_sec += (dist / loc_spd) * 60.0;
-                last_abs_x = pt.x;
-                last_abs_y = pt.y;
+            // Objekt s vlastní tryskou: pokud je nasazená jiná, tisk se
+            // přeruší na výměnu, homing a kontrolu vyosení.
+            let wanted = step.nozzle.as_str();
+            if wanted != mounted_nozzle {
+                push_nozzle_change(
+                    &mut result,
+                    wanted,
+                    placement.effective_nozzle_diam(params.nozzle_diam),
+                    z_shift,
+                    machine,
+                );
+                mounted_nozzle = wanted.to_string();
+                // Po homingu stojí hlava v počátku — odtud se počítá
+                // přejezd na první bod objektu.
+                last_abs_x = 0.0;
+                last_abs_y = 0.0;
+                total_time_sec += HOMING_TIME_SEC;
             }
-            result.push_str(&format!("G0 Z{:.3} F1000\n", print_z + machine.z_hop));
-        } else {
-            result.push_str(&format!("\n; --- VZOREK {} ---\n", measurement_idx + 1));
-            result.push_str("G92 E0.0 ; Reset extruderu\n");
 
-            if measurement_idx < slide_paths.len() {
-                let paths = &slide_paths[measurement_idx];
-                let transform = if measurement_idx < transforms.len() {
-                    transforms[measurement_idx]
-                } else {
-                    Transform {
-                        scale: 1.0,
-                        rotation: 0.0,
-                        gui_dx: pos.x,
-                        gui_dy: pos.y,
-                        cx: params.slide_w / 2.0,
-                        cy: params.slide_h / 2.0,
-                    }
-                };
+            for segment in &paths.segments {
+                if segment.is_empty() {
+                    continue;
+                }
 
-                for segment in &paths.segments {
-                    if segment.is_empty() {
-                        continue;
-                    }
+                // Opt 1: pro uzavřené polygony rotuj počáteční bod k trysce
+                let effective_pts = rotate_closed_path_to_nearest(
+                    &segment.points,
+                    &transform,
+                    machine.bed.max_y,
+                    last_abs_x,
+                    last_abs_y,
+                );
 
-                    // Opt 1: pro uzavřené polygony rotuj počáteční bod k trysce
-                    let effective_pts = rotate_closed_path_to_nearest(
-                        &segment.points,
-                        &transform,
-                        machine.bed.max_y,
-                        last_abs_x,
-                        last_abs_y,
-                    );
+                let p0 = effective_pts[0];
+                let abs_p0 = transform_pt(p0.x, p0.y, &transform, machine.bed.max_y);
 
-                    let p0 = effective_pts[0];
-                    let abs_p0 = transform_pt(p0.x, p0.y, &transform, machine.bed.max_y);
+                let travel_dist =
+                    ((abs_p0.x - last_abs_x).powi(2) + (abs_p0.y - last_abs_y).powi(2)).sqrt();
+                total_time_sec += (travel_dist / 3000.0) * 60.0;
+                last_abs_x = abs_p0.x;
+                last_abs_y = abs_p0.y;
 
-                    let travel_dist =
-                        ((abs_p0.x - last_abs_x).powi(2) + (abs_p0.y - last_abs_y).powi(2)).sqrt();
-                    total_time_sec += (travel_dist / 3000.0) * 60.0;
-                    last_abs_x = abs_p0.x;
-                    last_abs_y = abs_p0.y;
+                // Opt 2: Z-hop úměrný délce přejezdu
+                let hop = proportional_z_hop(travel_dist, machine.z_hop);
 
-                    // Opt 2: Z-hop úměrný délce přejezdu
-                    let hop = proportional_z_hop(travel_dist, machine.z_hop);
-
-                    // Tečkování (Dot Dispensing)
-                    if loc_infill_style == "Tečky"
-                        && effective_pts.len() == 2
-                        && effective_pts[0] == effective_pts[1]
-                    {
-                        let dot_e = ext_calc.calculate_dot_extrusion(loc_ext, loc_ext_unit);
-                        if hop > 0.0 {
-                            result.push_str(&format!(
-                                "G1 Z{:.3} F1000 ; Z-hop nad bod\n\
-                                 G0 X{:.3} Y{:.3} F3000\n\
-                                 G1 Z{:.3} F1000 ; Klesnuti k povrchu\n",
-                                print_z + hop, abs_p0.x, abs_p0.y, print_z
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "G0 X{:.3} Y{:.3} F3000\n",
-                                abs_p0.x, abs_p0.y
-                            ));
-                        }
-                        result.push_str(&format!(
-                            "G1 E{:.5} F300 ; Davkovani kapky\n\
-                             G1 Z{:.3} F1000 ; Z-hop po davkovani\n",
-                            dot_e,
-                            print_z + machine.z_hop
-                        ));
-                        total_time_sec += 2.0;
-                        continue;
-                    }
-
-                    // Normální čáry (vektory)
+                // Tečkování (Dot Dispensing)
+                if loc_infill_style == "Tečky"
+                    && effective_pts.len() == 2
+                    && effective_pts[0] == effective_pts[1]
+                {
+                    let dot_e = ext_calc.calculate_dot_extrusion(loc_ext, loc_ext_unit);
                     if hop > 0.0 {
                         result.push_str(&format!(
-                            "G1 Z{:.3} F1000 ; Z-hop pro prejezd\n\
+                            "G1 Z{:.3} F1000 ; Z-hop nad bod\n\
                              G0 X{:.3} Y{:.3} F3000\n\
-                             G1 Z{:.3} F1000 ; Sjezd k povrchu\n",
+                             G1 Z{:.3} F1000 ; Klesnuti k povrchu\n",
                             print_z + hop, abs_p0.x, abs_p0.y, print_z
                         ));
                     } else {
                         result.push_str(&format!(
-                            "G0 X{:.3} Y{:.3} F3000 ; Kratky prejezd bez Z-hopu\n",
+                            "G0 X{:.3} Y{:.3} F3000\n",
                             abs_p0.x, abs_p0.y
                         ));
                     }
-
-                    for window in effective_pts.windows(2) {
-                        let pa =
-                            transform_pt(window[0].x, window[0].y, &transform, machine.bed.max_y);
-                        let pb =
-                            transform_pt(window[1].x, window[1].y, &transform, machine.bed.max_y);
-                        let dist = ((pb.x - pa.x).powi(2) + (pb.y - pa.y).powi(2)).sqrt();
-
-                        result.push_str(&format!(
-                            "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
-                            pb.x, pb.y, dist * e_per_mm, loc_spd
-                        ));
-                        total_dist += dist;
-                        total_time_sec += (dist / loc_spd) * 60.0;
-                        last_abs_x = pb.x;
-                        last_abs_y = pb.y;
-                    }
+                    result.push_str(&format!(
+                        "G1 E{:.5} F300 ; Davkovani kapky\n\
+                         G1 Z{:.3} F1000 ; Z-hop po davkovani\n",
+                        dot_e,
+                        print_z + machine.z_hop
+                    ));
+                    total_time_sec += 2.0;
+                    continue;
                 }
 
-                result.push_str(&format!(
-                    "G1 Z{:.3} F1000 ; Zvednuti po tisku sklicka\n",
-                    print_z + machine.z_hop
-                ));
-            }
+                // Normální čáry (vektory)
+                if hop > 0.0 {
+                    result.push_str(&format!(
+                        "G1 Z{:.3} F1000 ; Z-hop pro prejezd\n\
+                         G0 X{:.3} Y{:.3} F3000\n\
+                         G1 Z{:.3} F1000 ; Sjezd k povrchu\n",
+                        print_z + hop, abs_p0.x, abs_p0.y, print_z
+                    ));
+                } else {
+                    result.push_str(&format!(
+                        "G0 X{:.3} Y{:.3} F3000 ; Kratky prejezd bez Z-hopu\n",
+                        abs_p0.x, abs_p0.y
+                    ));
+                }
 
-            measurement_idx += 1;
+                for window in effective_pts.windows(2) {
+                    let pa =
+                        transform_pt(window[0].x, window[0].y, &transform, machine.bed.max_y);
+                    let pb =
+                        transform_pt(window[1].x, window[1].y, &transform, machine.bed.max_y);
+                    let dist = ((pb.x - pa.x).powi(2) + (pb.y - pa.y).powi(2)).sqrt();
+
+                    result.push_str(&format!(
+                        "G1 X{:.3} Y{:.3} E{:.5} F{:.0}\n",
+                        pb.x, pb.y, dist * e_per_mm, loc_spd
+                    ));
+                    total_dist += dist;
+                    total_time_sec += (dist / loc_spd) * 60.0;
+                    last_abs_x = pb.x;
+                    last_abs_y = pb.y;
+                }
+            }
         }
 
+        result.push_str(&format!(
+            "G1 Z{:.3} F1000 ; Zvednuti po tisku sklicka\n",
+            print_z + machine.z_hop
+        ));
+        push_gcode_block(&mut result, &machine.loop_end_gcode);
+        i = run_end;
+    }
+
+    // Fyzické pozice na podložce navíc, pro které `slides` nemá odpovídající
+    // řádek (obranné chování proti nesouladu délek polí) — zachovává paritu
+    // s dřívějším chováním: prázdný VZOREK blok bez objektů.
+    for idx in slides.len()..non_prime_positions.len() {
+        push_gcode_block(&mut result, &machine.loop_start_gcode);
+        result.push_str("G90 ; Absolutni souradnice pohybu\nM83 ; Relativni souradnice extruze\n");
+        result.push_str(&format!("\n; --- VZOREK {} ---\n", idx + 1));
+        result.push_str("G92 E0.0 ; Reset extruderu\n");
         push_gcode_block(&mut result, &machine.loop_end_gcode);
     }
 

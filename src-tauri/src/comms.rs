@@ -766,6 +766,14 @@ pub fn spawn_comms_loop(
                 if queue_idx < gcode_queue.len() {
                     let next_line = gcode_queue[queue_idx].clone();
 
+                    // TODO(kontrola vyosení trysky): až funkce vznikne, přibude
+                    // sem druhá větev pro `dpi_core::NOZZLE_ALIGN_MARKER`
+                    // (`; DPI_NOZZLE_ALIGN:<tryska>`) — generátor ji vkládá za
+                    // homing po každé výměně trysky. Zpracování bude stejné jako
+                    // u APP_PAUSE (pozastavit frontu, vyslat událost frontendu,
+                    // pokračovat po dokončení kontroly). Značka dnes do fronty
+                    // vůbec nedojde: komentáře se zahazují při jejím sestavení,
+                    // takže tisk běží dál bez přerušení.
                     // APP_PAUSE marker (M1/M0/M601) — zobrazíme hlášku v aplikaci
                     if let Some(msg) = next_line.strip_prefix("; APP_PAUSE:") {
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
