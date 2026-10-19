@@ -18,6 +18,7 @@
   import CustomSelect from "./CustomSelect.svelte";
   import { cameraStream, cameraAvailable } from "../stores/cameraStore";
   import { settingsStore } from "../stores/settingsStore";
+  import { videoStream } from "../lib/videoStream";
 
   let videoElementInline: HTMLVideoElement = $state()!;
   let videoElementPopup: HTMLVideoElement = $state()!;
@@ -72,17 +73,6 @@
       },
     };
   }
-
-  run(() => {
-    if (mediaStream) {
-      if (videoElementInline && videoElementInline.srcObject !== mediaStream) {
-        videoElementInline.srcObject = mediaStream;
-      }
-      if (videoElementPopup && videoElementPopup.srcObject !== mediaStream) {
-        videoElementPopup.srcObject = mediaStream;
-      }
-    }
-  });
 
   async function getDevices() {
     try {
@@ -142,8 +132,6 @@
         video: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
       };
       mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (videoElementInline) videoElementInline.srcObject = mediaStream;
-      if (videoElementPopup) videoElementPopup.srcObject = mediaStream;
       cameraStream.set(mediaStream);
       isActive = true;
     } catch (e: any) {
@@ -154,8 +142,6 @@
           video: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
         };
         mediaStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
-        if (videoElementInline) videoElementInline.srcObject = mediaStream;
-        if (videoElementPopup) videoElementPopup.srcObject = mediaStream;
         cameraStream.set(mediaStream);
         isActive = true;
       } catch (err2) {
@@ -175,8 +161,6 @@
       mediaStream = null;
       cameraStream.set(null);
     }
-    if (videoElementInline) videoElementInline.srcObject = null;
-    if (videoElementPopup) videoElementPopup.srcObject = null;
     isActive = false;
   }
 
@@ -525,6 +509,7 @@
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoElementInline}
+        use:videoStream={mediaStream}
         autoplay
         playsinline
         muted
@@ -586,6 +571,7 @@
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoElementPopup}
+        use:videoStream={mediaStream}
         autoplay
         playsinline
         muted

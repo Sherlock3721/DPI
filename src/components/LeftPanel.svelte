@@ -380,10 +380,13 @@
 
     // Pokud je kalibračníZ záporné, Marlin odmítne pohyb — posuneme souřadnicový systém
     // stejnou logikou jako z_shift v generátoru G-kódu (dpi-core/gcode.rs).
-    // Buffer 20 mm (místo 1 mm) dává uživateli prostor sjet dolu i bez M211 S0.
     const CALIB_BUFFER = 20.0;
     const zShift = glassZTheoretical < 0 ? Math.abs(glassZTheoretical) + CALIB_BUFFER : 0.0;
-    const calibVirtualZ = glassZTheoretical + zShift;    // vždy >= CALIB_BUFFER nebo glassZTheoretical
+    // Kalibrace: skutečný povrch může ležet níž, než říká výpočet (délka trysky,
+    // blok, tloušťka skla) — vždy vypnout soft endstopy a posunout souřadnice tak,
+    // aby pod kalibrační výškou zbylo CALIB_BUFFER mm i bez podpory M211 S0.
+    const calibShift = Math.max(0, CALIB_BUFFER - glassZTheoretical);
+    const calibVirtualZ = glassZTheoretical + calibShift;    // vždy >= CALIB_BUFFER
     const approachVirtualZ = calibVirtualZ + 2.0;
 
     const initSegments = await split_gcode_pauses(initGcode);
@@ -450,8 +453,11 @@
           isStarting = false;
         }
       } else {
+        // Soft endstopy znovu zapíná potvrzení i zrušení kalibrace (M211 S1)
+        const calibShiftCmd =
+          `M211 S0\nG0 Z${safeZ.toFixed(3)} F1000\nG92 Z${(safeZ + calibShift).toFixed(3)}\n`;
         await send_manual_blocking(
-          shiftCmd +
+          calibShiftCmd +
           `G0 X${targetX} Y${targetY} F3000\nM400\n` +
           `G0 Z${approachVirtualZ.toFixed(3)} F1000\n` +
           `G1 Z${calibVirtualZ.toFixed(3)} F300\nM400`

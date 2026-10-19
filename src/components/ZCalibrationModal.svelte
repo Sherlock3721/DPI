@@ -5,6 +5,7 @@
   import { ArrowUp, ArrowDown, Check, CameraOff, Info } from "lucide-svelte";
   import { cameraStream } from "../stores/cameraStore";
   import { settingsStore } from "../stores/settingsStore";
+  import { videoStream } from "../lib/videoStream";
 
   interface Props {
     glassZTheoretical: number;
@@ -20,7 +21,7 @@
   const steps = [0.5, 0.1, 0.05, 0.01];
 
   // Camera
-  let videoElement: HTMLVideoElement = $state()!;
+  let stream: MediaStream | null = $state(null);
   let ownStream: MediaStream | null = null;  // pouze pokud jsme stream vytvořili sami
   let cameraError = $state(false);
 
@@ -43,12 +44,10 @@
   }
 
   async function startCamera() {
-    if (!videoElement) return;
     // Preferujeme sdílený stream z CameraWidget — bez prodlevy, kamera již běží
     const shared = get(cameraStream);
     if (shared) {
-      videoElement.srcObject = shared;
-      videoElement.play().catch(() => {});
+      stream = shared;
       return;
     }
     // Fallback: vlastní stream (CameraWidget není aktivní)
@@ -56,8 +55,7 @@
       const savedDeviceId = get(settingsStore).camera_device_id || "";
       const constraints = { video: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true };
       ownStream = await navigator.mediaDevices.getUserMedia(constraints);
-      videoElement.srcObject = ownStream;
-      videoElement.play().catch(() => {});
+      stream = ownStream;
     } catch (e) {
       cameraError = true;
     }
@@ -69,7 +67,7 @@
       ownStream.getTracks().forEach((t) => t.stop());
       ownStream = null;
     }
-    if (videoElement) videoElement.srcObject = null;
+    stream = null;
   }
 
   function confirm() {
@@ -154,7 +152,7 @@
       >
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
-          bind:this={videoElement}
+          use:videoStream={stream}
           autoplay
           playsinline
           muted
