@@ -138,7 +138,7 @@
     <ul
       use:portal
       bind:this={dropdownEl}
-      class="fixed z-9999 max-h-60 overflow-y-auto bg-slate-800 border border-slate-700 rounded-sm shadow-xl text-slate-300 divide-y divide-slate-700/50 custom-scrollbar text-[11px]"
+      class="fixed z-9999 min-w-max max-h-60 overflow-y-auto bg-slate-800 border border-slate-700 rounded-sm shadow-xl text-slate-300 divide-y divide-slate-700/50 custom-scrollbar text-[11px]"
     >
       {#each options as option}
         <li>

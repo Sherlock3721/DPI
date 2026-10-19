@@ -85,8 +85,8 @@
     min_x:    $settingsStore.bed_min_x ?? 0.0,
     max_x:    $settingsStore.bed_max_x || 250.0,
     max_y:    $settingsStore.bed_max_y || 250.0,
-    offset_x: $settingsStore.start_offset_x || 18.0,
-    offset_y: $settingsStore.start_offset_y || 18.0,
+    offset_x: $settingsStore.start_offset_x || 16.0,
+    offset_y: $settingsStore.start_offset_y || 12.0,
   });
   run(() => {
     const colTop     = bedConfig.offset_y;

@@ -8,8 +8,8 @@ const defaultSettings: AppSettings = {
   bed_max_y: 210.0,
   bed_min_x: 0.0,
   bed_min_temp: 30,
-  start_offset_x: 18.0,
-  start_offset_y: 11.0,
+  start_offset_x: 16.0,
+  start_offset_y: 12.0,
   multi_spacing: 5.0,
   block_height: 34.0,
   hidden_nozzle_part: 4.0,
@@ -21,6 +21,9 @@ const defaultSettings: AppSettings = {
   default_z_offset: 0.2,
   default_z_hop: 2.0,
   safe_z: 20.0,
+  retract_nl: 0,
+  retract_speed: 300,
+  dot_dwell_ms: 0,
   default_speed: 1500,
   default_infill: 1.0,
   default_density: 0.05,
@@ -35,6 +38,9 @@ const defaultSettings: AppSettings = {
   camera_device_id: "",
   show_slide_grid: true,
   show_bed_axes: true,
+  show_print_direction: false,
+  show_gcode_stats: true,
+  show_object_info: true,
   path_fineness: 1.0,
   z_step: 0.0025,
   liquid_density: 1.0,
@@ -114,16 +120,18 @@ function createSettingsStore() {
         console.error("Failed to save settings:", err);
       }
     },
-    /** Aplikuje částečnou změnu na aktuální stav a hned ji uloží na disk.
-     *  Pro průběžné UI preference (theme, kamera, recent files). */
+    /** Aplikuje částečnou změnu na nastavení na disku a hned ji uloží.
+     *  Pro průběžné UI preference (theme, kamera, recent files).
+     *  Základem je vždy stav z disku, ne store v paměti — ten může obsahovat
+     *  jen defaulty (patch před dokončením `load()`, HMR reload modulu)
+     *  a jeho uložení by smazalo skla, trysky, G-kódy atd. */
     persistPatch: async (patch: Partial<AppSettings>) => {
-      let next: AppSettings = defaultSettings;
-      update((s) => {
-        next = { ...s, ...patch };
-        return next;
-      });
+      update((s) => ({ ...s, ...patch }));
       try {
+        const onDisk = await get_app_settings();
+        const next = { ...defaultSettings, ...onDisk, ...patch };
         await save_app_settings(next);
+        set(next);
       } catch (err) {
         console.error("Failed to persist settings patch:", err);
       }

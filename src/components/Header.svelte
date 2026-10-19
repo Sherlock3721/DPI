@@ -1,7 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import { FileText, Save, FolderOpen, Sliders } from "lucide-svelte";
+  import { FileText, Save, FolderOpen, Sliders, Check } from "lucide-svelte";
   import { projectStore, recentFilesStore } from "../stores/projectStore";
+  import { settingsStore, type AppSettings } from "../stores/settingsStore";
 
   interface Props {
     onResetProject: () => void;
@@ -50,6 +51,15 @@
   }: Props = $props();
 
   const dispatch = createEventDispatcher();
+
+  /** Přepínače zobrazení v plátně (uloženy v nastavení aplikace). */
+  type ViewToggle = "show_print_direction" | "show_gcode_stats" | "show_object_info";
+  const viewToggles: { key: ViewToggle; label: string; title: string; fallback: boolean }[] = [
+    { key: "show_print_direction", label: "Zobrazit směr tisku", title: "Šipky na začátku a konci každé dráhy ukazují, odkud kam tryska tiskne", fallback: false },
+    { key: "show_gcode_stats", label: "Zobrazit statistiky G-kódu", title: "Celková dráha, čas tisku a objem v plátně", fallback: true },
+    { key: "show_object_info", label: "Zobrazit pozici objektu", title: "Pozice, rotace a rozměry vybrané trasy / objektu v plátně", fallback: true },
+  ];
+  const toggleOn = (s: AppSettings, t: (typeof viewToggles)[number]) => s[t.key] ?? t.fallback;
 </script>
 
 <header
@@ -202,7 +212,7 @@
           >Nástroje</button
         >
         <div
-          class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-48 z-50 overflow-hidden transition-all duration-200"
+          class="absolute left-0 top-full hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-lg shadow-2xl py-1 w-60 z-50 overflow-hidden transition-all duration-200"
         >
           <button
             onclick={onOpenBracketExport}
@@ -216,6 +226,26 @@
           >
             <span>Diagnostika tiskárny</span>
           </button>
+          <div class="border-t border-slate-800 my-1"></div>
+          {#each viewToggles as t (t.key)}
+            {@const on = toggleOn($settingsStore, t)}
+            <button
+              role="menuitemcheckbox"
+              aria-checked={on}
+              title={t.title}
+              onclick={() => settingsStore.persistPatch({ [t.key]: !on })}
+              class="px-3 py-1.5 text-left hover:bg-labaccent/20 hover:text-labaccent text-slate-200 border-l-2 border-transparent hover:border-labaccent transition-all duration-150 flex items-center gap-2"
+            >
+              <span
+                class="w-3.5 h-3.5 shrink-0 rounded-sm border flex items-center justify-center {on
+                  ? 'bg-labaccent border-labaccent text-white'
+                  : 'border-slate-600'}"
+              >
+                {#if on}<Check class="w-2.5 h-2.5" />{/if}
+              </span>
+              <span>{t.label}</span>
+            </button>
+          {/each}
         </div>
       </div>
 

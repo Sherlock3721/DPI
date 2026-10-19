@@ -9,14 +9,80 @@ export interface Point2D {
 export interface PathSegment {
   points: Point2D[];
   is_filled?: boolean;
+  has_stroke?: boolean;
+  /** Zdrojový SVG prvek (výplně prvků se sjednocují, uvnitř prvku even-odd). */
+  group?: number;
+  /** Objekt, ke kterému zpracovaná dráha patří (klíč per-objektového nastavení). */
+  object?: number;
+  /** Tvar je díra — odečítá se z ostatních prvků. */
+  hole?: boolean;
+  /** Konce čáry přichycené magnetem k objektům (jen zdrojové dráhy). */
+  anchors?: Anchor[];
+  /** Dráha hada — plátno ukazuje směr tisku. */
+  snake?: boolean;
+  /** Uzavřená dráha začíná ve zvoleném bodě (napojení na spojovací čáru). */
+  fixed_start?: boolean;
+  /** Přejezd na začátek dráhy vede jen přes plochu výplně — tryska se nezvedá. */
+  wet_travel?: boolean;
+}
+
+/** Konec čáry přichycený k trase objektu (zdrojové souřadnice neupraveného objektu). */
+export interface Anchor {
+  /** 0 = první bod čáry, 1 = poslední. */
+  end: number;
+  object: number;
+  x: number;
+  y: number;
+}
+
+/** Úprava objektu v souřadnicích kresby na sklíčku (před zapečeným měřítkem
+ *  trasy), kolem středu obálky neupraveného objektu. */
+export interface ObjectTransform {
+  dx: number;
+  dy: number;
+  scale: number;
+  /** Měřítko osy Y (odemčený poměr stran); chybí = `scale`. */
+  scale_y?: number | null;
+  /** Stupně, orientace jako `Transform.rotation`. */
+  rotation: number;
+}
+
+/** Objekt na sklíčku — samostatný tvar nebo čára. */
+export interface PathObject {
+  /** Stabilní id (index zdrojového segmentu). */
+  id: number;
+  /** [min_x, max_x, min_y, max_y] v souřadnicích sklíčka. */
+  bounds: [number, number, number, number];
+  filled: boolean;
+  /** Překrývá se s jiným objektem a tiskne se s ním jako jedna dráha s nastavením objektu s tímto id. */
+  merged_into?: number;
+  /** Objekt je díra (netiskne se, odečítá se z ostatních). */
+  hole?: boolean;
+  /** Index zdrojového SVG prvku. */
+  element?: number;
+  /** Obálka neupraveného objektu v souřadnicích kresby (před zapečeným měřítkem). */
+  base_bounds?: [number, number, number, number];
+  /** Platná úprava objektu (vlastní sklíčka, jinak sdílená). */
+  xform?: ObjectTransform;
+  /** Indexy zdrojových segmentů objektu (obrys, díry). */
+  sources?: number[];
 }
 
 export interface SubstratePaths {
   segments: PathSegment[];
+  /** Objekty sklíčka (jen u zpracovaných drah). */
+  objects?: PathObject[];
+  /** Objekty smazané ze sdílené kresby — ze všech skel (jen u zdrojových drah). */
+  deleted_objects?: number[];
+  /** Úpravy objektů sdílené všemi skly (jen u zdrojových drah). */
+  object_transforms?: Record<string, ObjectTransform>;
 }
 
 export interface Transform {
   scale: number;
+  /** Měřítko osy Y při škálování s odemčeným poměrem stran (Alt) — jen během
+   *  tažení v plátně; po puštění se zapeče do geometrie. Chybí = `scale`. */
+  scale_y?: number;
   rotation: number;
   gui_dx: number;
   gui_dy: number;
@@ -32,6 +98,8 @@ export interface ProcessParams {
   slide_z: number;
   z_offset: number;
   z_unit: string;
+  /** Korekce nuly Z z kalibrace [mm] — platí pro všechna skla (i s vlastním z_offsetem). */
+  z_calibration?: number;
   nozzle_height: number;
   nozzle_hidden: number;
   filament_diameter: number;
@@ -63,6 +131,34 @@ export interface SlideOverride {
   slide_w?: number | null;
   slide_h?: number | null;
   glass_type?: string | null;
+  /** Tloušťka skla pod pozicí [mm]; chybí = tloušťka vzorkového skla (slide_z). */
+  glass_z?: number | null;
+  /** Id objektů smazaných z tohoto sklíčka (ostatní skla je tisknou dál). */
+  deleted_objects?: number[];
+  /** Úpravy objektů jen na tomto sklíčku (mají přednost před sdílenými). */
+  object_transforms?: Record<string, ObjectTransform>;
+  /** Pořadí tisku objektů (id); neuvedené následují podle id. */
+  object_order?: number[];
+  /** Skupiny propojených klonů (id objektů) — změny jednoho se přenáší na ostatní. */
+  clones?: number[][];
+  /** Třetí, nejvyšší úroveň nastavení: přepisy objektů skla (klíč = id objektu). */
+  objects?: Record<string, ObjectOverride>;
+}
+
+/** Přepis nastavení jednoho objektu — co nepřepíše, dědí od skla. */
+export interface ObjectOverride {
+  name?: string;
+  note?: string;
+  z_offset?: number | null;
+  extrusion_rate?: number | null;
+  extrusion_unit?: string | null;
+  print_speed?: number | null;
+  infill_val?: number | null;
+  infill_type?: string | null;
+  nozzle_height?: number | null;
+  infill_style?: string | null;
+  /** Začátek hada v rohu obálky objektu: "bl" | "br" | "tl" | "tr"; chybí = automaticky. */
+  snake_start?: string | null;
 }
 
 export interface LayoutPosition {
@@ -85,6 +181,20 @@ export interface PrinterStatus {
   progress: number;
   total_dist: number;
   time_remaining: number;
+  /** Odhad skutečně tištěného místa dráhy (respektuje buffer pohybů tiskárny). */
+  print_cursor?: PrintCursor | null;
+}
+
+/** Poloha tisku v náhledu — odpovídá print_tracker::PrintCursor. */
+export interface PrintCursor {
+  /** Index pozice v layoutu (včetně odplivu). */
+  pos_idx: number;
+  seg_idx: number;
+  /** Původní bod, kterým tisk dráhy začal. */
+  start_idx: number;
+  /** Úsek v pořadí tisku (od bodu pt_idx k pt_idx + 1). */
+  pt_idx: number;
+  frac: number;
 }
 
 export interface GCodeResponse {
@@ -98,6 +208,7 @@ export interface GCodeMetadata {
   overrides: Record<string, SlideOverride>;
   transforms: Transform[];
   baked_scales: number[];
+  baked_scales_y?: number[];
   source_file_name: string;
   source_file_ext: string;
   source_file_content: string;
@@ -137,6 +248,13 @@ export interface AppSettings {
   default_z_hop: number;
   /** Bezpečná výška Z pro přejezdy a virtuální posun souřadnic (mm). */
   safe_z: number;
+  // Dávkování kapalin
+  /** Zpětné nasátí kapaliny před přejezdem se zdvihem (nl); 0 = vypnuto. */
+  retract_nl: number;
+  /** Rychlost retrakce a návratu kapaliny (posuv E, mm/min). */
+  retract_speed: number;
+  /** Čekání po dávce kapky, než se tryska zvedne (ms). */
+  dot_dwell_ms: number;
   default_speed: number;
   default_infill: number;
   default_density: number;
@@ -157,6 +275,12 @@ export interface AppSettings {
   // UI
   show_slide_grid: boolean;
   show_bed_axes: boolean;
+  /** Šipky směru tisku u drah v plátně. */
+  show_print_direction?: boolean;
+  /** Přehled statistik G-kódu v plátně. */
+  show_gcode_stats?: boolean;
+  /** Přehled pozice a rozměrů vybrané trasy / objektu v plátně. */
+  show_object_info?: boolean;
   path_fineness: number;
   z_step: number;
   liquid_density: number;
@@ -220,6 +344,7 @@ export interface LayoutUpdateResult {
   prime_path: SubstratePaths | null;
   final_sample_count: number;
   baked_scales: number[];
+  baked_scales_y?: number[];
 }
 
 export interface BedConfig {
@@ -238,6 +363,7 @@ export async function update_layout(
   rawPaths: SubstratePaths | null,
   autoScale: boolean,
   bakedScales: number[],
+  bakedScalesY: number[],
   oldPositions: LayoutPosition[],
   currentTransforms: Transform[],
   bed: BedConfig,
@@ -249,6 +375,7 @@ export async function update_layout(
     rawPaths,
     autoScale,
     bakedScales,
+    bakedScalesY,
     oldPositions,
     currentTransforms,
     bed,
@@ -256,31 +383,48 @@ export async function update_layout(
   });
 }
 
+/** Body dráhy jsou v pořadí tisku: bod k = původní bod (start_idx + k) mod n. */
 export interface PreviewSegData {
   slide_idx: number;
   seg_idx: number;
   path_start_dist: number;
   point_dists: number[];
   seg_dist: number;
+  /** Původní bod, kterým tisk dráhy začíná (uzavřené dráhy začínají u trysky). */
+  start_idx: number;
+  /** Začátek tisku dráhy od začátku tisku (s), po přejezdu. */
+  start_time: number;
+  /** Kumulativní čas k jednotlivým bodům od start_time (s). */
+  point_times: number[];
+  /** Odkud se na dráhu přejíždí (world). */
+  travel_from: Point2D;
 }
 
 export interface PreviewDistResult {
   segs: PreviewSegData[];
   total_dist: number;
+  /** Odhad času tisku drah (s) — časová osa náhledu. */
+  total_time: number;
 }
 
-/** Předpočítá kumulativní vzdálenosti segmentů pro náhled průběhu tisku. */
+/** Předpočítá vzdálenosti a časovou osu tisku (rychlosti objekt → sklo → globál). */
 export async function compute_preview_segments(
   positions: LayoutPosition[],
   paths: SubstratePaths[],
   transforms: Transform[],
-  primePath: SubstratePaths | null
+  primePath: SubstratePaths | null,
+  params: ProcessParams,
+  overrides: Record<string, SlideOverride>,
+  motion: MotionConfig
 ): Promise<PreviewDistResult> {
   return await invoke<PreviewDistResult>("compute_preview_segments", {
     positions,
     paths,
     transforms,
     primePath,
+    params,
+    overrides,
+    motion,
   });
 }
 
@@ -322,6 +466,33 @@ export interface MachineConfig {
   /** Pokud true, negeneruje se blok virtuálního posunu Z (G1 safe_z + G92) —
    * volající už virtuální souřadný systém nastavil sám (kalibrační tok). */
   skip_z_shift_setup?: boolean;
+  /** Zpětné nasátí kapaliny před přejezdem se zdvihem (nl); 0 = vypnuto. */
+  retract_nl: number;
+  /** Rychlost retrakce a návratu kapaliny (posuv E, mm/min). */
+  retract_speed: number;
+  /** Čekání po dávce kapky, než se tryska zvedne (ms). */
+  dot_dwell_ms: number;
+}
+
+/** Pohyby mimo tiskové dráhy — sdílí generátor G-kódu a časová osa náhledu
+ *  (odpovídá dpi_core::MotionConfig). */
+export interface MotionConfig {
+  z_hop: number;
+  retract_nl: number;
+  retract_speed: number;
+  dot_dwell_ms: number;
+  calibration_factor: number;
+}
+
+/** Konfigurace pohybu z nastavení aplikace. */
+export function motionFromSettings(s: AppSettings): MotionConfig {
+  return {
+    z_hop: s.default_z_hop ?? 2.0,
+    retract_nl: s.retract_nl ?? 0,
+    retract_speed: s.retract_speed ?? 300,
+    dot_dwell_ms: s.dot_dwell_ms ?? 0,
+    calibration_factor: s.calibration_factor ?? 0.323877,
+  };
 }
 
 export async function generate_gcode(
@@ -431,6 +602,16 @@ export interface SliceParams {
   infill_angle: number;
   nozzle_diam: number;
   user_scale: number;
+  /** Zapečené měřítko osy Y (odemčený poměr stran); chybí = `user_scale`. */
+  user_scale_y?: number | null;
+  /** Přepisy objektů sklíčka (styl a hustota výplně). */
+  object_overrides?: Record<string, ObjectOverride>;
+  /** Objekty smazané z tohoto sklíčka. */
+  deleted_objects?: number[];
+  /** Úpravy objektů jen na tomto sklíčku. */
+  object_transforms?: Record<string, ObjectTransform>;
+  /** Pořadí tisku objektů. */
+  object_order?: number[];
 }
 
 /** Zpracuje raw vektorové dráhy (normalizace, škálování, infill) — Rust dpi-core. */

@@ -16,10 +16,12 @@ export function tpt(
   pScale: number,
   pRot: number,
   pCX: number,
-  pCY: number
+  pCY: number,
+  /** Měřítko osy Y (odemčený poměr stran při tažení); chybí = pScale. */
+  pScaleY: number = pScale
 ): [number, number] {
   const dx = (px - pCX) * pScale;
-  const dy = (py - pCY) * pScale;
+  const dy = (py - pCY) * pScaleY;
   const rad = (-pRot * Math.PI) / 180;
   const cr = Math.cos(rad),
     sr = Math.sin(rad);
@@ -29,34 +31,61 @@ export function tpt(
 export interface PreviewCursor {
   slideIdx: number;
   segIdx: number;
+  /** Úsek v pořadí tisku: tryska jede od bodu ptIdx k ptIdx + 1. */
   ptIdx: number;
   fracT: number;
+  /** Původní bod, kterým tisk dráhy začal (uzavřené dráhy začínají u trysky). */
+  startIdx: number;
+  /** Tryska teprve přejíždí na začátek dráhy: odkud (world) a jak daleko (0–1). */
+  travel?: { from: Point2D; frac: number };
 }
 
-/** Mapuje printProgress (0–100 %) na přesnou vzdálenostní pozici v trase. */
+/** Bod dráhy v pořadí tisku — uzavřená dráha se tiskne od bodu startIdx. */
+export function printedPoint(points: Point2D[], startIdx: number, k: number): Point2D {
+  if (startIdx === 0) return points[k];
+  const n = points.length - 1; // poslední bod uzavřené dráhy = první
+  return points[(startIdx + k) % n];
+}
+
+/** Mapuje printProgress (0–100 % času tisku) na místo v trase podle časové osy
+ *  (rychlosti objektů, přejezdy a tečky jako v G-kódu). */
 export function computePreviewCursor(
   printProgress: number,
   precomputedSegs: PreviewSegData[],
-  totalPreviewDist: number
+  totalPreviewTime: number
 ): PreviewCursor | null {
-  if (printProgress >= 100 || precomputedSegs.length === 0 || totalPreviewDist <= 0) return null;
-  const targetDist = totalPreviewDist * (printProgress / 100);
+  if (printProgress >= 100 || precomputedSegs.length === 0 || totalPreviewTime <= 0) return null;
+  const t = totalPreviewTime * (printProgress / 100);
   for (let ci = 0; ci < precomputedSegs.length; ci++) {
     const sd = precomputedSegs[ci];
-    if (targetDist <= sd.path_start_dist + sd.seg_dist || ci === precomputedSegs.length - 1) {
-      const distIntoSeg = Math.max(0, targetDist - sd.path_start_dist);
-      let ptIdx = sd.point_dists.length - 1;
-      for (let j = 1; j < sd.point_dists.length; j++) {
-        if (sd.point_dists[j] >= distIntoSeg) { ptIdx = j - 1; break; }
+    const base = { slideIdx: sd.slide_idx, segIdx: sd.seg_idx, startIdx: sd.start_idx };
+    const travelStart = ci > 0 ? endTime(precomputedSegs[ci - 1]) : 0;
+    if (t < sd.start_time) {
+      // Přejezd na začátek dráhy — nic z ní ještě není vytištěno
+      const span = sd.start_time - travelStart;
+      const frac = span > 1e-9 ? Math.min(1, Math.max(0, (t - travelStart) / span)) : 1;
+      return { ...base, ptIdx: 0, fracT: 0, travel: { from: sd.travel_from, frac } };
+    }
+    if (t <= endTime(sd) || ci === precomputedSegs.length - 1) {
+      const tt = t - sd.start_time;
+      const times = sd.point_times;
+      let ptIdx = Math.max(0, times.length - 2);
+      for (let j = 1; j < times.length; j++) {
+        if (times[j] >= tt) {
+          ptIdx = j - 1;
+          break;
+        }
       }
-      const d0 = sd.point_dists[ptIdx];
-      const d1 = ptIdx + 1 < sd.point_dists.length ? sd.point_dists[ptIdx + 1] : d0;
-      const interval = d1 - d0;
-      const fracT = interval > 1e-9 ? Math.min(1, (distIntoSeg - d0) / interval) : 0;
-      return { slideIdx: sd.slide_idx, segIdx: sd.seg_idx, ptIdx, fracT };
+      const interval = (times[ptIdx + 1] ?? times[ptIdx]) - times[ptIdx];
+      const fracT = interval > 1e-9 ? Math.min(1, Math.max(0, (tt - times[ptIdx]) / interval)) : 1;
+      return { ...base, ptIdx, fracT };
     }
   }
   return null;
+}
+
+function endTime(sd: PreviewSegData): number {
+  return sd.start_time + (sd.point_times[sd.point_times.length - 1] ?? 0);
 }
 
 export interface CameraView {
@@ -135,6 +164,14 @@ export interface SlidesDrawOptions {
   cursor: PreviewCursor | null;
   /** Rozměry skla pro odplivové sklíčko typu „vzorkové" (slide_w/slide_h z parametrů). */
   primeGlassSize: { w: number; h: number } | null;
+  /** Celé (neoříznuté) trasy skel, které přesahují mimo sklo — kreslí se slabě,
+   *  aby bylo vidět, co se netiskne. Index = index transformace. */
+  ghostPaths?: (SubstratePaths | null)[];
+  /** Šipky směru tisku na začátku a konci každé dráhy. */
+  showDirection?: boolean;
+  /** Bod, kterým tisk dráhy začíná (uzavřené dráhy začínají u trysky);
+   *  index sklíčka = index pozice. Chybí = první bod. */
+  startIdxOf?: (slideIdx: number, segIdx: number) => number | undefined;
 }
 
 /** Sklíčka, trasy (s ořezem dle preview kurzoru) a popisky.
@@ -180,7 +217,8 @@ export function drawSlidesAndPaths(
     let pX = pos.x,
       pY = pos.y,
       pRot = 0.0,
-      pScale = 1.0;
+      pScale = 1.0,
+      pScaleY = 1.0;
     let pCX = pos.width / 2,
       pCY = pos.height / 2;
 
@@ -193,8 +231,30 @@ export function drawSlidesAndPaths(
       pY = tr.gui_dy;
       pRot = tr.rotation;
       pScale = tr.scale;
+      pScaleY = tr.scale_y ?? tr.scale;
       pCX = tr.cx;
       pCY = tr.cy;
+    }
+
+    // Část trasy mimo sklo (netiskne se) — slabě a přerušovaně, bez ořezu
+    const ghost = !pos.is_prime ? o.ghostPaths?.[tidx] : null;
+    if (ghost && ghost.segments.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = "#f87171";
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = Math.max(nozzleDiam * 0.5, 1 / zoom);
+      ctx.setLineDash([3 / zoom, 3 / zoom]);
+      for (const seg of ghost.segments) {
+        if (seg.points.length < 2) continue;
+        ctx.beginPath();
+        seg.points.forEach((p, j) => {
+          const [wx, wy] = tpt(p.x, p.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
+          if (j === 0) ctx.moveTo(wx, wy);
+          else ctx.lineTo(wx, wy);
+        });
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     if (pathData && pathData.segments.length > 0) {
@@ -220,49 +280,65 @@ export function drawSlidesAndPaths(
         let fracWX: number | null = null,
           fracWY: number | null = null;
 
+        // Kurzorovací segment se kreslí v pořadí tisku (od startIdx)
+        let startIdx = 0;
         if (cursor !== null) {
           if (i > cursor.slideIdx || (i === cursor.slideIdx && si > cursor.segIdx)) {
             // Po kurzoru — přeskočit vše
             break;
           } else if (i === cursor.slideIdx && si === cursor.segIdx) {
-            // Kurzorovací segment — kreslit jen do ptIdx, pak interpolovat
-            toRender = cursor.ptIdx + 1;
-            if (cursor.fracT > 0 && cursor.ptIdx + 1 < seg.points.length) {
-              const p0 = seg.points[cursor.ptIdx];
-              const p1 = seg.points[cursor.ptIdx + 1];
-              const lx = p0.x + (p1.x - p0.x) * cursor.fracT;
-              const ly = p0.y + (p1.y - p0.y) * cursor.fracT;
-              [fracWX, fracWY] = tpt(lx, ly, pX, pY, pScale, pRot, pCX, pCY);
-              previewNozzleWX = fracWX;
-              previewNozzleWY = fracWY;
+            startIdx = cursor.startIdx < seg.points.length ? cursor.startIdx : 0;
+            const pt = (k: number) => printedPoint(seg.points, startIdx, k);
+            if (cursor.travel) {
+              // Tryska teprve přejíždí: dráha ještě není, tryska mezi body přejezdu
+              toRender = 0;
+              const [sx, sy] = tpt(pt(0).x, pt(0).y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
+              const f = cursor.travel.frac;
+              previewNozzleWX = cursor.travel.from.x + (sx - cursor.travel.from.x) * f;
+              previewNozzleWY = cursor.travel.from.y + (sy - cursor.travel.from.y) * f;
               hasPreviewNozzle = true;
-            } else if (toRender > 0) {
-              const lp = seg.points[cursor.ptIdx];
-              [previewNozzleWX, previewNozzleWY] = tpt(lp.x, lp.y, pX, pY, pScale, pRot, pCX, pCY);
-              hasPreviewNozzle = true;
+            } else {
+              // Kreslit jen do ptIdx, pak interpolovat
+              toRender = Math.min(cursor.ptIdx + 1, seg.points.length);
+              if (cursor.fracT > 0 && cursor.ptIdx + 1 < seg.points.length) {
+                const p0 = pt(cursor.ptIdx);
+                const p1 = pt(cursor.ptIdx + 1);
+                const lx = p0.x + (p1.x - p0.x) * cursor.fracT;
+                const ly = p0.y + (p1.y - p0.y) * cursor.fracT;
+                [fracWX, fracWY] = tpt(lx, ly, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
+                previewNozzleWX = fracWX;
+                previewNozzleWY = fracWY;
+                hasPreviewNozzle = true;
+              } else if (toRender > 0) {
+                const lp = pt(toRender - 1);
+                [previewNozzleWX, previewNozzleWY] = tpt(lp.x, lp.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
+                hasPreviewNozzle = true;
+              }
             }
             previewDone = true;
           }
           // else: before cursor — draw all (toRender stays seg.points.length)
         }
 
-        const p0 = seg.points[0];
+        const p0 = printedPoint(seg.points, startIdx, 0);
         const isDot =
           fracWX === null &&
+          toRender >= 1 &&
           toRender <= 2 &&
           (toRender === 1 ||
             (Math.abs(p0.x - seg.points[Math.min(1, toRender - 1)].x) < 0.01 &&
              Math.abs(p0.y - seg.points[Math.min(1, toRender - 1)].y) < 0.01));
 
         if (isDot) {
-          const [wx, wy] = tpt(p0.x, p0.y, pX, pY, pScale, pRot, pCX, pCY);
+          const [wx, wy] = tpt(p0.x, p0.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
           ctx.beginPath();
           ctx.arc(wx, wy, nozzleDiam / 2, 0, Math.PI * 2);
           ctx.fill();
         } else if (toRender > 0) {
           ctx.beginPath();
           for (let j = 0; j < toRender; j++) {
-            const [wx, wy] = tpt(seg.points[j].x, seg.points[j].y, pX, pY, pScale, pRot, pCX, pCY);
+            const sp = printedPoint(seg.points, startIdx, j);
+            const [wx, wy] = tpt(sp.x, sp.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
             if (j === 0) ctx.moveTo(wx, wy);
             else ctx.lineTo(wx, wy);
           }
@@ -272,9 +348,23 @@ export function drawSlidesAndPaths(
           }
           ctx.stroke();
 
+          // Šipky směru tisku: zelená na začátku dráhy, červená na konci
+          if (o.showDirection && !pos.is_prime && fracWX === null && toRender === seg.points.length && seg.points.length >= 2) {
+            const n = seg.points.length;
+            let ds = o.startIdxOf?.(i, si) ?? 0;
+            if (!(ds >= 0 && ds < n)) ds = 0;
+            const w = (k: number) => {
+              const q = printedPoint(seg.points, ds, k);
+              return tpt(q.x, q.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
+            };
+            drawDirectionArrow(ctx, w(0), w(1), zoom, "#4ade80", false);
+            drawDirectionArrow(ctx, w(n - 2), w(n - 1), zoom, "#f87171", true);
+            ctx.fillStyle = slideColor;
+          }
+
           // Označení začátků segmentů pro vybranou trasu (orientace tisku)
           if (isSelected && !pos.is_prime) {
-            const [sx, sy] = tpt(seg.points[0].x, seg.points[0].y, pX, pY, pScale, pRot, pCX, pCY);
+            const [sx, sy] = tpt(p0.x, p0.y, pX, pY, pScale, pRot, pCX, pCY, pScaleY);
             ctx.fillStyle = "#22d3ee";
             ctx.beginPath();
             ctx.arc(sx, sy, 1.5 / zoom, 0, Math.PI * 2);
@@ -295,7 +385,8 @@ export function drawSlidesAndPaths(
     ctx.font = `bold ${10 / zoom}px sans-serif`;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const lbl = pos.is_prime ? "Odliv" : overrides[tidx.toString()]?.name || `Sklo ${tidx + 1}`;
+    // Názvy shodné s lokálním panelem (RightPanel): „Substrát N“ / vlastní název, „Odpliv“
+    const lbl = pos.is_prime ? "Odpliv" : overrides[tidx.toString()]?.name || `Substrát ${tidx + 1}`;
     const lx = pos.x + 4 / zoom,
       ly = -(pos.y + pos.height) + 5 / zoom;
     const tw = ctx.measureText(lbl).width;
@@ -311,6 +402,40 @@ export function drawSlidesAndPaths(
 
 /** Transformační úchopy vybrané trasy (čtverce = scale, kolečka = rotace)
  *  + přerušovaný obrys bboxu, resp. osa rotace. */
+/** Malá šipka směru tisku: u bodu `a` (začátek dráhy, směr a→b), nebo
+ *  s hrotem v bodě `b` (konec dráhy). Velikost v pixelech nezávislá na zoomu. */
+function drawDirectionArrow(
+  ctx: CanvasRenderingContext2D,
+  a: [number, number],
+  b: [number, number],
+  zoom: number,
+  color: string,
+  atEnd: boolean
+) {
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (len < 1e-9) return;
+  const ux = (b[0] - a[0]) / len,
+    uy = (b[1] - a[1]) / len;
+  const size = 7 / zoom;
+  // Hrot: konec dráhy, nebo kousek za začátkem (šipka nesmí zakrýt počáteční bod)
+  const tip: [number, number] = atEnd ? b : [a[0] + ux * size * 1.2, a[1] + uy * size * 1.2];
+  const bx = tip[0] - ux * size,
+    by = tip[1] - uy * size;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "#0f172a";
+  ctx.lineWidth = 0.8 / zoom;
+  ctx.beginPath();
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(bx - uy * size * 0.55, by + ux * size * 0.55);
+  ctx.lineTo(bx + uy * size * 0.55, by - ux * size * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawTransformHandles(
   ctx: CanvasRenderingContext2D,
   handles: { x: number; y: number }[],

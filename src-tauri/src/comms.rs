@@ -6,6 +6,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
+use crate::print_tracker::{parse_seg_marker, PrintCursor, PrintTracker};
+
 // ─── Datové typy ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,9 +20,12 @@ pub struct PrinterStatus {
     pub current_z: f64,
     pub temp_extruder: f64,
     pub temp_bed: f64,
-    pub progress: usize,
+    /// Průběh tisku 0–100 % podle skutečně provedené (odhadnuté) délky.
+    pub progress: f64,
     pub total_dist: f64,
     pub time_remaining: f64,
+    /// Místo dráhy, které tiskárna právě tiskne (pro živý náhled).
+    pub print_cursor: Option<PrintCursor>,
 }
 
 impl Default for PrinterStatus {
@@ -34,9 +39,10 @@ impl Default for PrinterStatus {
             current_z: 0.0,
             temp_extruder: 0.0,
             temp_bed: 0.0,
-            progress: 0,
+            progress: 0.0,
             total_dist: 0.0,
             time_remaining: 0.0,
+            print_cursor: None,
         }
     }
 }
@@ -332,18 +338,16 @@ fn handle_stop(
     status_arc: &Arc<Mutex<PrinterStatus>>,
     app_handle: &AppHandle,
     gcode_queue: &mut Vec<String>,
-    dist_per_line: &mut Vec<f64>,
+    tracker: &mut Option<PrintTracker>,
     queue_idx: &mut usize,
-    dist_sent: &mut f64,
     pause_start: &mut Option<Instant>,
     pause_origin: &mut PauseOrigin,
     park_x: f64,
     park_y: f64,
 ) {
     gcode_queue.clear();
-    dist_per_line.clear();
+    *tracker = None;
     *queue_idx = 0;
-    *dist_sent = 0.0;
     *pause_start = None;
     *pause_origin = PauseOrigin::None;
 
@@ -360,9 +364,26 @@ fn handle_stop(
     let mut status = lock_status(status_arc);
     status.is_printing = false;
     status.is_paused = false;
-    status.progress = 0;
+    status.progress = 0.0;
+    status.print_cursor = None;
     app_handle.emit("printer-status-changed", status.clone()).ok();
 }
+
+/// Promítne odhad trackeru (poloha trysky, průběh, zbývající čas) do stavu.
+fn apply_estimate(status: &mut PrinterStatus, tracker: &mut PrintTracker) {
+    let e = tracker.estimate(Instant::now());
+    status.progress = e.progress;
+    status.time_remaining = e.remaining_s;
+    status.print_cursor = e.cursor;
+    if let Some([x, y, z]) = e.position {
+        status.current_x = x;
+        status.current_y = y;
+        status.current_z = z;
+    }
+}
+
+/// Jak často se během tisku posílá odhad polohy trysky do UI.
+const ESTIMATE_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Maximální čekací doba na "ok" odpověď tiskárny (zahrnuje nahřívání podložky apod.).
 const OK_TIMEOUT_SECS: u64 = 600;
@@ -458,12 +479,9 @@ pub fn spawn_comms_loop(
     thread::spawn(move || {
         let mut serial_port = port;
         let mut gcode_queue: Vec<String> = Vec::new();
-        let mut dist_per_line: Vec<f64> = Vec::new();
+        let mut tracker: Option<PrintTracker> = None;
+        let mut last_estimate_emit = Instant::now();
         let mut queue_idx: usize = 0;
-        let mut print_total_dist = 0.0_f64;
-        let mut dist_sent = 0.0_f64;
-        let mut print_total_time = 0.0_f64;
-        let mut print_start_time = Instant::now();
         let mut paused_duration = Duration::ZERO;
         let mut pause_start: Option<Instant> = None;
         let mut pause_origin = PauseOrigin::None;
@@ -490,9 +508,17 @@ pub fn spawn_comms_loop(
                             continue;
                         }
 
-                        // Sestavíme frontu G-kódu a převedeme M1/M0/M601 na APP_PAUSE markery
+                        // Sestavíme frontu G-kódu a převedeme M1/M0/M601 na APP_PAUSE markery.
+                        // Komentářové značky drah (; DPI_SEG) se neodesílají — mapují
+                        // řádky fronty na dráhy živého náhledu.
                         gcode_queue.clear();
+                        let mut markers = Vec::new();
+                        let mut marker = None;
                         for raw_line in gcode.lines() {
+                            if let Some(m) = parse_seg_marker(raw_line) {
+                                marker = Some(m);
+                                continue;
+                            }
                             let clean = raw_line.split(';').next().unwrap_or("").trim();
                             if clean.is_empty() {
                                 continue;
@@ -508,36 +534,13 @@ pub fn spawn_comms_loop(
                             } else {
                                 gcode_queue.push(clean.to_string());
                             }
+                            markers.push(marker);
                         }
 
-                        // Pre-výpočet vzdálenosti extruze pro každý řádek fronty.
-                        // Slouží k výpočtu progress% podle ujeté vzdálenosti tisku (ne počtu řádků).
-                        dist_per_line.clear();
-                        dist_per_line.reserve(gcode_queue.len());
-                        {
-                            let mut cur_x = 0.0_f64;
-                            let mut cur_y = 0.0_f64;
-                            for line in &gcode_queue {
-                                let (ox, oy, _) = parse_gcode_pos(line);
-                                let new_x = ox.unwrap_or(cur_x);
-                                let new_y = oy.unwrap_or(cur_y);
-                                let is_extrusion = dpi_core::is_extrusion_move(line);
-                                let d = if is_extrusion {
-                                    ((new_x - cur_x).powi(2) + (new_y - cur_y).powi(2)).sqrt()
-                                } else {
-                                    0.0
-                                };
-                                dist_per_line.push(d);
-                                if ox.is_some() { cur_x = new_x; }
-                                if oy.is_some() { cur_y = new_y; }
-                            }
-                        }
+                        // Model provádění pohybů — odhad skutečné polohy trysky
+                        tracker = Some(PrintTracker::new(&gcode_queue, &markers));
 
                         queue_idx = 0;
-                        print_total_dist = total_dist;
-                        dist_sent = 0.0;
-                        print_total_time = total_time;
-                        print_start_time = Instant::now();
                         paused_duration = Duration::ZERO;
                         pause_start = None;
                         pause_origin = PauseOrigin::None;
@@ -545,7 +548,8 @@ pub fn spawn_comms_loop(
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_printing = true;
                         status.is_paused = false;
-                        status.progress = 0;
+                        status.progress = 0.0;
+                        status.print_cursor = None;
                         status.total_dist = total_dist;
                         status.time_remaining = total_time;
                         app_handle
@@ -719,9 +723,8 @@ pub fn spawn_comms_loop(
                             &status_arc2,
                             &app_handle,
                             &mut gcode_queue,
-                            &mut dist_per_line,
+                            &mut tracker,
                             &mut queue_idx,
-                            &mut dist_sent,
                             &mut pause_start,
                             &mut pause_origin,
                             park_x,
@@ -762,12 +765,29 @@ pub fn spawn_comms_loop(
                 (status.is_printing, status.is_paused)
             };
 
+            // Průběžný odhad polohy trysky (i během pauzy a doběhu bufferu)
+            if is_printing && last_estimate_emit.elapsed() >= ESTIMATE_EMIT_INTERVAL {
+                if let Some(t) = tracker.as_mut() {
+                    if is_paused {
+                        // Nic se neodesílá — pohyby v bufferu doběhnou podle modelu
+                        t.drain();
+                    }
+                    let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                    apply_estimate(&mut status, t);
+                    app_handle.emit("printer-status-changed", status.clone()).ok();
+                }
+                last_estimate_emit = Instant::now();
+            }
+
             if is_printing && !is_paused {
                 if queue_idx < gcode_queue.len() {
                     let next_line = gcode_queue[queue_idx].clone();
 
                     // APP_PAUSE marker (M1/M0/M601) — zobrazíme hlášku v aplikaci
                     if let Some(msg) = next_line.strip_prefix("; APP_PAUSE:") {
+                        if let Some(t) = tracker.as_mut() {
+                            t.drain();
+                        }
                         let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
                         status.is_paused = true;
                         pause_start = Some(Instant::now());
@@ -780,22 +800,8 @@ pub fn spawn_comms_loop(
                         continue;
                     }
 
-                    // Aktualizace souřadnic trysky z odesílaného G-kódu
-                    {
-                        let (nx, ny, nz) = parse_gcode_pos(&next_line);
-                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(val) = nx {
-                            status.current_x = val;
-                        }
-                        if let Some(val) = ny {
-                            status.current_y = val;
-                        }
-                        if let Some(val) = nz {
-                            status.current_z = val;
-                        }
-                    }
-
-                    // Odeslání řádku na tiskárnu
+                    // Odeslání řádku na tiskárnu (polohu trysky odhaduje tracker —
+                    // odeslaný řádek se provede až po pohybech čekajících v bufferu)
                     let mut buf = next_line.clone();
                     buf.push('\n');
                     if serial_port.write_all(buf.as_bytes()).is_ok() {
@@ -852,6 +858,16 @@ pub fn spawn_comms_loop(
                                 break 'wait_ok;
                             }
 
+                            if last_estimate_emit.elapsed() >= ESTIMATE_EMIT_INTERVAL {
+                                if let Some(t) = tracker.as_mut() {
+                                    let mut status =
+                                        status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                                    apply_estimate(&mut status, t);
+                                    let _ = app_handle.emit("printer-status-changed", status.clone());
+                                }
+                                last_estimate_emit = Instant::now();
+                            }
+
                             // Zpracujeme příkazy z Tauri během čekání na "ok"
                             // OPRAVA: zpracujeme ALL příkazy, nejen Stop
                             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -862,9 +878,8 @@ pub fn spawn_comms_loop(
                                             &status_arc2,
                                             &app_handle,
                                             &mut gcode_queue,
-                                            &mut dist_per_line,
+                                            &mut tracker,
                                             &mut queue_idx,
-                                            &mut dist_sent,
                                             &mut pause_start,
                                             &mut pause_origin,
                                             park_x,
@@ -934,28 +949,17 @@ pub fn spawn_comms_loop(
                         }
 
                         if ok_received {
-                            // Přičteme vzdálenost právě dokončeného řádku
-                            dist_sent += dist_per_line.get(queue_idx).copied().unwrap_or(0.0);
+                            if let Some(t) = tracker.as_mut() {
+                                t.on_ack(queue_idx, ping_start.elapsed(), Instant::now());
+                            }
                             queue_idx += 1;
 
-                            // Aktualizace postupu tisku a odhadovaného zbývajícího času
+                            // Aktualizace postupu tisku, polohy trysky a zbývajícího času
                             let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                            let progress = if print_total_dist > 0.0 {
-                                ((dist_sent / print_total_dist) * 100.0).min(100.0) as usize
-                            } else {
-                                ((queue_idx as f64 / gcode_queue.len().max(1) as f64) * 100.0) as usize
-                            };
-                            status.progress = progress;
-
-                            // Odečteme akumulovanou dobu pauzy (jako Python: start_time += pause_duration)
-                            let elapsed =
-                                print_start_time.elapsed().saturating_sub(paused_duration);
-                            status.time_remaining = if progress > 0 {
-                                let total_est = (elapsed.as_secs_f64() / progress as f64) * 100.0;
-                                (total_est - elapsed.as_secs_f64()).max(0.0)
-                            } else {
-                                print_total_time
-                            };
+                            if let Some(t) = tracker.as_mut() {
+                                apply_estimate(&mut status, t);
+                            }
+                            last_estimate_emit = Instant::now();
                             app_handle
                                 .emit("printer-status-changed", status.clone())
                                 .ok();
@@ -986,14 +990,21 @@ pub fn spawn_comms_loop(
                             .ok();
                     }
                 } else {
-                    // Konec fronty — tisk úspěšně dokončen
-                    let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
-                    status.is_printing = false;
-                    status.progress = 100;
-                    status.time_remaining = 0.0;
-                    app_handle
-                        .emit("printer-status-changed", status.clone())
-                        .ok();
+                    // Konec fronty — tisk končí, až tiskárna doběhne pohyby z bufferu
+                    let finished = tracker.as_mut().is_none_or(|t| {
+                        t.drain();
+                        t.idle(Instant::now())
+                    });
+                    if finished {
+                        let mut status = status_arc2.lock().unwrap_or_else(|e| e.into_inner());
+                        status.is_printing = false;
+                        status.progress = 100.0;
+                        status.time_remaining = 0.0;
+                        status.print_cursor = None;
+                        app_handle
+                            .emit("printer-status-changed", status.clone())
+                            .ok();
+                    }
                 }
             }
 

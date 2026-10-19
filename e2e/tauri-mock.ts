@@ -10,11 +10,12 @@ export const TAURI_MOCK_SCRIPT = `
 (function () {
   const defaults = {
     bed_max_x: 250, bed_max_y: 210, bed_min_x: 0,
-    start_offset_x: 18, start_offset_y: 11,
+    start_offset_x: 16, start_offset_y: 12,
     multi_spacing: 5, block_height: 34,
     hidden_nozzle_part: 4, print_speed: 1500,
     bed_min_temp: 30,
     default_z_offset: 0.2, default_z_hop: 2.0, safe_z: 20.0,
+    retract_nl: 0, retract_speed: 300, dot_dwell_ms: 0,
     default_speed: 1500, default_infill: 1.0, default_density: 0.05,
     filament_diameter: 9.5, flow_multiplier: 1.0,
     calibration_factor: 0.323877, calibration_object_height: 0.1,
@@ -54,7 +55,7 @@ export const TAURI_MOCK_SCRIPT = `
       const count = p.sample_count ?? 1;
       const w = p.slide_w ?? 76, h = p.slide_h ?? 26;
       const positions = Array.from({ length: count }, (_, i) => ({
-        x: 18 + i * (w + 5), y: 11,
+        x: 16 + i * (w + 5), y: 12,
         width: w, height: h, is_prime: false,
       }));
       return {
@@ -77,7 +78,7 @@ export const TAURI_MOCK_SCRIPT = `
     parse_gcode_file_paths: () => ({ segments: [] }),
     generate_csv_protocol: () => "",
     save_feedback:       () => null,
-    compute_preview_segments: () => ({ segs: [], total_dist: 0 }),
+    compute_preview_segments: () => ({ segs: [], total_dist: 0, total_time: 0 }),
     check_paths_overflow: () => false,
     send_manual_gcode_blocking: () => null,
   };

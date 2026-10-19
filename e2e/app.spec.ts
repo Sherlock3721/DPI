@@ -168,3 +168,25 @@ test("canvas se přizpůsobí při resize okna", async ({ page }) => {
   // Canvas se musí nějak změnit (nebo zůstat rozumně veliký)
   expect(after!.width).toBeGreaterThan(50);
 });
+
+test("výhřev podložky: Vypnuto v poli, krok přes šedou zónu", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await dismissWelcomeModal(page);
+  const row = page.locator('div[title="Teplota vyhřívané podložky ve stupních Celsia"]');
+  const input = row.locator("input");
+  await expect(input).toHaveValue("Vypnuto");
+  const [minus, plus] = [row.locator("button").first(), row.locator("button").last()];
+  await plus.click();
+  await expect(input).toHaveValue("30"); // bed_min_temp z mocku
+  await expect(row).toContainText("°C");
+  await minus.click();
+  await expect(input).toHaveValue("Vypnuto");
+  // Psaní: číslo pod minimem se při potvrzení zvedne na minimum, 0 = vypnuto
+  await input.fill("12");
+  await input.press("Enter");
+  await expect(input).toHaveValue("30");
+  await input.fill("0");
+  await input.press("Enter");
+  await expect(input).toHaveValue("Vypnuto");
+});

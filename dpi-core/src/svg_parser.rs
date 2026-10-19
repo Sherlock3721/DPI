@@ -1,4 +1,5 @@
-use crate::types::{PathSegment, Point2D, SubstratePaths};
+use crate::types::{Anchor, ObjectTransform, PathSegment, Point2D, SubstratePaths};
+use std::collections::HashMap;
 use roxmltree::Document;
 
 // ─── Veřejné API ─────────────────────────────────────────────────────────────
@@ -55,21 +56,38 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
         }
     }
 
-    // Průchod všemi elementy dokumentu
-    for node in doc.descendants() {
-        if !node.is_element() {
-            continue;
-        }
+    // Průchod všemi elementy dokumentu. Segmenty jednoho prvku tvoří even-odd
+    // skupinu (díry), výplně různých prvků se při zpracování sjednocují.
+    for (elem_idx, node) in doc.descendants().filter(|n| n.is_element()).enumerate() {
+        let first_seg = segments.len();
         match node.tag_name().name() {
             "line" => {
                 let x1 = attr_f64(&node, "x1");
                 let y1 = attr_f64(&node, "y1");
                 let x2 = attr_f64(&node, "x2");
                 let y2 = attr_f64(&node, "y2");
+                // Konce přichycené magnetem: data-dpi-anchor-start/-end="id,x,y"
+                let anchors = [("data-dpi-anchor-start", 0u8), ("data-dpi-anchor-end", 1u8)]
+                    .into_iter()
+                    .filter_map(|(attr, end)| {
+                        let v: Vec<f64> = node
+                            .attribute(attr)?
+                            .split(',')
+                            .filter_map(|x| x.trim().parse().ok())
+                            .collect();
+                        (v.len() == 3 && v[0] >= 0.0).then(|| Anchor {
+                            end,
+                            object: v[0] as u32,
+                            x: v[1],
+                            y: v[2],
+                        })
+                    })
+                    .collect();
                 segments.push(PathSegment {
-                    points: vec![Point2D::new(x1, y1), Point2D::new(x2, y2)],
                     is_filled: Some(false),
                     has_stroke: Some(has_stroke(&node)),
+                    anchors,
+                    ..PathSegment::new(vec![Point2D::new(x1, y1), Point2D::new(x2, y2)])
                 });
             }
             "rect" => {
@@ -98,9 +116,9 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                         Point2D::new(x, y),
                     ];
                     segments.push(PathSegment {
-                        points: pts,
                         is_filled: Some(filled),
                         has_stroke: Some(stroke),
+                        ..PathSegment::new(pts)
                     });
                 } else {
                     let steps = (8.0 * fineness).round().max(3.0) as usize;
@@ -137,9 +155,9 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                         pts.push(first);
                     }
                     segments.push(PathSegment {
-                        points: pts,
                         is_filled: Some(filled),
                         has_stroke: Some(stroke),
+                        ..PathSegment::new(pts)
                     });
                 }
             }
@@ -158,9 +176,9 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                     })
                     .collect();
                 segments.push(PathSegment {
-                    points: pts,
                     is_filled: Some(has_fill(&node)),
                     has_stroke: Some(has_stroke(&node)),
+                    ..PathSegment::new(pts)
                 });
             }
             "ellipse" => {
@@ -179,9 +197,9 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                     })
                     .collect();
                 segments.push(PathSegment {
-                    points: pts,
                     is_filled: Some(has_fill(&node)),
                     has_stroke: Some(has_stroke(&node)),
+                    ..PathSegment::new(pts)
                 });
             }
             "polyline" | "polygon" => {
@@ -208,9 +226,9 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 let filled = if is_polygon { Some(has_fill(&node)) } else { Some(false) };
                 let stroke = Some(has_stroke(&node));
                 segments.push(PathSegment {
-                    points: pts,
                     is_filled: filled,
                     has_stroke: stroke,
+                    ..PathSegment::new(pts)
                 });
             }
             "path" => {
@@ -227,6 +245,13 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
             }
             _ => {}
         }
+        let hole = matches!(node.attribute("data-dpi-hole"), Some("1" | "true"));
+        for seg in &mut segments[first_seg..] {
+            seg.group = Some(elem_idx as u32);
+            if hole {
+                seg.hole = Some(true);
+            }
+        }
     }
 
     // Převod jednotek na mm
@@ -236,13 +261,57 @@ pub fn parse_svg(svg_text: &str, fineness: f64) -> SubstratePaths {
                 pt.x *= svg_to_mm;
                 pt.y *= svg_to_mm;
             }
+            for a in &mut seg.anchors {
+                a.x *= svg_to_mm;
+                a.y *= svg_to_mm;
+            }
         }
     }
 
-    SubstratePaths::new(segments)
+    // Objekty smazané ze sdílené kresby (ze všech skel) — id objektů, viz
+    // `SubstratePaths::deleted_objects`; prvky v SVG zůstávají, aby se id neposunula
+    let deleted_objects = root
+        .attribute("data-dpi-deleted-objects")
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+
+    SubstratePaths {
+        deleted_objects,
+        object_transforms: root
+            .attribute("data-dpi-object-transforms")
+            .map(parse_object_transforms)
+            .unwrap_or_default(),
+        ..SubstratePaths::new(segments)
+    }
 }
 
 // ─── Pomocné funkce ───────────────────────────────────────────────────────────
+
+/// Úpravy objektů sdílené kresbou: "id:dx,dy,měřítko,měřítkoY,rotace;…"
+/// (měřítko Y prázdné = stejné jako X). Viz `SubstratePaths::object_transforms`.
+fn parse_object_transforms(v: &str) -> HashMap<String, ObjectTransform> {
+    v.split(';')
+        .filter_map(|item| {
+            let (id, vals) = item.split_once(':')?;
+            let id: u32 = id.trim().parse().ok()?;
+            let f: Vec<&str> = vals.split(',').map(str::trim).collect();
+            if f.len() != 5 {
+                return None;
+            }
+            let num = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite());
+            Some((
+                id.to_string(),
+                ObjectTransform {
+                    dx: num(f[0])?,
+                    dy: num(f[1])?,
+                    scale: num(f[2])?,
+                    scale_y: num(f[3]),
+                    rotation: num(f[4])?,
+                },
+            ))
+        })
+        .collect()
+}
 
 fn attr_f64(node: &roxmltree::Node, name: &str) -> f64 {
     node.attribute(name)

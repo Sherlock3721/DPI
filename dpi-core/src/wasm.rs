@@ -1,8 +1,9 @@
 use wasm_bindgen::prelude::*;
 
 use crate::bracket::{build_bracket_stl, compute_bracket_geometry, generate_bracket_svg, BracketParams, RectF};
-use crate::geometry::compute_world_aabb;
-use crate::types::Transform;
+use crate::geometry::{clip_paths_to_slide, compute_world_aabb};
+use crate::path_processing::process_substrate_paths;
+use crate::types::{LayoutPosition, SliceParams, SubstratePaths, Transform};
 
 fn make_transform(gui_dx: f64, gui_dy: f64, scale: f64, rotation_deg: f64, cx: f64, cy: f64) -> Transform {
     Transform { gui_dx, gui_dy, scale, rotation: rotation_deg, cx, cy }
@@ -20,25 +21,61 @@ pub fn wasm_world_aabb(
     Box::new([min_x, max_x, min_y, max_y])
 }
 
-/// Vypočítá nové gui_dx/gui_dy tak, aby trasa (s insetem nozzle_diam/2) nepřesahovala sklíčko.
-/// Vrátí Float64Array [new_gui_dx, new_gui_dy].
+/// Minimální překryv trasy se sklem (mm) — trasu nejde odsunout celou mimo sklo.
+const MIN_OVERLAP_MM: f64 = 1.0;
+
+/// Vypočítá nové gui_dx/gui_dy tak, aby trasa sklíčko aspoň zčásti překrývala
+/// (MIN_OVERLAP_MM). Přesah mimo sklo je dovolený — při tisku se ořízne
+/// (`clip_paths_to_slide`). Vrátí Float64Array [new_gui_dx, new_gui_dy].
 #[wasm_bindgen]
 pub fn wasm_clamp_gui_xy(
     gui_dx: f64, gui_dy: f64, scale: f64, rotation_deg: f64, cx: f64, cy: f64,
     pos_x: f64, pos_y: f64, pos_w: f64, pos_h: f64,
     mn_x: f64, mx_x: f64, mn_y: f64, mx_y: f64,
-    nozzle_diam: f64,
+    _nozzle_diam: f64,
 ) -> Box<[f64]> {
-    let r = nozzle_diam / 2.0;
     let t = make_transform(gui_dx, gui_dy, scale, rotation_deg, cx, cy);
     let (min_x, max_x, min_y, max_y) = compute_world_aabb(&t, mn_x, mx_x, mn_y, mx_y);
+    let mx = MIN_OVERLAP_MM.min(pos_w / 2.0);
+    let my = MIN_OVERLAP_MM.min(pos_h / 2.0);
     let mut new_dx = gui_dx;
     let mut new_dy = gui_dy;
-    if min_x < pos_x + r { new_dx += pos_x + r - min_x; }
-    if max_x > pos_x + pos_w - r { new_dx -= max_x - (pos_x + pos_w - r); }
-    if min_y < pos_y + r { new_dy += pos_y + r - min_y; }
-    if max_y > pos_y + pos_h - r { new_dy -= max_y - (pos_y + pos_h - r); }
+    if max_x < pos_x + mx { new_dx += pos_x + mx - max_x; }
+    if min_x > pos_x + pos_w - mx { new_dx -= min_x - (pos_x + pos_w - mx); }
+    if max_y < pos_y + my { new_dy += pos_y + my - max_y; }
+    if min_y > pos_y + pos_h - my { new_dy -= min_y - (pos_y + pos_h - my); }
     Box::new([new_dx, new_dy])
+}
+
+/// Ořízne dráhy sklíčka na sklo (viz `clip_paths_to_slide`) — plátno kreslí
+/// stejné dráhy jako G-kód, aby seděly indexy živého náhledu tisku.
+/// Vstup i výstup jsou JSON `SubstratePaths`.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn wasm_clip_paths(
+    paths_json: &str,
+    gui_dx: f64, gui_dy: f64, scale: f64, rotation_deg: f64, cx: f64, cy: f64,
+    pos_x: f64, pos_y: f64, pos_w: f64, pos_h: f64,
+) -> Result<String, JsValue> {
+    let paths: SubstratePaths = serde_json::from_str(paths_json)
+        .map_err(|e| JsValue::from_str(&format!("Neplatné dráhy: {e}")))?;
+    let t = make_transform(gui_dx, gui_dy, scale, rotation_deg, cx, cy);
+    let pos = LayoutPosition { x: pos_x, y: pos_y, width: pos_w, height: pos_h, is_prime: false };
+    serde_json::to_string(clip_paths_to_slide(&paths, &t, &pos).as_ref())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Zpracuje zdrojové dráhy pro jedno sklíčko (`process_substrate_paths`) —
+/// živý náhled úpravy objektu v plátně bez IPC. Vstup: JSON `SubstratePaths`
+/// a `SliceParams`, výstup JSON `SubstratePaths`.
+#[wasm_bindgen]
+pub fn wasm_process_paths(raw_json: &str, slice_json: &str) -> Result<String, JsValue> {
+    let raw: SubstratePaths = serde_json::from_str(raw_json)
+        .map_err(|e| JsValue::from_str(&format!("Neplatné dráhy: {e}")))?;
+    let slice: SliceParams = serde_json::from_str(slice_json)
+        .map_err(|e| JsValue::from_str(&format!("Neplatné parametry: {e}")))?;
+    serde_json::to_string(&process_substrate_paths(&raw, &slice))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Binárním hledáním najde maximální faktor rotace ∈ [0,1] při němž se trasa

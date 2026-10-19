@@ -13,7 +13,6 @@
     resume_print,
     stop_print,
     get_app_settings,
-    save_app_settings,
     send_manual_command,
     send_manual_blocking,
     split_gcode_pauses,
@@ -28,10 +27,12 @@
   import CustomSelect from "./CustomSelect.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ZCalibrationModal from "./ZCalibrationModal.svelte";
+  import ParamIcon, { type ParamIconName } from "./ParamIcon.svelte";
   import type PrintPauseModal from "./PrintPauseModal.svelte";
   import { liquidLimits, selectedLiquidName } from "../stores/liquidStore";
   import { convertExtrusionRate, type ExtUnit } from "../lib/extrusionUnits";
   import { settingsStore } from "../stores/settingsStore";
+  import { BED_OFF } from "../stores/projectStore";
   import {
     Play,
     Pause,
@@ -46,6 +47,7 @@
     FileSpreadsheet,
     AlignJustify,
     Route,
+    Spline,
     Grip,
     Grid,
     Rows4,
@@ -113,7 +115,7 @@
     nozzle_hidden: 4.0,
     filament_diameter: 9.5,
     flow_multiplier: 1.0,
-    bed_temp: 0.0,
+    bed_temp: BED_OFF,
     extrusion_rate: 200.0,
     extrusion_unit: "nl/mm", // "µl/mm", "nl/mm", "kroky/mm"
     nozzle_diam: 0.4,
@@ -139,7 +141,7 @@
   let bed_max_x = $state(200.0);
   let bed_max_y = $state(200.0);
   let bed_max_temp = $state(100.0);
-  let bed_min_temp = 30; // Min. teplota při zapnutí (konfigurovatelno v nastavení)
+  let bed_min_temp = $state(30); // Min. teplota při zapnutí (konfigurovatelno v nastavení)
 
   // ─── Limity aktivní kapaliny (null = bez limitu, použij globální) ─────────
   let liqZMin = $derived($liquidLimits?.z_offset_min != null
@@ -171,20 +173,19 @@
 
   // Pauza (M1 / M0 / M601 příkazy v start_gcode) — UI a logika v PrintPauseModal
 
-  // Výhřev podložky: sleduje poslední platnou hodnotu pro správný skok přes šedou zónu
-  let lastBedTemp = 0;
+  // Výhřev podložky: přeskok šedé zóny pod bed_min_temp řeší NumberInput
+  // (krok dolů z minima = vypnuto, krok nahoru z vypnuto = minimum)
   function handleBedTempChange() {
-    // Šedá zóna: při přechodu z 0 skočíme na bed_min_temp (viz nastavení), jinak na 0
-    if (params.bed_temp > 0 && params.bed_temp < bed_min_temp) {
-      params.bed_temp = lastBedTemp === 0 ? bed_min_temp : 0;
-    }
     // Omezení na maximální teplotu z nastavení (0 = neomezeno)
-    if (bed_max_temp > 0 && params.bed_temp > bed_max_temp) {
+    if (params.bed_temp !== BED_OFF && bed_max_temp > 0 && params.bed_temp > bed_max_temp) {
       params.bed_temp = bed_max_temp;
     }
-    lastBedTemp = params.bed_temp;
     dispatch("paramsChanged", params);
   }
+  // Starší projekty ukládaly vypnutý výhřev jako 0 — hodnota pod minimem = vypnuto
+  run(() => {
+    if (params.bed_temp >= 0 && params.bed_temp < bed_min_temp) params.bed_temp = BED_OFF;
+  });
 
   function getNozzleColor(name: string): string {
     if (name === "Vlastní") return "transparent";
@@ -218,7 +219,7 @@
   let lastExtUnit: ExtUnit = "nl/mm";
 
   function handleExtUnitChange() {
-    const calFactor = settingsCache?.calibration_factor ?? 0.014108;
+    const calFactor = settingsCache?.calibration_factor ?? 0.323877;
     params.extrusion_rate = convertExtrusionRate(
       params.extrusion_rate,
       lastExtUnit,
@@ -255,10 +256,9 @@
 
   async function handlePrintSpeedChange() {
     dispatch("paramsChanged", params);
-    if (settingsCache) {
-      settingsCache.print_speed = params.print_speed;
-      await save_app_settings(settingsCache);
-    }
+    // Patch nad stavem z disku — settingsCache může být zastaralá kopie
+    if (settingsCache) settingsCache.print_speed = params.print_speed;
+    await settingsStore.persistPatch({ print_speed: params.print_speed });
   }
 
   // Načtení portů a nastavení
@@ -280,7 +280,6 @@
       bed_max_y = settings.bed_max_y || 200.0;
       bed_max_temp = settings.bed_max_temp ?? 0; // 0 = neomezeno
       bed_min_temp = settings.bed_min_temp ?? 30; // z nastavení
-      lastBedTemp = params.bed_temp;
       if (settings.print_speed) params.print_speed = settings.print_speed;
     } catch (e) {
       console.warn("Failed to load settings (Web Mode), using defaults.");
@@ -426,9 +425,9 @@
       if (calibrationDone) {
         // Kalibrace již proběhla — přejed na XY v bezpečné výšce a rovnou tiskni.
         // Ruční sjezd na printZ vynecháme: G-kód začne od safeZ, sjede sám.
-        const origOffset = params.z_offset;
-        const calibShiftInUnit = params.z_unit === "µm" ? calibrationShift * 1000.0 : calibrationShift;
-        params.z_offset = origOffset + calibShiftInUnit;
+        // Korekce nuly platí pro všechna skla (i ta s vlastním z_offsetem
+        // a jinou tloušťkou) — proto samostatný parametr, ne přičtení k z_offsetu.
+        params.z_calibration = calibrationShift;
         await send_manual_blocking(shiftCmd + `G0 X${targetX} Y${targetY} F3000\nM400`);
         // Virtuální posun Z nastavíme zde přes G92 (tryska už je na safeZ po shiftCmd);
         // generátor pak blok výjezdu na safe_z + G92 vynechá (skip_z_shift_setup).
@@ -447,7 +446,7 @@
           await start_print(res.gcode, res.dist, res.time);
           dispatch("paramsChanged", params);
         } finally {
-          params.z_offset = origOffset;
+          params.z_calibration = 0;
           isStarting = false;
         }
       } else {
@@ -468,17 +467,16 @@
   async function startPrintAfterCalibration(e: CustomEvent) {
     showZCalibrationModal = false;
     calibrationShift = e.detail.shift;
-    const calibShiftInUnit = params.z_unit === "µm" ? calibrationShift * 1000.0 : calibrationShift;
-    const pendingZOffset = params.z_offset + calibShiftInUnit;
-    const pendingOriginalZOffset = params.z_offset;
     try {
       await send_manual_blocking("M211 S1\nG91\nG0 Z5 F1000\nG90");
-      params.z_offset = pendingZOffset;
+      // Korekce nuly z kalibrace na první pozici (s odplivem = odplivové sklo);
+      // generátor ji přičte ke všem sklům nad jejich vlastní tloušťkou.
+      params.z_calibration = calibrationShift;
       // z_shift z Rustu (stejný algoritmus jako generátor, včetně overrides);
       // G92 nastaví virtuální systém zde, generátor svůj blok vynechá (skip flag).
-      const pendingZOffset_mm = params.z_unit === "µm" ? pendingZOffset / 1000.0 : pendingZOffset;
+      const z_offset_mm = params.z_unit === "µm" ? params.z_offset / 1000.0 : params.z_offset;
       const { z_shift: z_shift_gen } = await compute_z_calibration(
-        { ...params, z_offset: pendingZOffset_mm },
+        { ...params, z_offset: z_offset_mm },
         $projectStore.overrides,
         machineBlockHeight
       );
@@ -495,7 +493,7 @@
     } catch (err) {
       alert(`Nepodařilo se zahájit tisk: ${err}`);
     } finally {
-      params.z_offset = pendingOriginalZOffset;
+      params.z_calibration = 0;
       isStarting = false;
     }
   }
@@ -557,6 +555,13 @@
   });
 </script>
 
+{#snippet paramLabel(icon: ParamIconName, text: string)}
+  <span class="col-span-1 flex items-center gap-1.5 min-w-0 text-slate-400 leading-tight">
+    <ParamIcon name={icon} class="w-3.5 h-3.5 text-slate-500" />
+    <span class="min-w-0">{text}</span>
+  </span>
+{/snippet}
+
 <div
   class="glass-panel rounded-lg p-2 flex flex-col gap-2 overflow-hidden h-full text-xs select-text"
 >
@@ -587,7 +592,7 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Typ substrátu nebo vlastní rozměr"
       >
-        <span class="col-span-1 text-slate-400">Substrát:</span>
+        {@render paramLabel("substrate", "Substrát:")}
         <div class="col-span-2">
           <CustomSelect
             bind:value={selectedGlass}
@@ -603,37 +608,21 @@
 
       <!-- VLASTNÍ ROZMĚRY SKLA (Visible if custom selected) -->
       {#if selectedGlass === "Vlastní"}
-        <div
-          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded-sm border border-slate-850"
-        >
-          <div class="flex flex-col gap-0.5">
-            <span class="text-[9px] text-slate-500">Šířka (mm)</span>
-            <NumberInput
-              step={0.5}
-              bind:value={params.slide_w}
-              on:input={() => dispatch("paramsChanged", params)}
-              class="col-span-2 py-0.5"
-            />
-          </div>
-          <div class="flex flex-col gap-1 items-center">
-            <span class="text-[10px] text-slate-400">Y [mm]</span>
-            <NumberInput
-              step={0.5}
-              bind:value={params.slide_h}
-              on:input={() => dispatch("paramsChanged", params)}
-              class="py-0.5"
-            />
-          </div>
-          <div class="flex flex-col gap-1 items-center">
-            <span class="text-[10px] text-slate-400">Z [mm]</span>
-            <NumberInput
-              step={0.5}
-              bind:value={params.slide_z}
-              on:input={() => dispatch("paramsChanged", params)}
-              class="py-0.5"
-            />
-          </div>
-          <span class="text-[10px] text-slate-400 pt-3">mm</span>
+        <div class="grid grid-cols-3 gap-1.5 bg-slate-950/40 p-1.5 rounded-sm border border-slate-850">
+          {#each [["Šířka (X)", "slide_w"], ["Délka (Y)", "slide_h"], ["Tloušťka (Z)", "slide_z"]] as const as [label, key]}
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[9px] text-slate-500 truncate">{label}</span>
+              <div class="h-7">
+                <NumberInput
+                  step={0.5}
+                  unit="mm"
+                  bind:value={params[key]}
+                  on:input={() => dispatch("paramsChanged", params)}
+                  class="w-full h-full"
+                />
+              </div>
+            </div>
+          {/each}
         </div>
       {/if}
 
@@ -641,12 +630,13 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Počet substrátů, které budou vysázeny vedle sebe"
       >
-        <span class="col-span-1 text-slate-400">Počet vzorků:</span>
+        {@render paramLabel("samples", "Počet vzorků:")}
         <div class="col-span-2 h-8">
           <NumberInput
             min={0}
             max={maxSamples}
             step={1}
+            unit="ks"
             bind:value={params.sample_count}
             on:input={() => dispatch("paramsChanged", params)}
             class="w-full h-full"
@@ -658,51 +648,47 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Teplota vyhřívané podložky ve stupních Celsia"
       >
-        <span class="col-span-1 text-slate-400">Výhřev podložky:</span>
-        <div class="col-span-2 flex gap-2 items-center">
-          <div class="flex-1 h-8">
-            <NumberInput
-              min={0}
-              max={liqBedTempMax}
-              step={5}
-              bind:value={params.bed_temp}
-              on:input={handleBedTempChange}
-              class="w-full h-full"
-            />
-          </div>
-          <span class="text-slate-400 text-xs w-16">{params.bed_temp > 0 ? "°C" : "Vypnuto"}</span>
+        {@render paramLabel("bedTemp", "Výhřev podložky:")}
+        <div class="col-span-2 h-8">
+          <NumberInput
+            min={bed_min_temp}
+            max={liqBedTempMax}
+            step={5}
+            unit="°C"
+            special={{ value: BED_OFF, label: "Vypnuto" }}
+            bind:value={params.bed_temp}
+            on:input={handleBedTempChange}
+            class="w-full h-full"
+          />
         </div>
       </div>
 
-      <div
-        class="grid grid-cols-3 items-center gap-2"
-        title="Vytvoří mapu nerovností podložky před prvním tiskem"
-      >
-        <span class="col-span-1 text-slate-400">Příprava podložky:</span>
-        <button
-          disabled={!firstPrintCompleted}
-          onclick={() => {
-            if (firstPrintCompleted) {
+      <!-- Před prvním tiskem je bed leveling povinný — volba se ukáže, až jde ovládat -->
+      {#if firstPrintCompleted}
+        <div
+          class="grid grid-cols-3 items-center gap-2"
+          title="Vytvoří mapu nerovností podložky před tiskem"
+        >
+          {@render paramLabel("leveling", "Příprava podložky:")}
+          <button
+            onclick={() => {
               params.bed_leveling = !params.bed_leveling;
               dispatch("paramsChanged", params);
-            }
-          }}
-          class="col-span-2 text-center py-1 rounded font-bold border transition-colors {params.bed_leveling
-            ? 'bg-labaccent/20 border-labaccent/50 text-labaccent'
-            : 'bg-slate-900 border-slate-800 text-slate-400'} {!firstPrintCompleted
-            ? 'opacity-50 cursor-not-allowed'
-            : ''}"
-        >
-          Bed Leveling {params.bed_leveling ? "AKTIVNÍ" : "VYPNUTÝ"}
-          {!firstPrintCompleted ? "(Nutné)" : ""}
-        </button>
-      </div>
+            }}
+            class="col-span-2 text-center py-1 rounded font-bold border transition-colors {params.bed_leveling
+              ? 'bg-labaccent/20 border-labaccent/50 text-labaccent'
+              : 'bg-slate-900 border-slate-800 text-slate-400'}"
+          >
+            Bed Leveling {params.bed_leveling ? "AKTIVNÍ" : "VYPNUTÝ"}
+          </button>
+        </div>
+      {/if}
 
       <div
         class="grid grid-cols-3 items-center gap-2"
         title="Prvotní nanesení kapaliny na extra substrát pro vyčištění trysky"
       >
-        <span class="col-span-1 text-slate-400">Příprava trysky:</span>
+        {@render paramLabel("prime", "Příprava trysky:")}
         <button
           onclick={() => {
             params.prime_active = !params.prime_active;
@@ -721,7 +707,7 @@
           class="grid grid-cols-3 items-center gap-2"
           title="Zapíná/vypíná kalibrační dialog při příštím startu tisku"
         >
-          <span class="col-span-1 text-slate-400">Kalibrace Z:</span>
+          {@render paramLabel("zCalibration", "Kalibrace Z:")}
           <button
             onclick={() => {
               calibrationDone = calibrationDone ? false : true;
@@ -751,9 +737,9 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Výška hlavy nad podložkou při tisku (Z-offset)"
       >
-        <span class="col-span-1 text-slate-400">Výška trysky:</span>
-        <div class="col-span-2 grid grid-cols-3 gap-1">
-          <div class="col-span-2 h-8">
+        {@render paramLabel("nozzleHeight", "Výška trysky:")}
+        <div class="col-span-2 flex gap-1 min-w-0">
+          <div class="flex-1 min-w-0 h-8">
             <NumberInput
               min={liqZMin}
               max={liqZMax}
@@ -763,7 +749,7 @@
               class="w-full h-full"
             />
           </div>
-          <div class="col-span-1 h-8">
+          <div class="shrink-0 h-8">
             <CustomSelect
               bind:value={params.z_unit}
               on:change={handleZUnitChange}
@@ -771,7 +757,7 @@
                 { value: "mm", label: "mm" },
                 { value: "µm", label: "µm" },
               ]}
-              cssStyle="height: 100%; font-size: 11px;"
+              cssStyle="height: 100%; width: max-content; min-width: 4.75rem; font-size: 11px;"
             />
           </div>
         </div>
@@ -781,9 +767,9 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Rychlost vytlačování kapaliny (dávkování na milimetr trasy)"
       >
-        <span class="col-span-1 text-slate-400">Extruze:</span>
-        <div class="col-span-2 grid grid-cols-3 gap-1">
-          <div class="col-span-2 h-8">
+        {@render paramLabel("extrusion", "Extruze:")}
+        <div class="col-span-2 flex gap-1 min-w-0">
+          <div class="flex-1 min-w-0 h-8">
             <NumberInput
               min={liqExtMin}
               max={liqExtMax}
@@ -793,15 +779,21 @@
               class="w-full h-full"
             />
           </div>
-          <div class="col-span-1 h-8">
+          <div class="shrink-0 h-8">
             <CustomSelect
               bind:value={params.extrusion_unit}
               on:change={handleExtUnitChange}
-              options={[
-                { value: "nl/mm", label: "nl/mm" },
-                { value: "kroky/mm", label: "krok/mm" },
-              ]}
-              cssStyle="height: 100%; font-size: 10px; padding-left: 2px; padding-right: 2px;"
+              options={params.infill_style === "Tečky"
+                ? [
+                    // U teček je hodnota objem jedné kapky
+                    { value: "nl/mm", label: "nl/kap" },
+                    { value: "kroky/mm", label: "krok" },
+                  ]
+                : [
+                    { value: "nl/mm", label: "nl/mm" },
+                    { value: "kroky/mm", label: "krok/mm" },
+                  ]}
+              cssStyle="height: 100%; width: max-content; min-width: 4.75rem; font-size: 11px;"
             />
           </div>
         </div>
@@ -811,7 +803,7 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Fyzický tvar a průměr nasazené trysky"
       >
-        <span class="col-span-1 text-slate-400">Typ trysky:</span>
+        {@render paramLabel("nozzleType", "Typ trysky:")}
         <div class="col-span-2">
           <CustomSelect
             bind:value={selectedNozzle}
@@ -827,40 +819,22 @@
 
       <!-- VLASTNÍ ROZMĚRY TRYSKY -->
       {#if selectedNozzle === "Vlastní"}
-        <div
-          class="grid grid-cols-4 items-center gap-2 bg-slate-950/40 p-2 rounded-sm border border-slate-850"
-        >
-          <div class="flex flex-col gap-0.5">
-            <span class="text-[9px] text-slate-500">Výška (mm)</span>
-            <NumberInput
-              step={1}
-              bind:value={params.nozzle_height}
-              on:input={() => dispatch("paramsChanged", params)}
-              class="w-full h-full"
-            />
-          </div>
-          <div class="flex flex-col gap-0.5">
-            <span class="text-[9px] text-slate-500">Průměr (mm)</span>
-            <div class="flex-1 h-8">
-              <NumberInput
-                step={0.05}
-                min={0.01}
-                bind:value={params.nozzle_diam}
-                on:input={() => dispatch("paramsChanged", params)}
-                class="w-full h-full"
-              />
+        <div class="grid grid-cols-3 gap-1.5 bg-slate-950/40 p-1.5 rounded-sm border border-slate-850">
+          {#each [["Délka", "nozzle_height", 1, -Infinity], ["Průměr", "nozzle_diam", 0.05, 0.01], ["Schovaná", "nozzle_hidden", 0.5, -Infinity]] as const as [label, key, step, min]}
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[9px] text-slate-500 truncate">{label}</span>
+              <div class="h-7">
+                <NumberInput
+                  {step}
+                  {min}
+                  unit="mm"
+                  bind:value={params[key]}
+                  on:input={() => dispatch("paramsChanged", params)}
+                  class="w-full h-full"
+                />
+              </div>
             </div>
-          </div>
-          <div class="flex flex-col gap-0.5">
-            <span class="text-[9px] text-slate-500">Schovaná (mm)</span>
-            <NumberInput
-              step={0.5}
-              bind:value={params.nozzle_hidden}
-              on:input={() => dispatch("paramsChanged", params)}
-              class="w-full h-full"
-            />
-          </div>
-          <span class="text-[10px] text-slate-400 pt-3">mm</span>
+          {/each}
         </div>
       {/if}
 
@@ -868,20 +842,18 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Globální rychlost pohybu tiskové hlavy (mm/min)"
       >
-        <span class="col-span-1 text-slate-400">Rychlost tisku:</span>
-        <div class="col-span-2 grid grid-cols-3 gap-1">
-          <div class="col-span-2 h-8">
+        {@render paramLabel("speed", "Rychlost tisku:")}
+        <div class="col-span-2 flex gap-1 min-w-0">
+          <div class="flex-1 min-w-0 h-8">
             <NumberInput
               min={liqSpeedMin}
               max={liqSpeedMax}
               step={100}
+              unit="mm/min"
               bind:value={params.print_speed}
               on:input={handlePrintSpeedChange}
               class="w-full h-full"
             />
-          </div>
-          <div class="col-span-1 flex items-center pl-1">
-            <span class="text-xs text-slate-400">mm/min</span>
           </div>
         </div>
       </div>
@@ -901,7 +873,7 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Vzor, jakým bude obrazec uvnitř vyplněn"
       >
-        <span class="col-span-1 text-slate-400">Styl výplně:</span>
+        {@render paramLabel("infillStyle", "Styl výplně:")}
         <div class="col-span-2">
           <CustomSelect
             bind:value={params.infill_style}
@@ -911,6 +883,7 @@
               { value: "Výplň", label: "Výplň", icon: AlignJustify },
               { value: "Okraje", label: "Okraje", icon: Square },
               { value: "Had", label: "Had", icon: Route },
+              { value: "Jedna linka", label: "Jedna linka", icon: Spline },
               { value: "Mřížka", label: "Mřížka", icon: Grid },
               { value: "Tečky", label: "Tečky", icon: Grip },
             ]}
@@ -922,9 +895,9 @@
         class="grid grid-cols-3 items-center gap-2"
         title="Rozestup mezi tiskovými čarami ve výplni"
       >
-        <span class="col-span-1 text-slate-400">Hustota výplně:</span>
-        <div class="col-span-2 grid grid-cols-3 gap-1">
-          <div class="col-span-2 h-8">
+        {@render paramLabel("infillDensity", "Hustota výplně:")}
+        <div class="col-span-2 flex gap-1 min-w-0">
+          <div class="flex-1 min-w-0 h-8">
             <NumberInput
               min={params.infill_type === "počet" ? 1 : 0.001}
               step={params.infill_type === "počet" ? 1 : 0.1}
@@ -937,7 +910,7 @@
               class="w-full h-full"
             />
           </div>
-          <div class="col-span-1 h-8">
+          <div class="shrink-0 h-8">
             <CustomSelect
               bind:value={params.infill_type}
               on:change={() => {
@@ -950,19 +923,20 @@
                 { value: "%", label: "%" },
                 { value: "počet", label: "počet" },
               ]}
-              cssStyle="height: 100%; font-size: 11px;"
+              cssStyle="height: 100%; width: max-content; min-width: 4.75rem; font-size: 11px;"
             />
           </div>
         </div>
       </div>
 
       <div class="grid grid-cols-3 items-center gap-2" title="Natočení čar výplně ve stupních">
-        <span class="col-span-1 text-slate-400">Úhel výplně [°]:</span>
+        {@render paramLabel("infillAngle", "Úhel výplně:")}
         <div class="col-span-2 h-8">
           <NumberInput
             min={0}
             max={90}
             step={5}
+            unit="°"
             bind:value={params.infill_angle}
             on:input={() => dispatch("paramsChanged", params)}
             class="w-full h-full"
@@ -1000,7 +974,7 @@
       </div>
 
       <div class="grid grid-cols-3 items-center gap-2" title="Komunikační sériový port tiskárny">
-        <span class="col-span-1 text-slate-400">Port:</span>
+        {@render paramLabel("port", "Port:")}
         <div class="col-span-2 flex gap-1 items-center">
           <div class="flex-1">
             <CustomSelect
@@ -1022,7 +996,7 @@
       </div>
 
       <div class="grid grid-cols-3 items-center gap-2" title="Rychlost komunikace po sériové lince">
-        <span class="col-span-1 text-slate-400">Rychlost (Baud):</span>
+        {@render paramLabel("baud", "Rychlost (Baud):")}
         <div class="col-span-2">
           <CustomSelect
             bind:value={baudrate}

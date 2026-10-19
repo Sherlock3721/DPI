@@ -35,8 +35,9 @@ impl ExtrusionCalculator {
     pub fn calculate_e_per_mm(&self, extrusion_rate: f64, unit: &str) -> f64 {
         match unit {
             "kroky/mm" => {
-                // Přímé kroky na mm
-                extrusion_rate
+                // Přímé kroky na mm; multiplikátor průtoku platí stejně jako
+                // u objemových jednotek (frontend převádí nl ↔ kroky bez něj)
+                extrusion_rate * self.flow_multiplier
             }
             "nl/mm" => {
                 // 1 nl = 0.001 µl (mm³) objemu kapaliny
@@ -59,7 +60,7 @@ impl ExtrusionCalculator {
     /// Spočítá délku vytlačeného filamentu (E v mm) pro jednu kapku (tečku).
     pub fn calculate_dot_extrusion(&self, rate: f64, unit: &str) -> f64 {
         match unit {
-            "kroky" | "kroky/mm" => rate,
+            "kroky" | "kroky/mm" => rate * self.flow_multiplier,
             "nl" | "nl/mm" => {
                 let volume = (rate / 1000.0) * self.flow_multiplier;
                 volume * self.calibration_factor

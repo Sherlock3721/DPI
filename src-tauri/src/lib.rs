@@ -1,4 +1,5 @@
 pub mod comms;
+pub mod print_tracker;
 pub mod settings;
 pub mod sync;
 
@@ -66,12 +67,8 @@ fn compute_z_calibration(
     block_height: f64,
 ) -> ZCalibrationInfo {
     ZCalibrationInfo {
-        glass_z_theoretical: dpi_core::glass_z_theoretical(
-            block_height,
-            params.nozzle_height,
-            params.nozzle_hidden,
-            params.slide_z,
-        ),
+        // Povrch skla na první pozici (s odplivem = odplivové sklo a jeho tloušťka)
+        glass_z_theoretical: dpi_core::calibration_glass_z(&params, &slide_overrides, block_height),
         z_shift: dpi_core::compute_z_shift(&params, &slide_overrides, block_height),
     }
 }
@@ -239,6 +236,7 @@ fn update_layout(
     raw_paths: Option<dpi_core::SubstratePaths>,
     auto_scale: bool,
     baked_scales: Vec<f64>,
+    baked_scales_y: Option<Vec<f64>>,
     old_positions: Vec<dpi_core::LayoutPosition>,
     current_transforms: Vec<dpi_core::Transform>,
     bed: dpi_core::BedConfig,
@@ -250,6 +248,7 @@ fn update_layout(
         raw_paths.as_ref(),
         auto_scale,
         &baked_scales,
+        baked_scales_y.as_deref().unwrap_or_default(),
         &old_positions,
         &current_transforms,
         &bed,
@@ -305,8 +304,19 @@ fn compute_preview_segments(
     paths: Vec<dpi_core::SubstratePaths>,
     transforms: Vec<dpi_core::Transform>,
     prime_path: Option<dpi_core::SubstratePaths>,
+    params: dpi_core::ProcessParams,
+    overrides: std::collections::HashMap<String, dpi_core::SlideOverride>,
+    motion: Option<dpi_core::MotionConfig>,
 ) -> dpi_core::PreviewDistResult {
-    dpi_core::compute_preview_segments(&positions, &paths, &transforms, prime_path.as_ref())
+    dpi_core::compute_preview_segments(
+        &positions,
+        &paths,
+        &transforms,
+        prime_path.as_ref(),
+        &params,
+        &overrides,
+        &motion.unwrap_or_default(),
+    )
 }
 
 /// Vrátí `true` pokud některá z transformovaných tras přesahuje okraj sklíčka s insetem trysky.

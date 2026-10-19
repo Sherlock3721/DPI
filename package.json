@@ -1,7 +1,7 @@
 {
   "name": "dpi-frontend",
   "private": true,
-  "version": "2.2.5",
+  "version": "2.2.6",
   "type": "module",
   "scripts": {
     "wasm:build": "node scripts/wasm-build.mjs",

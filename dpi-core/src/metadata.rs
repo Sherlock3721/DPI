@@ -11,6 +11,9 @@ pub struct GCodeMetadata {
     pub transforms: Vec<Transform>,
     #[serde(default)]
     pub baked_scales: Vec<f64>,
+    /// Zapečená měřítka v ose Y; prázdné = stejná jako `baked_scales`.
+    #[serde(default)]
+    pub baked_scales_y: Vec<f64>,
     #[serde(default)]
     pub source_file_name: String,
     #[serde(default)]
@@ -35,6 +38,7 @@ pub fn serialize_metadata(meta: &GCodeMetadata) -> String {
         "overrides": meta.overrides,
         "transforms": meta.transforms,
         "baked_scales": meta.baked_scales,
+        "baked_scales_y": meta.baked_scales_y,
         "source_file_name": meta.source_file_name,
         "source_file_ext": meta.source_file_ext,
         "source_file_content": meta.source_file_content,
@@ -84,6 +88,10 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
         .get("baked_scales")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
+    let baked_scales_y: Vec<f64> = raw
+        .get("baked_scales_y")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
     let source_file_name = raw
         .get("source_file_name")
         .and_then(|v| v.as_str())
@@ -110,6 +118,7 @@ pub fn deserialize_metadata(gcode: &str) -> Option<GCodeMetadata> {
         overrides,
         transforms,
         baked_scales,
+        baked_scales_y,
         source_file_name,
         source_file_ext,
         source_file_content,
@@ -163,7 +172,21 @@ pub fn build_csv_protocol(
             h = params.slide_h,
             z = params.slide_z
         ),
-        format!("\"Teplota podložky\";\"{temp} °C\"", temp = params.bed_temp),
+        format!(
+            "\"Tloušťka odplivového skla\";\"{}\"",
+            if params.prime_active {
+                let z = overrides.get("-1").and_then(|o| o.glass_z).unwrap_or(params.slide_z);
+                format!("{z} mm")
+            } else {
+                "odpliv vypnut".to_string()
+            }
+        ),
+        // Záporná teplota = výhřev vypnutý (0 °C je platná teplota)
+        if params.bed_temp < 0.0 {
+            "\"Teplota podložky\";\"vypnuto\"".to_string()
+        } else {
+            format!("\"Teplota podložky\";\"{temp} °C\"", temp = params.bed_temp)
+        },
         format!(
             "\"Typ injekční stříkačky/jehly\";\"{t}\"",
             t = params.nozzle_type
@@ -245,6 +268,44 @@ pub fn build_csv_protocol(
             ]
             .join(";"),
         );
+
+        // Objekty s vlastním nastavením (dědí, co nepřepíšou, od sklíčka)
+        let mut objects: Vec<(u32, &crate::types::ObjectOverride)> = o
+            .map(|x| {
+                x.objects
+                    .iter()
+                    .filter_map(|(id, ov)| id.parse().ok().map(|id| (id, ov)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        objects.sort_by_key(|(id, _)| *id);
+        for (id, ov) in objects {
+            let obj_name = ov
+                .name
+                .clone()
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| format!("Objekt (id {id})"));
+            let o_ext = ov.extrusion_rate.unwrap_or(ext);
+            let o_inf = ov.infill_val.unwrap_or(inf);
+            let o_inf_t = if ov.infill_val.is_some() {
+                ov.infill_type.as_deref().unwrap_or(inf_t)
+            } else {
+                inf_t
+            };
+            rows.push(
+                [
+                    format!("{}.{}", i + 1, id),
+                    csv_quote(&format!("{name} / {obj_name}")),
+                    csv_quote(ov.note.as_deref().unwrap_or("")),
+                    format!("{} {}", ov.z_offset.unwrap_or(z_off), params.z_unit),
+                    format!("{} {}", o_ext, params.extrusion_unit),
+                    format!("\"{} {}\"", o_ext, params.extrusion_unit),
+                    format!("{}", ov.print_speed.unwrap_or(spd)),
+                    format!("{} {}", o_inf, o_inf_t),
+                ]
+                .join(";"),
+            );
+        }
     }
 
     rows.join("\n")

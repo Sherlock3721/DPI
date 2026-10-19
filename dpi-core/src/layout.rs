@@ -95,6 +95,8 @@ pub struct LayoutUpdateResult {
     pub final_sample_count: usize,
     /// Zapečená měřítka zarovnaná na final_sample_count (nová sklíčka = 1.0).
     pub baked_scales: Vec<f64>,
+    /// Zapečená měřítka v ose Y (nerovnoměrné škálování), zarovnaná stejně.
+    pub baked_scales_y: Vec<f64>,
 }
 
 /// Kompletní přepočet layoutu: kapacita podložky → zpracování drah všech
@@ -110,6 +112,7 @@ pub fn update_layout(
     raw_paths: Option<&SubstratePaths>,
     auto_scale: bool,
     baked_scales: &[f64],
+    baked_scales_y: &[f64],
     old_positions: &[LayoutPosition],
     current_transforms: &[Transform],
     bed: &BedConfig,
@@ -135,6 +138,8 @@ pub fn update_layout(
     let final_sample_count = params.sample_count.min(capacity);
 
     // 2. Zpracování drah pro každé sklíčko (zachovává zapečené měřítko a rotaci)
+    // Měřítko Y chybí u starších projektů a u rovnoměrného škálování → jako X
+    let baked_y = |i: usize| baked_scales_y.get(i).copied().or_else(|| baked_scales.get(i).copied());
     let mut paths: Vec<SubstratePaths> = Vec::new();
     if let Some(raw) = raw_paths {
         for i in 0..final_sample_count {
@@ -160,6 +165,11 @@ pub fn update_layout(
                 infill_angle: params.infill_angle + current_rot,
                 nozzle_diam,
                 user_scale: baked_scales.get(i).copied().unwrap_or(1.0),
+                user_scale_y: baked_y(i),
+                object_overrides: ovr.map(|o| o.objects.clone()).unwrap_or_default(),
+                deleted_objects: ovr.map(|o| o.deleted_objects.clone()).unwrap_or_default(),
+                object_transforms: ovr.map(|o| o.object_transforms.clone()).unwrap_or_default(),
+                object_order: ovr.map(|o| o.object_order.clone()).unwrap_or_default(),
             };
             paths.push(process_substrate_paths(raw, &slice));
         }
@@ -199,6 +209,7 @@ pub fn update_layout(
     let baked_scales_out = (0..final_sample_count)
         .map(|i| baked_scales.get(i).copied().unwrap_or(1.0))
         .collect();
+    let baked_scales_y_out = (0..final_sample_count).map(|i| baked_y(i).unwrap_or(1.0)).collect();
 
     LayoutUpdateResult {
         positions,
@@ -207,5 +218,6 @@ pub fn update_layout(
         prime_path,
         final_sample_count,
         baked_scales: baked_scales_out,
+        baked_scales_y: baked_scales_y_out,
     }
 }

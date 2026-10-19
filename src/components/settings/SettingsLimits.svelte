@@ -15,8 +15,8 @@
   run(() => {
     const maxW = glassList.length > 0 ? Math.max(...glassList.map((g) => g.w)) : 0;
     const maxH = glassList.length > 0 ? Math.max(...glassList.map((g) => g.h)) : 0;
-    minBedMaxX = Math.ceil((settings?.start_offset_x ?? 18) + Math.max(76, maxW));
-    minBedMaxY = Math.ceil((settings?.start_offset_y ?? 11) + 26 + (settings?.multi_spacing ?? 5) + maxH);
+    minBedMaxX = Math.ceil((settings?.start_offset_x ?? 16) + Math.max(76, maxW));
+    minBedMaxY = Math.ceil((settings?.start_offset_y ?? 12) + 26 + (settings?.multi_spacing ?? 5) + maxH);
   });
 </script>
 
@@ -87,10 +87,14 @@
       <div class="grid grid-cols-5 items-center gap-3">
         <div class="col-span-3">
           <div class="text-slate-300 font-medium">Minimální teplota při zapnutí</div>
-          <div class="text-[10px] text-slate-500 mt-0.5">Teplota výhřevu při aktivaci — přeskočí šedou zónu 1–29 °C</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">
+            Nejnižší nastavitelná teplota — krok pod ni výhřev vypne{settings.bed_min_temp > 0
+              ? ` (přeskočí 0–${settings.bed_min_temp - 1} °C)`
+              : "; 0 °C je platná teplota"}
+          </div>
         </div>
         <div class="col-span-2 flex items-center gap-1.5">
-          <input type="number" step="1" min="1" max="100" bind:value={settings.bed_min_temp}
+          <input type="number" step="1" min="0" max="100" bind:value={settings.bed_min_temp}
             class="flex-1 input-premium py-1 text-center text-xs" />
           <span class="text-slate-500 text-[10px] w-6">°C</span>
         </div>
@@ -180,6 +184,74 @@
           <input type="number" step="0.0001" bind:value={settings.calibration_factor}
             class="flex-1 input-premium py-1 text-center text-xs" />
           <span class="text-slate-500 text-[10px] w-12">krok/µl</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="border-b border-slate-800/60"></div>
+
+  <!-- PŘEJEZDY A DÁVKOVÁNÍ -->
+  <div class="flex flex-col gap-3">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-cyan-500"></span>
+      <span class="text-xs font-bold text-slate-300 uppercase tracking-wider">Přejezdy a dávkování kapaliny</span>
+    </div>
+    <p class="text-[10px] text-slate-500 pl-4">
+      Uvnitř vyplňované plochy se tryska nezvedá (kapalina se táhne po místě, které výplň pokryje).
+      Přes suché sklo se přejíždí se zdvihem a stažením kapaliny.
+    </p>
+    <div class="grid grid-cols-1 gap-2.5 text-xs pl-4">
+      <div class="grid grid-cols-5 items-center gap-3">
+        <div class="col-span-3">
+          <div class="text-slate-300 font-medium">Zdvih trysky při přejezdu</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">
+            Výška nad tiskovou výškou pro přejezdy přes suché sklo a zdvih po kapce
+          </div>
+        </div>
+        <div class="col-span-2 flex items-center gap-1.5">
+          <input type="number" step="0.1" min="0" bind:value={settings.default_z_hop}
+            class="flex-1 input-premium py-1 text-center text-xs" />
+          <span class="text-slate-500 text-[10px] w-12">mm</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-5 items-center gap-3">
+        <div class="col-span-3">
+          <div class="text-slate-300 font-medium">Zpětné nasátí kapaliny</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">
+            Objem stažený před přejezdem a vrácený po sjezdu — z trysky nevisí kapka (0 = vypnuto)
+          </div>
+        </div>
+        <div class="col-span-2 flex items-center gap-1.5">
+          <input type="number" step="1" min="0" bind:value={settings.retract_nl}
+            class="flex-1 input-premium py-1 text-center text-xs" />
+          <span class="text-slate-500 text-[10px] w-12">nl</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-5 items-center gap-3">
+        <div class="col-span-3">
+          <div class="text-slate-300 font-medium">Rychlost nasátí</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">
+            Posuv pístu při stažení a návratu kapaliny
+          </div>
+        </div>
+        <div class="col-span-2 flex items-center gap-1.5">
+          <input type="number" step="10" min="1" bind:value={settings.retract_speed}
+            class="flex-1 input-premium py-1 text-center text-xs" />
+          <span class="text-slate-500 text-[10px] w-12">mm/min</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-5 items-center gap-3">
+        <div class="col-span-3">
+          <div class="text-slate-300 font-medium">Usazení kapky</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">
+            Čekání po dávce kapky, než se tryska zvedne (styl Tečky)
+          </div>
+        </div>
+        <div class="col-span-2 flex items-center gap-1.5">
+          <input type="number" step="50" min="0" bind:value={settings.dot_dwell_ms}
+            class="flex-1 input-premium py-1 text-center text-xs" />
+          <span class="text-slate-500 text-[10px] w-12">ms</span>
         </div>
       </div>
     </div>

@@ -35,6 +35,7 @@
     type GCodeMetadata,
   } from "./lib/tauri";
   import { projectStore, addRecentFile, type ProjectState } from "./stores/projectStore";
+  import { printerStore } from "./stores/printerStore";
   import { settingsStore } from "./stores/settingsStore";
   import { toCanonicalExtrusionRate, type ExtUnit } from "./lib/extrusionUnits";
   import { selectedLiquidName } from "./stores/liquidStore";
@@ -70,8 +71,8 @@
   // Konfigurace stroje — jediným zdrojem pravdy je settingsStore
   let globalBedX = $derived($settingsStore.bed_max_x || 250.0);
   let globalBedY = $derived($settingsStore.bed_max_y || 210.0);
-  let globalStartOffsetX = $derived($settingsStore.start_offset_x || 18.0);
-  let globalStartOffsetY = $derived($settingsStore.start_offset_y || 11.0);
+  let globalStartOffsetX = $derived($settingsStore.start_offset_x || 16.0);
+  let globalStartOffsetY = $derived($settingsStore.start_offset_y || 12.0);
   let globalMultiSpacing = $derived($settingsStore.multi_spacing || 5.0);
   let globalBlockHeight = $derived($settingsStore.block_height || 34.0);
 
@@ -82,7 +83,11 @@
   let gcodeError = "";
 
   // Tisková pozice trysky z telemetry smyčky
-  let currentNozzle: Point2D | null = null;
+  // Skutečná (odhadnutá) poloha trysky při tisku — tracker v backendu zohledňuje
+  // buffer pohybů tiskárny, takže značka nepředbíhá reálnou trysku
+  let currentNozzle: Point2D | null = $derived(
+    $printerStore.is_printing ? { x: $printerStore.current_x, y: $printerStore.current_y } : null
+  );
 
   // Modály
   let showSettingsModal = $state(false);
@@ -100,6 +105,10 @@
   // Canvas ↔ pravý panel
   let canvasExternalSelected = $state(-1); // posIdx → zvýrazní sklíčko v plátně
   let rightPanelOpenIdx = $state(-1); // sampleIdx → otevře accordion
+  // Objekt rozbalený v lokálním panelu → zvýraznění v plátně
+  let focusedObject: { slide: number; id: number } | null = $state(null);
+  /** Výběr objektu v plátně → rozbalení objektu v lokálním panelu (n = trigger). */
+  let objectFocusRequest = $state({ slide: -1, id: -1, n: 0 });
   let rightPanelTrigger = $state(0); // inkrementuje se při každém canvas kliku
 
   function sampleToPositionIdx(sampleIdx: number): number {
@@ -210,7 +219,7 @@
       const endGcode = setts.end_gcode ?? "";
       const loopStartGcode = setts.loop_start_gcode ?? "";
       const loopEndGcode = setts.loop_end_gcode ?? "";
-      const calFactor = setts.calibration_factor ?? 0.0141;
+      const calFactor = setts.calibration_factor ?? 0.323877;
       const zHop = setts.default_z_hop ?? 2.0;
       const safeZ = setts.safe_z ?? 20.0;
 
@@ -247,6 +256,9 @@
         safe_z: safeZ,
         bed_max_temp: setts.bed_max_temp ?? null,
         skip_z_shift_setup: skipZShiftSetup,
+        retract_nl: setts.retract_nl ?? 0,
+        retract_speed: setts.retract_speed ?? 300,
+        dot_dwell_ms: setts.dot_dwell_ms ?? 0,
       });
 
       generatedGCode = res.gcode;
@@ -278,6 +290,13 @@
     $projectStore.overrides;
     $projectStore.paths;
     $projectStore.positions;
+    // Nastavení pohybu mění G-kód i odhad času
+    $settingsStore.default_z_hop;
+    $settingsStore.safe_z;
+    $settingsStore.retract_nl;
+    $settingsStore.retract_speed;
+    $settingsStore.dot_dwell_ms;
+    $settingsStore.calibration_factor;
     if ($projectStore.paths.length > 0) scheduleStatsRefresh();
   });
 
@@ -379,6 +398,7 @@
       overrides: state.overrides,
       transforms: state.transforms,
       baked_scales: state.bakedScales ?? [],
+      baked_scales_y: state.bakedScalesY ?? [],
       source_file_name: state.fileName ?? "",
       source_file_ext: state.rawFileExt ?? "",
       source_file_content: state.rawFileText ?? "",
@@ -493,13 +513,20 @@
     } else if (event.ctrlKey && event.key.toLowerCase() === "q") {
       event.preventDefault();
       quitApp();
-    } else if (event.ctrlKey && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      if (event.shiftKey) {
-        projectStore.redo();
-      } else {
-        projectStore.undo();
+    } else if (event.ctrlKey && !event.altKey && ["z", "y"].includes(event.key.toLowerCase())) {
+      // Textová pole (jméno, poznámka, G-kód) si nechají vlastní undo psaní
+      const t = event.target;
+      if (
+        t instanceof HTMLTextAreaElement ||
+        (t instanceof HTMLInputElement && ["text", "search"].includes(t.type))
+      ) {
+        return;
       }
+      event.preventDefault();
+      // Rozepsaná hodnota číselného pole se potvrdí jako vlastní krok historie
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if (event.key.toLowerCase() === "y" || event.shiftKey) projectStore.redo();
+      else projectStore.undo();
     }
   }
 
@@ -513,11 +540,6 @@
   function handleTransformChanged(event: CustomEvent<{ index: number; transform: Transform }>) {
     const { index, transform } = event.detail;
     projectStore.updateTransform(index, transform);
-  }
-
-  function handlePathCleared(event: CustomEvent<{ index: number }>) {
-    const { index } = event.detail;
-    projectStore.clearPath(index);
   }
 
   onMount(async () => {
@@ -732,12 +754,16 @@
         externalSelectedIndex={canvasExternalSelected}
         totalPreviewTime={$projectStore.totalTime ?? 0}
         {extrusionRateUl}
+        {focusedObject}
         suspendAutoCenter={showWelcomeModal}
         on:transformChanged={handleTransformChanged}
-        on:pathCleared={handlePathCleared}
+        on:objectSelected={(e) => {
+          focusedObject = e.detail;
+          objectFocusRequest = { slide: e.detail?.slide ?? -1, id: e.detail?.id ?? -1, n: objectFocusRequest.n + 1 };
+        }}
         on:saveState={() => projectStore.pushState()}
         on:pathRebuildNeeded={(e) =>
-          projectStore.rebuildSlicePath(e.detail.slideIdx, e.detail.scale, e.detail.rotation)}
+          projectStore.rebuildSlicePath(e.detail.slideIdx, e.detail.scale, e.detail.rotation, e.detail.scaleY)}
         on:slideSelected={(e) => {
           const posIdx = e.detail;
           canvasExternalSelected = posIdx;
@@ -757,8 +783,12 @@
         sampleCount={$projectStore.params ? $projectStore.params.sample_count : 1}
         primeActive={$projectStore.params ? $projectStore.params.prime_active : false}
         bind:overrides={$projectStore.overrides}
+        slideObjects={$projectStore.paths.map((p) => p?.objects ?? [])}
+        canEditElements={$projectStore.rawFileExt === "svg"}
         openSlideIdx={rightPanelOpenIdx}
         openTrigger={rightPanelTrigger}
+        {objectFocusRequest}
+        on:objectFocus={(e) => (focusedObject = e.detail)}
         on:slideActivated={(e) => {
           canvasExternalSelected = sampleToPositionIdx(e.detail);
         }}

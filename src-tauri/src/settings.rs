@@ -54,6 +54,13 @@ pub struct AppSettings {
     pub default_z_offset: f64,
     pub default_z_hop: f64,
     pub safe_z: f64,
+    // Dávkování kapalin
+    /// Zpětné nasátí kapaliny před přejezdem se zdvihem (nl); 0 = vypnuto.
+    pub retract_nl: f64,
+    /// Rychlost retrakce a návratu kapaliny (posuv E, mm/min).
+    pub retract_speed: f64,
+    /// Čekání po dávce kapky, než se tryska zvedne (ms).
+    pub dot_dwell_ms: f64,
     pub default_speed: f64,
     pub default_infill: f64,
     pub default_density: f64,
@@ -78,6 +85,15 @@ pub struct AppSettings {
     // UI
     pub show_slide_grid: bool,
     pub show_bed_axes: bool,
+    /// Šipky směru tisku u drah v plátně.
+    #[serde(default)]
+    pub show_print_direction: bool,
+    /// Přehled statistik G-kódu v plátně.
+    #[serde(default = "default_true")]
+    pub show_gcode_stats: bool,
+    /// Přehled pozice a rozměrů vybrané trasy / objektu v plátně.
+    #[serde(default = "default_true")]
+    pub show_object_info: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_fineness: Option<f64>,
     pub z_step: f64,
@@ -121,6 +137,10 @@ pub fn parse_settings(stored_json: &str) -> Result<AppSettings, String> {
 }
 
 /// Vestavěné výchozí nastavení (validované při testech).
+fn default_true() -> bool {
+    true
+}
+
 pub fn default_settings() -> AppSettings {
     serde_json::from_value(merge_with_defaults(Value::Object(Default::default())))
         .expect("default_settings.json odpovídá struktuře AppSettings")
