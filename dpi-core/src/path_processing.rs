@@ -751,12 +751,13 @@ fn chain_rows(rows: &[Vec<(Point2D, Point2D)>], start: Point2D) -> Vec<(Point2D,
 }
 
 /// Výplň jednoho objektu (obrysy ve světových souřadnicích sklíčka), již
-/// v tiskovém pořadí.
+/// v tiskovém pořadí. `comp` = o kolik jsou obrysy zúžené kompenzací šířky stopy.
 fn object_infill(
     world: &[Contour],
     s: &InfillSettings,
     p: &SliceParams,
     inset: f64,
+    comp: f64,
 ) -> Vec<PathSegment> {
     let angle = p.infill_angle;
     let rotated: Vec<Contour> = world.iter().map(|c| c.rotated(-angle)).collect();
@@ -775,6 +776,17 @@ fn object_infill(
         Some(n) => RowSpec::Count(n),
         None if fit => RowSpec::Fit(spacing),
         None => RowSpec::Step(spacing),
+    };
+    // Pevný rozestup: mřížka řad zůstává zarovnaná k okraji před kompenzací
+    // (půl rozestupu od okraje tvaru), řady v zúženém pásu u okraje odpadnou
+    let rows_of = |min: f64, max: f64, spec: RowSpec| -> Vec<f64> {
+        match spec {
+            RowSpec::Step(_) => row_positions(min - comp, max, spec, 0.0)
+                .into_iter()
+                .filter(|&y| y > min + EDGE_ROW_EPS)
+                .collect(),
+            _ => row_positions(min, max, spec, margin),
+        }
     };
     let bottom_left = Point2D::new(bb.min_x, bb.min_y);
 
@@ -798,7 +810,7 @@ fn object_infill(
             let mut dots = Vec::new();
             let mut reverse = false;
             let (mut hits, mut spans) = (Vec::new(), Vec::new());
-            for y in row_positions(bb.min_y, bb.max_y, spec_y, 0.0) {
+            for y in rows_of(bb.min_y, bb.max_y, spec_y) {
                 let mut xs: Vec<f64> = if fit {
                     // Krajní tečky na okrajích každého úseku řady — zachová rozměry
                     // i u oblých tvarů (mřížka obálky by je u kruhu ztratila)
@@ -817,7 +829,7 @@ fn object_infill(
                         .collect()
                 } else {
                     // Pevný rozestup: pravidelná mřížka zarovnaná přes celý objekt
-                    row_positions(bb.min_x, bb.max_x, RowSpec::Step(pitch), 0.0)
+                    rows_of(bb.min_x, bb.max_x, RowSpec::Step(pitch))
                         .into_iter()
                         .filter(|&x| regions::in_fill(Point2D::new(x, y), &rotated))
                         .collect()
@@ -836,18 +848,18 @@ fn object_infill(
         "Jedna linka" => oneline_paths(
             world,
             &rotated,
-            &row_positions(bb.min_y, bb.max_y, spec, margin),
+            &rows_of(bb.min_y, bb.max_y, spec),
             angle,
         ),
         "Had" => snake_paths(
             &rotated,
             &bbox_union(world),
-            &row_positions(bb.min_y, bb.max_y, spec, margin),
+            &rows_of(bb.min_y, bb.max_y, spec),
             angle,
             s.snake_start,
         ),
         style => {
-            let rows = row_positions(bb.min_y, bb.max_y, spec, margin);
+            let rows = rows_of(bb.min_y, bb.max_y, spec);
             let lines = chain_rows(&scan_rows(&rotated, &rows, inset), bottom_left);
             let exit = lines.last().map(|&(_, b)| back(b));
             let mut segs: Vec<PathSegment> =
@@ -862,7 +874,7 @@ fn object_infill(
                 let start_90 = exit
                     .map(|e| rotate_pt(e, -(angle + 90.0), 0.0, 0.0))
                     .unwrap_or(Point2D::new(bb90.min_x, bb90.min_y));
-                let rows_v = row_positions(bb90.min_y, bb90.max_y, spec, margin);
+                let rows_v = rows_of(bb90.min_y, bb90.max_y, spec);
                 segs.extend(
                     chain_rows(&scan_rows(&rotated_90, &rows_v, inset), start_90)
                         .into_iter()
@@ -1140,6 +1152,13 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
         } else {
             (members, true)
         };
+        // Kompenzace šířky stopy: tryska jede půl průměru od okraje, aby měl
+        // vytištěný tvar rozměr z výkresu. Jen přes přesnou hranici tvaru;
+        // tvar, který zúžení nesnese (užší než tryska), zůstane beze změny.
+        let (world, comp) = match exact_outline.then(|| regions::inset_region(&world, nozzle / 2.0)).flatten() {
+            Some(inset) => (inset, nozzle / 2.0),
+            None => (world, 0.0),
+        };
         let s = infill_for(p, primary);
         let has_stroke = world.iter().any(|c| c.stroke);
 
@@ -1152,7 +1171,7 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
             } else {
                 0.0
             };
-            segs = object_infill(&world, &s, p, inset);
+            segs = object_infill(&world, &s, p, inset, comp);
         }
 
         // Okraj — u sloučených tvarů jen hranice sjednocení. Kreslí se až po
@@ -1255,8 +1274,8 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
     }
 
     // 7. Čáry a neplněné uzavřené tvary — každý je samostatný objekt. Konec
-    //    přichycený k objektu se po úpravě objektu znovu napojí na jeho trasu
-    //    (výplň se přegenerovala, bod přichycení nemusí přesně ležet na ní).
+    //    přichycený k objektu se po úpravě objektu nebo kompenzaci šířky stopy
+    //    znovu napojí na jeho trasu (bod přichycení nemusí přesně ležet na ní).
     let line_points = |id: u32| -> Option<&[Point2D]> {
         objects
             .iter()
@@ -1286,7 +1305,8 @@ pub fn process_substrate_paths(raw: &SubstratePaths, p: &SliceParams) -> Substra
                 continue;
             }
             let k = if end == 0 { 0 } else { pts.len() - 1 };
-            if xform_of(target).is_some() {
+            // Trasa vyplněného objektu je zúžená kompenzací šířky stopy
+            if xform_of(target).is_some() || unit_of_object.contains_key(&target) {
                 pts[k] = resnap(pts[k], &trasa, 2.0 * nozzle);
             }
             links.push(target);
@@ -2467,7 +2487,8 @@ mod tests {
         let (min_x, max_x, min_y, max_y) = bbox(&out);
         assert!(((min_x + max_x) / 2.0 - 12.5).abs() < 1e-6, "střed X");
         assert!(((min_y + max_y) / 2.0 - 37.5).abs() < 1e-6, "střed Y");
-        assert!((max_x - min_x - 10.0).abs() < 1e-6, "šířka beze změny");
+        // Trasa je o průměr trysky užší — vytištěná housenka má šířku 10 mm
+        assert!((max_x - min_x - 9.6).abs() < 1e-6, "šířka beze změny");
     }
 
     #[test]
@@ -2491,7 +2512,78 @@ mod tests {
         p.user_scale = 0.5;
         let out = process_substrate_paths(&raw, &p);
         let (min_x, max_x, _, _) = bbox(&out);
-        assert!((max_x - min_x - 5.0).abs() < 1e-6);
+        assert!((max_x - min_x - (5.0 - 0.4)).abs() < 1e-6);
+    }
+
+    // ─── Kompenzace šířky stopy ──────────────────────────────────────────────
+
+    #[test]
+    fn test_compensation_keeps_printed_size() {
+        // Tryska 0.4: trasa leží 0.2 mm od okraje tvaru u všech stylů výplně
+        let raw = SubstratePaths::new(vec![rect_el(0.0, 0.0, 24.0, 24.0, 0)]);
+        for (style, typ, val) in [
+            ("Okraje", "mm", 1.0),
+            ("Výplň", "%", 50.0),
+            ("Okraje + Výplň", "%", 50.0),
+            ("Had", "%", 50.0),
+            ("Jedna linka", "počet", 20.0),
+        ] {
+            let mut p = params_for(style, 76.0, 26.0);
+            p.infill_type = typ.to_string();
+            p.infill_val = val;
+            let (min_x, max_x, min_y, max_y) = bbox(&process_substrate_paths(&raw, &p));
+            for (got, want) in [(min_x, 26.2), (max_x, 49.8), (min_y, 1.2), (max_y, 24.8)] {
+                assert!((got - want).abs() < 1e-3, "{style}: {got} místo {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compensation_step_rows_stay_aligned() {
+        // Pevný rozestup 1 mm: řady zůstávají půl rozestupu od okraje tvaru,
+        // konce řad se zkrátí o polovinu trysky
+        let raw = SubstratePaths::new(vec![rect_el(0.0, 0.0, 10.0, 10.0, 0)]);
+        let p = SliceParams { infill_val: 1.0, ..params_for("Výplň", 30.0, 30.0) };
+        let out = process_substrate_paths(&raw, &p);
+        let mut ys: Vec<f64> = out.segments.iter().map(|s| s.points[0].y).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(ys.len(), 10);
+        assert!((ys[0] - 10.5).abs() < 1e-6 && (ys[9] - 19.5).abs() < 1e-6);
+        let (min_x, max_x, _, _) = bbox(&out);
+        assert!((min_x - 10.2).abs() < 1e-6 && (max_x - 19.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_compensation_hole_grows_and_thin_shape_stays() {
+        // Díra se zvětší o polovinu trysky, tvar užší než tryska se nezúží
+        let ring = vec![
+            element(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], 0, true),
+            element(&[(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)], 0, true),
+        ];
+        let out = process_substrate_paths(&SubstratePaths::new(ring), &params_for("Okraje", 30.0, 30.0));
+        let inner = out
+            .segments
+            .iter()
+            .find(|s| s.points.iter().all(|p| p.x > 12.0 && p.x < 18.0))
+            .expect("okraj díry");
+        let (min_x, max_x, _, _) = bbox_of_points(inner.points.iter()).unwrap();
+        assert!((min_x - 13.8).abs() < 1e-6 && (max_x - 16.2).abs() < 1e-6);
+
+        let thin = SubstratePaths::new(vec![rect_el(0.0, 0.0, 10.0, 0.3, 0)]);
+        let out = process_substrate_paths(&thin, &params_for("Okraje", 30.0, 30.0));
+        let (_, _, min_y, max_y) = bbox(&out);
+        assert!((max_y - min_y - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_inset_region_concave_corner_is_rounded() {
+        // L-tvar: vnitřní roh dostane oblouk poloměru r kolem vrcholu (6, 4)
+        let l = closed(&[(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (6.0, 4.0), (6.0, 10.0), (0.0, 10.0)]);
+        let inset = regions::inset_region(&[Contour::new(l, 0, 0, true)], 0.5).expect("zúžení");
+        let corner = Point2D::new(6.0, 4.0);
+        let near: Vec<&Point2D> = inset[0].pts.iter().filter(|p| p.distance(&corner) < 0.6).collect();
+        assert!(near.len() >= 3, "oblouk má víc bodů");
+        assert!(near.iter().all(|p| (p.distance(&corner) - 0.5).abs() < 1e-9));
     }
 
     #[test]

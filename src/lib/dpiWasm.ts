@@ -8,6 +8,7 @@ import {
   wasm_bracket_geometry,
   wasm_bracket_svg,
   wasm_bracket_stl,
+  wasm_print_heights,
 } from "../wasm/dpi_core";
 
 export {
@@ -20,4 +21,5 @@ export {
   wasm_bracket_geometry,
   wasm_bracket_svg,
   wasm_bracket_stl,
+  wasm_print_heights,
 };

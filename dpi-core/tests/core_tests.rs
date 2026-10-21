@@ -902,23 +902,23 @@ fn test_infill_boustrophedon_with_hole() {
         let (end, next) = (*w[0].points.last().unwrap(), w[1].points[0]);
         let d = end.distance(&next);
         travel += d;
-        if d > 2.5 * params.infill_val {
+        // Přeskok = další úsek neleží v sousední řadě (přechod podél díry
+        // sousední řadou může být delší než rozestup)
+        if ((next.y - end.y).abs() - params.infill_val).abs() > 1e-6 {
             jumps += 1;
             continue;
         }
-        assert!(
-            ((next.y - end.y).abs() - params.infill_val).abs() < 1e-6,
-            "řetězec musí pokračovat sousední řadou: {end:?} → {next:?}"
-        );
+        assert!(d < 3.0, "řetězec musí pokračovat sousední řadou: {end:?} → {next:?}");
         let dir = |s: &PathSegment| (s.points[1].x - s.points[0].x).signum();
         assert_ne!(dir(w[0]), dir(w[1]), "směr se v řetězci musí střídat");
     }
     assert!(jumps <= 1, "polygon s dírou: {jumps} přeskoků");
-    // 15 přechodů podél okraje (≤ 1 mm) + jeden přeskok k druhé straně díry
-    // (~14 mm); dřív 8 přejezdů přes celou díru
+    // Přechody podél okraje (≤ 1 mm, u dna a vršku díry ~2.6 mm) + jeden
+    // přeskok k druhé straně díry; dřív 8 přejezdů přes celou díru
     assert!(travel < 30.0, "přejezdy výplně {travel:.1} mm");
-    // Každá řada je pokrytá: 8 plných řad + 4 řady protnuté dírou po dvou úsecích
-    assert_eq!(infill.len(), 16);
+    // Každá řada je pokrytá: 6 plných řad + 6 řad protnutých dírou po dvou
+    // úsecích (díra je o kompenzaci šířky stopy větší, protíná i krajní řady)
+    assert_eq!(infill.len(), 18);
 }
 
 /// Přepisy objektu (třetí úroveň nastavení): rychlost, extruze a výška platí jen
@@ -1471,9 +1471,10 @@ fn test_connected_snakes_print_continuously() {
     }
 }
 
-/// Výplň v procentech zachová rozměry tvaru: krajní řady leží na okrajích,
-/// čtverec dá čtvercovou trasu (rozestup se rovnoměrně zmenší). Výplň v mm
-/// začíná dál půl rozestupu od okraje.
+/// Výplň v procentech zachová rozměry tvaru: krajní řady leží na okrajích
+/// (zúžených o polovinu trysky — kompenzace šířky stopy), čtverec dá čtvercovou
+/// trasu (rozestup se rovnoměrně zmenší). Výplň v mm začíná dál půl rozestupu
+/// od okraje.
 #[test]
 fn test_percent_infill_keeps_shape_extent() {
     let raw = SubstratePaths::new(vec![rect_seg(0.0, 0.0, 10.0, 10.0, 0)]);
@@ -1493,16 +1494,17 @@ fn test_percent_infill_keeps_shape_extent() {
         // 0.4 mm tryska, 50 % → rozestup 0.8 mm; 10 mm se nedělí beze zbytku
         let e = extent(style, "%", 50.0);
         let (w, h) = (e[1] - e[0], e[3] - e[2]);
-        assert!((w - 10.0).abs() < 1e-3 && (h - 10.0).abs() < 1e-3, "{style}: {w} × {h}");
+        assert!((w - 9.6).abs() < 1e-3 && (h - 9.6).abs() < 1e-3, "{style}: {w} × {h}");
     }
     let e = extent("Výplň", "mm", 0.8);
-    assert!(((e[3] - e[2]) - 10.0).abs() > 0.1, "mm výplň se nemění: {e:?}");
+    assert!(((e[3] - e[2]) - 9.6).abs() > 0.1, "mm výplň se nemění: {e:?}");
 }
 
 // ─── Tisk kapalin: rozměry výplně, přejezdy, odpliv, kapky ───────────────────
 
-/// Typ "počet" zachová rozměry tvaru: N řad, krajní na okrajích (dřív začínaly
-/// půl rozestupu od okraje a výplň měla jen h·(N−1)/N).
+/// Typ "počet" zachová rozměry tvaru: N řad, krajní na okrajích zúžených
+/// o polovinu trysky (dřív začínaly půl rozestupu od okraje a výplň měla jen
+/// h·(N−1)/N).
 #[test]
 fn test_count_infill_keeps_shape_extent() {
     let raw = SubstratePaths::new(vec![rect_seg(0.0, 0.0, 10.0, 6.0, 0)]);
@@ -1516,8 +1518,8 @@ fn test_count_infill_keeps_shape_extent() {
             let pts: Vec<Point2D> = out.segments.iter().flat_map(|s| s.points.clone()).collect();
             let (min_y, max_y) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), q| (a.min(q.y), b.max(q.y)));
             let (min_x, max_x) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), q| (a.min(q.x), b.max(q.x)));
-            assert!(((max_y - min_y) - 6.0).abs() < 1e-3, "{style} {n}: výška {}", max_y - min_y);
-            assert!(((max_x - min_x) - 10.0).abs() < 1e-3, "{style} {n}: šířka {}", max_x - min_x);
+            assert!(((max_y - min_y) - 5.6).abs() < 1e-3, "{style} {n}: výška {}", max_y - min_y);
+            assert!(((max_x - min_x) - 9.6).abs() < 1e-3, "{style} {n}: šířka {}", max_x - min_x);
             if style != "Had" {
                 let mut ys: Vec<f64> = pts.iter().map(|q| q.y).collect();
                 ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -1550,7 +1552,8 @@ fn test_count_infill_keeps_shape_extent() {
             out.segments.iter().map(|s| s.points[0].x).fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
         assert!(!out.segments.is_empty(), "počet {n}: žádné tečky");
         if n > 2.0 {
-            assert!(max_x - min_x > 7.9, "počet {n}: šířka teček {}", max_x - min_x);
+            // Průměr 8 mm zúžený kompenzací šířky stopy na 7.6 mm
+            assert!(max_x - min_x > 7.5, "počet {n}: šířka teček {}", max_x - min_x);
         }
     }
 }

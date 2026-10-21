@@ -5,9 +5,12 @@
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import type { LayoutPosition, SubstratePaths, Transform, Point2D, SlideOverride, ObjectTransform } from "../lib/tauri";
   import { getTransformIdx } from "../lib/geometry";
-  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash, CircleDashed, X, Magnet, Merge } from "lucide-svelte";
+  import { Maximize2, Ruler, Grid2x2, VectorSquare, Play, Pause, ChevronLeft, ChevronRight, Square, Circle, Slash, CircleDashed, X, Magnet, Merge, Box, Route, Palette, Pyramid, ScanEye } from "lucide-svelte";
   import Tooltip from "./Tooltip.svelte";
-  import Canvas2D from "./Canvas2D.svelte";
+  import { portal } from "../lib/portal";
+  import Viewport from "./Viewport.svelte";
+  import { settingsStore } from "../stores/settingsStore";
+  import type { ViewColorMode } from "../lib/tauri";
   import MergeNodesPopup from "./MergeNodesPopup.svelte";
   import { samePathGeometry, type MergePreview, type MergeResult } from "../lib/nodeMerge";
   import NumberInput from "./NumberInput.svelte";
@@ -79,7 +82,7 @@
   let menuEl: HTMLDivElement | undefined = $state();
   let canvasRef: any = $state();
   let printProgress = $state(100);
-  /** Délka časové osy náhledu (s) — počítá Canvas2D z rychlostí objektů/skel. */
+  /** Délka časové osy náhledu (s) — počítá Viewport z rychlostí objektů/skel. */
   let previewTotalTime = $state(0);
 
   // ─── Play / Step logika ──────────────────────────────────────────────────
@@ -105,6 +108,19 @@
       playStartProgress = printProgress;
     }
     playSpeed = next;
+  }
+
+  // Spodní panel náhledu se vysune při najetí myší ke spodnímu okraji plátna
+  // (i pod ním, mimo plátno); při přehrávání (časová osa < 100 %) zůstává
+  // zobrazený a nejde schovat.
+  const TIMELINE_REVEAL_PX = 56;
+  let timelineHover = $state(false);
+  const timelineVisible = $derived(isPlaying || printProgress < 100 || timelineHover);
+
+  function updateTimelineHover(e: PointerEvent) {
+    if (!rootEl) return;
+    const r = rootEl.getBoundingClientRect();
+    timelineHover = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.bottom - TIMELINE_REVEAL_PX;
   }
 
   function formatPreviewTime(progress: number): string {
@@ -174,14 +190,14 @@
       prevPositionCount = positions.length;
       if (positions.length > 0) {
         if (suspendAutoCenter) pendingAutoCenter = true;
-        else canvasRef.resetCamera();
+        else canvasRef.fitAll();
       }
     }
   });
   run(() => {
     if (!suspendAutoCenter && pendingAutoCenter && canvasRef?.resetCamera) {
       pendingAutoCenter = false;
-      canvasRef.resetCamera();
+      canvasRef.fitAll();
     }
   });
 
@@ -510,7 +526,7 @@
 
     // Delete: vybraný objekt (v plátně nebo v lokálním panelu) → smazat objekt,
     // jinak celou trasu vybraného skla; Shift = ze všech substrátů
-    if ((e.key === "Delete" || e.key === "Backspace") && !$printerStore.is_printing) {
+    if ((e.key === "Delete" || e.key === "Backspace") && e.code !== "NumpadDecimal" && !$printerStore.is_printing) {
       if (focusedObject) {
         e.preventDefault();
         deleteObjectById(focusedObject.slide, focusedObject.id, e.shiftKey);
@@ -537,14 +553,16 @@
     if (!t) return;
 
     const step = e.shiftKey ? 0.1 : 1.0;
+    // Šipka posouvá v ose světa nejbližší jejímu směru na obrazovce (natočený pohled)
+    const ax: { up: [number, number]; right: [number, number] } = canvasRef?.arrowAxes?.() ?? { up: [0, 1], right: [1, 0] };
+    const d: Record<string, [number, number]> = {
+      ArrowUp: [ax.up[0] * step, ax.up[1] * step],
+      ArrowDown: [-ax.up[0] * step, -ax.up[1] * step],
+      ArrowLeft: [-ax.right[0] * step, -ax.right[1] * step],
+      ArrowRight: [ax.right[0] * step, ax.right[1] * step],
+    };
     // Vybraný objekt na této trase: šipky posouvají objekt, ne celou trasu
     if (focusedObject?.slide === tIdx && e.key.startsWith("Arrow")) {
-      const d: Record<string, [number, number]> = {
-        ArrowUp: [0, step],
-        ArrowDown: [0, -step],
-        ArrowLeft: [-step, 0],
-        ArrowRight: [step, 0],
-      };
       const v = d[e.key];
       if (v) {
         e.preventDefault();
@@ -552,21 +570,10 @@
       }
       return;
     }
-    let moved = false;
-    if (e.key === "ArrowUp") {
-      t.gui_dy += step;
-      moved = true;
-    } else if (e.key === "ArrowDown") {
-      t.gui_dy -= step;
-      moved = true;
-    } else if (e.key === "ArrowLeft") {
-      t.gui_dx -= step;
-      moved = true;
-    } else if (e.key === "ArrowRight") {
-      t.gui_dx += step;
-      moved = true;
-    }
-    if (moved) {
+    const v = d[e.key];
+    if (v) {
+      t.gui_dx += v[0];
+      t.gui_dy += v[1];
       e.preventDefault();
       dispatch("transformChanged", { index: tIdx, transform: t });
     }
@@ -648,7 +655,24 @@
   }
 
   function resetView() {
-    if (canvasRef?.resetCamera) canvasRef.resetCamera();
+    if (canvasRef?.resetCamera) canvasRef.resetCamera(true);
+  }
+
+  // ─── 3D pohled ──────────────────────────────────────────────────────────
+  /** Projekce a pohled shora — pro stav tlačítek (posílá Viewport). */
+  let viewInfo = $state({ projection: "ortho" as "ortho" | "persp", top: true, axis: true });
+  const COLOR_MODES: { mode: ViewColorMode; label: string }[] = [
+    { mode: "substrate", label: "Barvy: podle substrátu" },
+    { mode: "object", label: "Barvy: podle objektu" },
+    { mode: "order", label: "Barvy: pořadí tisku" },
+  ];
+  let colorMode = $derived(($settingsStore.view_color_mode ?? "substrate") as ViewColorMode);
+  function cycleColorMode() {
+    const i = COLOR_MODES.findIndex((m) => m.mode === colorMode);
+    settingsStore.persistPatch({ view_color_mode: COLOR_MODES[(i + 1) % COLOR_MODES.length].mode });
+  }
+  function toggleTravels() {
+    settingsStore.persistPatch({ show_travels: !($settingsStore.show_travels ?? false) });
   }
 
   let selectedTransform = $derived(getSelectedTransform());
@@ -665,16 +689,21 @@
   let menuObjectId = $derived(contextMenu.visible ? selectedObjectId(contextMenu.slideIndex) : null);
 </script>
 
-<svelte:window onkeydown={handleKeyDown} onclick={closeContextMenu} />
+<svelte:window
+  onkeydown={handleKeyDown}
+  onclick={closeContextMenu}
+  onpointermove={updateTimelineHover}
+  onmouseout={(e) => !e.relatedTarget && (timelineHover = false)}
+/>
 
 <div bind:this={rootEl} class="glass-panel rounded-lg flex flex-col h-full overflow-hidden relative">
-  <!-- ── Toolbar ── -->
-  <div class="absolute top-0 left-0 right-0 z-10 select-none pl-3 pr-2 py-2 bg-slate-950/80 backdrop-blur-xs border-b border-slate-700/40 flex flex-row gap-3 items-center">
+  <!-- ── Toolbar — přenesený do horní lišty aplikace nad plátno (Header, #canvas-toolbar-slot) ── -->
+  <div use:portal={"canvas-toolbar-slot"} class="relative select-none flex flex-row gap-1.5 items-center min-w-0">
 
     <div class="relative group">
       <button
         onclick={() => { showAxes = !showAxes; }}
-        class="p-2 rounded-lg border shadow transition-colors {showAxes
+        class="p-1.5 rounded-lg border shadow transition-colors {showAxes
           ? 'bg-labaccent border-blue-500/60 text-white'
           : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
       >
@@ -686,7 +715,7 @@
     <div class="relative group">
       <button
         onclick={() => { isMeasuring = !isMeasuring; if (!isMeasuring) measurePoints = []; else { drawTool = null; closeMergePopup(); } }}
-        class="p-2 rounded-lg border shadow transition-colors {isMeasuring
+        class="p-1.5 rounded-lg border shadow transition-colors {isMeasuring
           ? 'bg-yellow-500 border-yellow-400 text-black'
           : measurePoints.length > 0
             ? 'bg-yellow-900/50 border-yellow-500/50 text-yellow-500'
@@ -700,7 +729,7 @@
     <div class="relative group">
       <button
         onclick={resetView}
-        class="p-2 rounded-lg border border-slate-700 shadow-sm bg-slate-900/70 text-slate-300 hover:bg-slate-800 transition-colors"
+        class="p-1.5 rounded-lg border border-slate-700 shadow-sm bg-slate-900/70 text-slate-300 hover:bg-slate-800 transition-colors"
       >
         <Maximize2 class="w-4 h-4" />
       </button>
@@ -709,22 +738,89 @@
 
     <div class="relative group">
       <button
-        onclick={() => canvasRef?.centerOnSlide()}
+        onclick={() => canvasRef?.frameSelection()}
         disabled={selectedIndex < 0 || positions[selectedIndex]?.is_prime}
-        class="p-2 rounded-lg border shadow transition-colors {selectedIndex >= 0 && !positions[selectedIndex]?.is_prime
+        class="p-1.5 rounded-lg border shadow transition-colors {selectedIndex >= 0 && !positions[selectedIndex]?.is_prime
           ? 'bg-slate-900/70 border-slate-700 text-slate-300 hover:bg-slate-800'
           : 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed'}"
       >
         <VectorSquare class="w-4 h-4" />
       </button>
-      <Tooltip text="Na sklíčko" />
+      <Tooltip text="Na výběr (Numpad .)" />
+    </div>
+
+    <!-- ── 3D pohled ── -->
+    <div class="relative group">
+      <button
+        onclick={() => canvasRef?.topView()}
+        class="p-1.5 rounded-lg border shadow transition-colors {viewInfo.top
+          ? 'bg-labaccent border-blue-500/60 text-white'
+          : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+      >
+        <ScanEye class="w-4 h-4" />
+      </button>
+      <Tooltip text="Pohled shora (Numpad 7)" />
+    </div>
+
+    <div class="relative group">
+      <button
+        onclick={() => canvasRef?.obliqueView()}
+        class="p-1.5 rounded-lg border border-slate-700 shadow-sm bg-slate-900/70 text-slate-300 hover:bg-slate-800 transition-colors"
+      >
+        <Box class="w-4 h-4" />
+      </button>
+      <Tooltip text="3D pohled (prostřední tlačítko = otáčení)" />
+    </div>
+
+    <div class="relative group">
+      <button
+        onclick={() => canvasRef?.toggleProjection()}
+        class="p-1.5 rounded-lg border shadow transition-colors {viewInfo.axis
+          ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed'
+          : viewInfo.projection === 'persp'
+            ? 'bg-labaccent border-blue-500/60 text-white'
+            : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+      >
+        <Pyramid class="w-4 h-4" />
+      </button>
+      <Tooltip
+        text={viewInfo.axis
+          ? "Pohled po ose X / Y / Z je vždy ortho"
+          : viewInfo.projection === "persp"
+            ? "Perspektiva — přepnout na ortho (Numpad 5)"
+            : "Ortho — přepnout na perspektivu (Numpad 5)"}
+      />
+    </div>
+
+    <div class="relative group">
+      <button
+        onclick={toggleTravels}
+        class="p-1.5 rounded-lg border shadow transition-colors {$settingsStore.show_travels
+          ? 'bg-labaccent border-blue-500/60 text-white'
+          : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+      >
+        <Route class="w-4 h-4" />
+      </button>
+      <Tooltip text="Přejezdy trysky (Z-hop)" />
+    </div>
+
+    <div class="relative group">
+      <button
+        onclick={cycleColorMode}
+        class="p-1.5 rounded-lg border shadow transition-colors {colorMode !== 'substrate'
+          ? 'bg-labaccent border-blue-500/60 text-white'
+          : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
+      >
+        <Palette class="w-4 h-4" />
+      </button>
+      <Tooltip text={COLOR_MODES.find((m) => m.mode === colorMode)?.label ?? ""} />
     </div>
 
     <div class="relative group">
       <button
         onclick={toggleMergePopup}
         disabled={mergeTIdx < 0}
-        class="p-2 rounded-lg border shadow transition-colors {mergeTIdx < 0
+        class="p-1.5 rounded-lg border shadow transition-colors {mergeTIdx < 0
           ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed'
           : showMergePopup
             ? 'bg-labaccent border-blue-500/60 text-white'
@@ -736,11 +832,11 @@
     </div>
 
     <!-- ── Kreslicí nástroje — vpravo, odlišené od navigačních vlevo ── -->
-    <div class="ml-auto flex flex-row gap-3 items-center">
+    <div class="ml-auto flex flex-row gap-1.5 items-center">
       <div class="relative group">
         <button
           onclick={() => (snapToPaths = !snapToPaths)}
-          class="p-2 rounded-lg border shadow transition-colors {snapToPaths
+          class="p-1.5 rounded-lg border shadow transition-colors {snapToPaths
             ? 'bg-fuchsia-600/80 border-fuchsia-400/60 text-white'
             : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
         >
@@ -752,7 +848,7 @@
       <div class="relative group">
         <button
           onclick={() => (drawHole = !drawHole)}
-          class="p-2 rounded-lg border shadow transition-colors {drawHole
+          class="p-1.5 rounded-lg border shadow transition-colors {drawHole
             ? 'bg-rose-600/80 border-rose-400/60 text-white'
             : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
         >
@@ -764,7 +860,7 @@
       <div class="relative group">
         <button
           onclick={() => toggleDrawTool("rect")}
-          class="p-2 rounded-lg border shadow transition-colors {drawTool === 'rect'
+          class="p-1.5 rounded-lg border shadow transition-colors {drawTool === 'rect'
             ? 'bg-labaccent border-blue-500/60 text-white'
             : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
         >
@@ -776,7 +872,7 @@
       <div class="relative group">
         <button
           onclick={() => toggleDrawTool("ellipse")}
-          class="p-2 rounded-lg border shadow transition-colors {drawTool === 'ellipse'
+          class="p-1.5 rounded-lg border shadow transition-colors {drawTool === 'ellipse'
             ? 'bg-labaccent border-blue-500/60 text-white'
             : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
         >
@@ -788,7 +884,7 @@
       <div class="relative group">
         <button
           onclick={() => toggleDrawTool("line")}
-          class="p-2 rounded-lg border shadow transition-colors {drawTool === 'line'
+          class="p-1.5 rounded-lg border shadow transition-colors {drawTool === 'line'
             ? 'bg-labaccent border-blue-500/60 text-white'
             : 'bg-slate-900/70 border-slate-700 text-slate-400 hover:bg-slate-800'}"
         >
@@ -813,7 +909,7 @@
   <!-- ── Volby kreslení (pod lištou, aby lišta nepřetékala) ── -->
   {#if !drawTool && focusedObject && getTransformIdx(selectedIndex, positions) === focusedObject.slide}
     <div
-      class="absolute top-[58px] left-3 z-10 flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-slate-950/85 backdrop-blur-xs border border-amber-500/40 text-[11px] select-none"
+      class="absolute top-3 left-3 z-10 flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-slate-950/85 backdrop-blur-xs border border-amber-500/40 text-[11px] select-none"
       title="Tažení = posun · rohy = měřítko (Alt = volný poměr stran, Shift = od středu) · dvojklik = rotace · šipky = posun"
     >
       <label
@@ -831,7 +927,7 @@
 
   {#if drawTool}
     <div
-      class="absolute top-[58px] left-3 z-10 flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-slate-950/85 backdrop-blur-xs border border-slate-700/60 text-[11px] select-none"
+      class="absolute top-3 left-3 z-10 flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-slate-950/85 backdrop-blur-xs border border-slate-700/60 text-[11px] select-none"
       title="Ctrl = mřížka · Alt = od středu · Shift = 1:1 · M = magnet"
     >
       <label
@@ -849,7 +945,7 @@
 
   <!-- ── Canvas ── -->
   <div role="region" aria-label="Náhled tiskové plochy" class="flex-1 w-full h-full relative">
-    <Canvas2D
+    <Viewport
       bind:this={canvasRef}
       {bedMaxX}
       {bedMaxY}
@@ -883,10 +979,12 @@
       on:drawToolExit={() => (drawTool = null)}
       on:objectSelected={(e) => dispatch("objectSelected", e.detail)}
       on:objectTransformChanged={handleObjectTransform}
+      on:notice={(e) => showNotice(e.detail)}
+      on:viewChanged={(e) => (viewInfo = e.detail)}
     />
     {#if notice}
       <div
-        class="absolute top-14 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-lg bg-slate-950/90 border border-amber-500/40 text-amber-300 text-xs shadow-lg pointer-events-none"
+        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-lg bg-slate-950/90 border border-amber-500/40 text-amber-300 text-xs shadow-lg pointer-events-none"
       >
         {notice}
       </div>
@@ -897,7 +995,7 @@
   {#if lastShapeActive && $lastDrawnShape}
     {@const sh = $lastDrawnShape.shape}
     <div
-      class="absolute left-3 bottom-14 z-10 w-56 bg-slate-950/90 backdrop-blur-xs border border-slate-700/60 rounded-lg shadow-xl p-2.5 text-xs select-none"
+      class="absolute left-3 {timelineVisible ? 'bottom-10' : 'bottom-3'} transition-[bottom] duration-200 z-10 w-56 bg-slate-950/90 backdrop-blur-xs border border-slate-700/60 rounded-lg shadow-xl p-2.5 text-xs select-none"
     >
       <div class="flex items-center justify-between mb-2">
         <span class="font-bold text-slate-200">{shapeTitle(sh.kind)}</span>
@@ -933,8 +1031,13 @@
   {/if}
 
   <!-- ── Slider náhledu / live preview tisku ── -->
-  <div class="absolute bottom-0 left-0 right-0 z-10 px-3 pb-2 pointer-events-none select-none">
-    <div class="flex items-center gap-1.5 bg-slate-950/80 backdrop-blur-xs rounded-lg px-2.5 py-1.5 pointer-events-auto">
+  <div
+    class="absolute bottom-0 left-0 right-0 z-10 select-none transition-[opacity,translate] duration-200 ease-out {timelineVisible
+      ? 'opacity-100 translate-y-0'
+      : 'opacity-0 translate-y-full pointer-events-none'}"
+    inert={!timelineVisible}
+  >
+    <div class="flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-xs border-t border-slate-700/60 px-2.5 py-1">
       <!-- Stav tisku / label -->
       <span class="text-xs whitespace-nowrap {$printerStore.is_printing ? 'text-emerald-400' : 'text-slate-400'} mr-0.5">
         {#if $printerStore.is_printing}

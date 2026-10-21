@@ -41,7 +41,7 @@ async function dismissWelcomeModal(page: Page) {
 
 /** Bod sklíčka (mm, souřadnice sklíčka) → bod na stránce podle resetCamera. */
 async function slidePoint(page: Page, x: number, y: number) {
-  const box = (await page.locator("canvas").first().boundingBox())!;
+  const box = (await page.getByTestId("viewport-hud").boundingBox())!;
   const margin = 40, bedX = 250, bedY = 210;
   const zoom = Math.min((box.width - margin * 2) / bedX, (box.height - margin * 2) / bedY);
   const panX = (box.width - bedX * zoom) / 2;

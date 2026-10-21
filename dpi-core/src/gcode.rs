@@ -387,6 +387,58 @@ impl<'a> PrintSettings<'a> {
     }
 }
 
+/// Výšky pro 3D náhled: tloušťka skla, mezera trysky nad sklem a průřez
+/// housenky — ze stejných efektivních nastavení (objekt → sklo → globál) jako G-kód.
+#[derive(Debug, Clone, Serialize)]
+pub struct DepositHeights {
+    /// Mezera špičky trysky nad sklem (mm) — `z_offset`.
+    pub gap: f64,
+    /// Plocha průřezu housenky (mm² = µl na mm dráhy); 0 = neznámá.
+    pub area: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SlideHeights {
+    /// Tloušťka skla (mm) — vršek skla nad deskou.
+    pub glass_z: f64,
+    /// Výšky sklíčka (objekty bez vlastního nastavení).
+    #[serde(flatten)]
+    pub slide: DepositHeights,
+    /// Objekty s vlastním nastavením (klíč = id objektu).
+    pub objects: HashMap<String, DepositHeights>,
+}
+
+/// Výšky všech pozic: klíč "-1" = odpliv, "0".."n-1" = vzorková skla.
+/// `params.z_offset` se očekává v mm (jako u `generate_gcode`).
+pub fn print_heights(
+    params: &ProcessParams,
+    slide_overrides: &HashMap<String, SlideOverride>,
+    calibration_factor: f64,
+) -> HashMap<String, SlideHeights> {
+    let ext = ExtrusionCalculator::new(params.filament_diameter, params.flow_multiplier, Some(calibration_factor));
+    let deposit = |st: &PrintSettings| DepositHeights {
+        gap: st.z_offset,
+        area: if ext.calibration_factor > 0.0 {
+            ext.calculate_e_per_mm(st.extrusion_rate, st.extrusion_unit) / ext.calibration_factor
+        } else {
+            0.0
+        },
+    };
+    let mut keys: Vec<String> = (0..params.sample_count).map(|i| i.to_string()).collect();
+    keys.push("-1".to_string());
+    keys.into_iter()
+        .map(|key| {
+            let o = slide_overrides.get(&key);
+            let st = PrintSettings::for_slide(params, o);
+            let objects = o
+                .map(|o| o.objects.iter().map(|(id, ob)| (id.clone(), deposit(&st.with_object(Some(ob))))).collect())
+                .unwrap_or_default();
+            let heights = SlideHeights { glass_z: st.glass_z, slide: deposit(&st), objects };
+            (key, heights)
+        })
+        .collect()
+}
+
 /// Je segment tečka (dva shodné body)?
 pub(crate) fn is_dot_segment(pts: &[Point2D]) -> bool {
     pts.len() == 2 && pts[0] == pts[1]
@@ -958,5 +1010,32 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].code, "G28\nG1 X5");
         assert_eq!(segs[0].msg, None);
+    }
+
+    #[test]
+    fn print_heights_resolve_object_slide_global() {
+        let params: ProcessParams = serde_json::from_value(serde_json::json!({
+            "sample_count": 2, "prime_active": true, "slide_w": 25.0, "slide_h": 75.0, "slide_z": 1.0,
+            "z_offset": 0.05, "nozzle_height": 30.0, "nozzle_hidden": 4.0, "filament_diameter": 1.75,
+            "flow_multiplier": 1.0, "bed_temp": 0.0, "extrusion_rate": 200.0, "extrusion_unit": "nl/mm",
+            "nozzle_diam": 0.4, "infill_style": "", "print_speed": 600.0
+        }))
+        .unwrap();
+        let overrides: HashMap<String, SlideOverride> = serde_json::from_value(serde_json::json!({
+            "-1": { "glass_z": 2.5 },
+            "1": { "z_offset": 0.1, "objects": { "7": { "extrusion_rate": 0.5, "extrusion_unit": "µl/mm", "z_offset": 0.2 } } }
+        }))
+        .unwrap();
+        let h = print_heights(&params, &overrides, 0.32);
+        // Tloušťka: přepis odplivu, jinak slide_z
+        assert_eq!(h["-1"].glass_z, 2.5);
+        assert_eq!(h["0"].glass_z, 1.0);
+        // 200 nl/mm = 0.2 mm² průřezu, nezávisle na kalibraci
+        assert!((h["0"].slide.area - 0.2).abs() < 1e-9);
+        assert_eq!(h["0"].slide.gap, 0.05);
+        // Sklo 1: vlastní mezera; objekt 7 vlastní extruze i mezera
+        assert_eq!(h["1"].slide.gap, 0.1);
+        assert!((h["1"].objects["7"].area - 0.5).abs() < 1e-9);
+        assert_eq!(h["1"].objects["7"].gap, 0.2);
     }
 }

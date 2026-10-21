@@ -19,6 +19,7 @@
     parse_dxf,
     parse_svg,
     generate_gcode,
+    paramsForRust,
     send_manual_command,
     submit_feedback,
     build_gcode_metadata_header,
@@ -232,12 +233,7 @@
       const currentTransforms = $projectStore.transforms;
       const currentOverrides = $projectStore.overrides;
 
-      // Rust expects z_offset in mm — convert if the UI unit is µm
-      const paramsForRust = currentParams.z_unit === "µm"
-        ? { ...currentParams, z_offset: currentParams.z_offset / 1000.0 }
-        : currentParams;
-
-      const res = await generate_gcode(currentPaths, paramsForRust, currentTransforms, currentOverrides, {
+      const res = await generate_gcode(currentPaths, paramsForRust(currentParams), currentTransforms, currentOverrides, {
         bed: {
           max_x: globalBedX,
           max_y: globalBedY,

@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "src-tauri",
-    "dpi-core"
+    "dpi-core",
+    "dpi-render"
 ]
 resolver = "2"
 
@@ -11,3 +12,15 @@ opt-level = "z"     # Optimalizace na velikost
 codegen-units = 1   # Lepší deduplikace kódu
 panic = "abort"     # Odstraní unwinding tabulky
 strip = true        # Strip debug symbolů
+
+# Renderer a wgpu: rychlost před velikostí (sestavení instancí, readback snímků)
+[profile.release.package.dpi-render]
+opt-level = 3
+[profile.release.package.wgpu]
+opt-level = 3
+[profile.release.package.wgpu-core]
+opt-level = 3
+[profile.release.package.wgpu-hal]
+opt-level = 3
+[profile.release.package.naga]
+opt-level = 3

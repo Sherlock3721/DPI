@@ -50,7 +50,7 @@ test("zobrazí se LeftPanel s ovládacími prvky", async ({ page }) => {
 
 test("canvas element se vykreslí", async ({ page }) => {
   await page.goto("/");
-  const canvas = page.locator("canvas");
+  const canvas = page.getByTestId("viewport-hud");
   await expect(canvas).toBeVisible({ timeout: 5000 });
 
   // Canvas musí mít nenulové rozměry
@@ -157,7 +157,7 @@ test("canvas se přizpůsobí při resize okna", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
 
-  const canvas = page.locator("canvas");
+  const canvas = page.getByTestId("viewport-hud");
   await expect(canvas).toBeVisible({ timeout: 5000 });
 
   await page.setViewportSize({ width: 900, height: 600 });

@@ -32,7 +32,7 @@
     slideLabel?: string;
     /** Počet dalších sklíček se shodnou trasou (nabídka „použít na všechna“). */
     twinCount?: number;
-    /** Data pro vykreslení náhledu v Canvas2D. */
+    /** Data pro vykreslení náhledu v plátně (HUD 3D náhledu). */
     preview?: MergePreview | null;
   }
 

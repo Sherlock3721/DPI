@@ -23,9 +23,9 @@ pub use geometry::{
     fit_transforms_to_layout,
 };
 pub use gcode::{
-    calibration_glass_z, compute_z_shift, generate_gcode, generate_prime_preview, glass_z_theoretical,
+    calibration_glass_z, compute_z_shift, generate_gcode, generate_prime_preview, glass_z_theoretical, print_heights,
     is_extrusion_move, is_linear_move, parse_axis_value, parse_gcode_paths, parse_move_axes,
-    split_gcode_by_pauses, GcodePauseSegment, DEFAULT_NOZZLE_CHANGE_GCODE, NOZZLE_ALIGN_MARKER,
+    split_gcode_by_pauses, DepositHeights, GcodePauseSegment, SlideHeights, DEFAULT_NOZZLE_CHANGE_GCODE, NOZZLE_ALIGN_MARKER,
 };
 pub use layout::{get_layout_positions, update_layout, LayoutUpdateResult};
 pub use metadata::{build_csv_protocol, deserialize_metadata, serialize_metadata, GCodeMetadata};

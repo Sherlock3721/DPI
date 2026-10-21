@@ -15,7 +15,11 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // WebGL2 pro wasm renderer 3D náhledu i v headless prohlížeči bez GPU
+        launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] },
+      },
     },
   ],
 

@@ -16,7 +16,7 @@ Uživatelské rozhraní DPI je navrženo s důrazem na přehlednost v laboratorn
   [#badge("1")], [Hlavička aplikace (Header)], [Hlavní menu *Soubor* (projekty, import, export CSV), výběr *Kapaliny*, menu *Nástroje* (Bracket Export, Diagnostika), *Nastavení* a nápověda.],
   [#badge("2")], [Správa připojení tiskárny], [Výběr sériového portu, baudrate, stav spojení a živá telemetrie tiskárny (aktuální souřadnice X/Y/Z a teplota podložky).],
   [#badge("3")], [Procesní parametry a krájení (Slicing)], [Volba typu podložního skla, konfigurace jehly/trysky, výška Z-offsetu, dávkovací rychlost (nl/mm), styl výplně a tlačítka spuštění tisku.],
-  [#badge("4")], [Centrální grafické plátno (Canvas2D)], [Interaktivní vizualizace tiskové podložky Prusa MK3S (250 × 210 mm), rozložení sklíček, odplivové linky a aktuální polohy trysky.],
+  [#badge("4")], [Centrální 3D plátno], [Interaktivní 3D vizualizace tiskové podložky Prusa MK3S (250 × 210 mm) s tloušťkou sklíček, trasami jako housenkami ve skutečné výšce, odplivové linky a aktuální polohy trysky. Plochou lze libovolně otáčet.],
   [#badge("5")], [Lokální přepisy sklíček (Slide Overrides)], [Individuální nastavení Z-offsetu, dávkování, rychlosti nebo stylu výplně pro každé jednotlivé sklíčko zvlášť.],
   [#badge("6")], [Ovládací panely (Kamera, Jog, Terminál)], [Živý obraz z USB mikroskopu s možností rotace o 180°, manuální krokovací klávesnice (Jog) a vestavěný terminál.],
 )
@@ -41,8 +41,8 @@ Levý panel je řídícím centrem pro přípravu tiskové úlohy a její odesl�
   [#badge("8")], [Tlačítka řízení tisku], [Zelené tlačítko *Spustit tisk*, žluté *Pozastavit* a červené *Nouzové zastavení (STOP)* s automatickým odjezdem hlavy.],
 )
 
-== 4.3 Centrální plátno (Canvas2D)
-Plátno věrně simuluje pracovní prostor tiskárny Prusa MK3S:
+== 4.3 Centrální 3D plátno
+Plátno věrně simuluje pracovní prostor tiskárny Prusa MK3S ve 3D. Výchozí je pohled shora (stejný jako dřívější 2D plátno); plochou lze kdykoli otočit a prohlédnout si tloušťku sklíček i jednotlivé dráhy z boku:
 
 #align(center)[
   #image("../assets/figures/fig03_canvas_multislide.svg", width: 75%)
@@ -54,16 +54,29 @@ Plátno věrně simuluje pracovní prostor tiskárny Prusa MK3S:
   [#badge("1")], [Ohraničení podložky (Bed Limits)], [Modrý obdélník reprezentující fyzické rozměry ocelového plátu Prusa MK3S (výchozí 250 × 210 mm).],
   [#badge("2")], [Odplivová dráha (Prime Line)], [Svislá linie na levém okraji podložky. Zde tiskárna před tiskem vytlačí definovaný objem kapaliny pro ustavení menisku.],
   [#badge("3")], [Matrice podložních sklíček], [Automaticky vypočtená mřížka skel uspořádaná do sloupců a řad s respektováním nastavených rozestupů (#raw("multi_spacing")).],
-  [#badge("4")], [Vektorový vzor kapek], [Vizuální náhled drah kapek. Čárkované čáry znázorňují rychlopřejezdy bez dávkování, plné čáry aktivní extruzi.],
+  [#badge("4")], [Vektorový vzor kapek], [Dráhy se kreslí jako 3D housenky: šířka odpovídá šířce čáry trysky, výška objemu dávkování (z nastavení objektu → skla → globálu, stejně jako G-kód). Tečky jsou kapky. Část trasy mimo sklo (netiskne se) je slabě čárkovaná.],
   [#badge("5")], [Počátek souřadnic [0, 0]], [Levý přední roh podložky (Home pozice os X a Y).],
 )
+
+=== Otáčení a pohyb pohledu (jako v Blenderu)
+- *Prostřední tlačítko myši – tažení:* Otáčí celou tiskovou plochou kolem středu otáčení. Z pohledu shora se automaticky přepne do perspektivy.
+- #kbd("Shift") + *prostřední tlačítko:* Posun pohledu. #kbd("Ctrl") + *prostřední tlačítko:* Přiblížení.
+- *Kolečko myši:* Přiblížení / oddálení k místu pod kurzorem. *Levé tlačítko do prázdna:* Posun pohledu.
+- *Klik na substrát nebo objekt:* Kromě výběru nastaví střed otáčení na kliknutý prvek a pohled se na něj plynule vycentruje (měřítko se nemění). Lze vypnout v *Nastavení → Program → 3D náhled*.
+- *Numerická klávesnice:* #kbd("7") shora, #kbd("1") zepředu, #kbd("3") zprava (s #kbd("Ctrl") opačně), #kbd("5") přepnutí ortho ↔ perspektiva, #kbd("4") #kbd("6") #kbd("8") #kbd("2") otočení o 15°, #kbd(".") přiblížení na výběr, #kbd("Home") celá plocha.
+- *Navigační gizmo* (vpravo dole): tažením otáčí pohledem, klikem na osu X / Y / Z nastaví pohled po ose – vhodné pro notebooky bez prostředního tlačítka.
+- Úpravy (posun, měřítko, rotace, kreslení, pravítko) fungují v libovolném natočení; jen v bočním pohledu (rovnoběžně s deskou) jsou vypnuté.
 
 === Horní nástrojová lišta plátna (Canvas Toolbar)
 V záhlaví plátna se nachází rychlá nástrojová lišta s interaktivními funkcemi:
 - *Zobrazení mřížky (Grid):* Zapne nebo vypne souřadnou mřížku tiskové podložky.
 - *Pravítko (Měření vzdáleností):* Aktivuje interaktivní měřicí režim. Kliknutím na dva libovolné body na plátně se zobrazí přesná vzdálenost v milimetrech včetně složek $Delta X$ a $Delta Y$.
-- *Vycentrovat (Fit View):* Vycentruje celou tiskovou desku do okna plátna.
-- *Na sklíčko (Center on Slide):* Přiblíží a vycentruje pohled na konkrétní vybrané podložní sklíčko.
+- *Vycentrovat (Fit View):* Vrátí pohled shora na celou tiskovou desku.
+- *Na výběr:* Přiblíží pohled na vybraný objekt, jinak na vybrané sklíčko (natočení zůstává).
+- *Pohled shora / 3D pohled:* Přepne do pohledu shora, resp. do šikmého pohledu na celou plochu.
+- *Ortho / Perspektiva:* Přepíná projekci bez skoku měřítka.
+- *Přejezdy:* Zobrazí přejezdy trysky mezi drahami včetně zdvihu (Z-hop).
+- *Barvení:* Přepíná barvy drah podle substrátu, podle objektu, nebo podle pořadí tisku (barevný přechod od první k poslední dráze – rozliší jednotlivé trasy).
 - *Sloučit uzly (Merge Nodes):* Otevře vyskakovací okno pro vyhlazení a svaření rozpojených vektorových drah.
 - *Kreslicí nástroje (Obdélník, Elipsa, Úsečka):* Umožňují nakreslit geometrické tvary přímo na sklíčko bez nutnosti otevírat externí grafický editor.
 

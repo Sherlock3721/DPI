@@ -252,6 +252,9 @@
       // Theme se mohl změnit přepínačem (persistPatch) až po načtení kopie
       // settings při otevření modálu — nesmí ho přepsat stará hodnota.
       settings.theme = currentTheme;
+      // Přepínače 3D náhledu v liště plátna se ukládají hned (persistPatch)
+      settings.show_travels = $settingsStore.show_travels ?? false;
+      settings.view_color_mode = $settingsStore.view_color_mode ?? "substrate";
       await save_app_settings(settings);
       dispatch("save");
       isOpen = false;
@@ -675,6 +678,7 @@
             <!-- ═══ 7. PROGRAM ═══ -->
             {#if activeTab === "program"}
               <SettingsProgram
+                bind:settings
                 {expertModeActive}
                 {snowSeason}
                 bind:snowDisabled

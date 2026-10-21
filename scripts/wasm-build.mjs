@@ -17,9 +17,16 @@ if (!onPath && !existsSync(cargoBin)) {
   process.exit(1);
 }
 
-const result = spawnSync(
-  cmd,
+// dpi-core (výpočty) a dpi-render (3D náhled nad WebGL2) — selhání kteréhokoli = chyba
+const builds = [
   ["build", "dpi-core", "--target", "bundler", "--out-dir", "../src/wasm"],
-  { stdio: "inherit" },
-);
-process.exit(result.status ?? 1);
+  [
+    "build", "dpi-render", "--target", "bundler", "--out-dir", "../src/wasm-render",
+    "--", "--no-default-features", "--features", "wasm",
+  ],
+];
+
+for (const args of builds) {
+  const result = spawnSync(cmd, args, { stdio: "inherit" });
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}

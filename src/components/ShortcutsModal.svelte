@@ -41,6 +41,18 @@
     { keys: ["Dvojklik"],        desc: "Přepnout Scale ↔ Rotate mód (trasa i objekt)" },
     { keys: ["RMB"],             desc: "Kontextové menu sklíčka" },
 
+    { group: "3D pohled" },
+    { keys: ["MMB tažení"],      desc: "Otáčet plochou kolem středu (pivotu)" },
+    { keys: ["Shift", "MMB tažení"], desc: "Posun pohledu" },
+    { keys: ["Ctrl", "MMB tažení"], desc: "Přiblížení" },
+    { keys: ["LMB"],             desc: "Klik na substrát / objekt nastaví střed otáčení a vycentruje" },
+    { keys: ["Numpad 7"],        desc: "Pohled shora" },
+    { keys: ["Numpad 1 / 3"],    desc: "Zepředu / zprava (s Ctrl opačně)" },
+    { keys: ["Numpad 5"],        desc: "Přepnout ortho ↔ perspektiva" },
+    { keys: ["Numpad 4 6 8 2"],  desc: "Otočit o 15°" },
+    { keys: ["Numpad ."],        desc: "Přiblížit na výběr" },
+    { keys: ["Home"],            desc: "Zobrazit celou plochu" },
+
     { group: "Modifikátory při tažení" },
     { keys: ["Ctrl"],            desc: "Přichytit k mřížce (Snap to Grid)" },
     { keys: ["Alt"],             desc: "Přesun / rotace všech substrátů najednou" },

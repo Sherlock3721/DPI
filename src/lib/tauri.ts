@@ -117,6 +117,11 @@ export interface ProcessParams {
   /** Frontend-only příznak: zda provést full bed leveling (G28) před tiskem. Rust toto pole ignoruje. */
   bed_leveling?: boolean;
 }
+/** Parametry pro Rust: z_offset v mm (UI ho může držet v µm). */
+export function paramsForRust(params: ProcessParams): ProcessParams {
+  return params.z_unit === "µm" ? { ...params, z_offset: params.z_offset / 1000.0 } : params;
+}
+
 export interface SlideOverride {
   name?: string;
   note?: string;
@@ -222,6 +227,9 @@ export interface LevelingPoint {
   y: number;
 }
 
+export type ViewColorMode = "substrate" | "object" | "order";
+export type RenderHostSetting = "auto" | "native" | "wasm";
+
 /** Kompletní nastavení aplikace — odráží strukturu AppSettings v src-tauri/src/settings.rs. */
 export interface AppSettings {
   // Tisková plocha
@@ -284,6 +292,18 @@ export interface AppSettings {
   show_gcode_stats?: boolean;
   /** Přehled pozice a rozměrů vybrané trasy / objektu v plátně. */
   show_object_info?: boolean;
+  /** 3D náhled: barvení drah. */
+  view_color_mode?: ViewColorMode;
+  /** 3D náhled: přejezdy trysky včetně Z-hopu. */
+  show_travels?: boolean;
+  /** 3D náhled: převýšení výšky housenek (×). */
+  z_exaggeration?: number;
+  /** Otočení z ortho pohledu přepne do perspektivy, pohled po ose zpět do ortho. */
+  auto_perspective?: boolean;
+  /** Klik na substrát / objekt plynule vycentruje pohled. */
+  center_on_click?: boolean;
+  /** Vykreslování 3D náhledu: wgpu v aplikaci, WebGL2 ve WebView, nebo podle systému. */
+  render_host?: RenderHostSetting;
   path_fineness: number;
   z_step: number;
   liquid_density: number;

@@ -36,7 +36,7 @@ async function boot(page: Page) {
   await page.addInitScript({ content: TAURI_MOCK_SCRIPT });
   await page.addInitScript({ content: PATHS_PATCH });
   await page.goto("/");
-  await page.waitForSelector("canvas", { timeout: 8000 });
+  await page.waitForSelector("[data-testid=viewport-hud]", { timeout: 8000 });
   const closeBtn = page.locator('button[title="Přeskočit uvítací obrazovku"]');
   if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) await closeBtn.click();
   await page.waitForTimeout(500);
@@ -158,7 +158,7 @@ test("merge se promítne i na ostatní sklíčka se shodnou trasou", async ({ pa
   await expect(popup).toBeHidden();
 
   // Přepnutí na druhý substrát — jeho trasa je sloučená také
-  const canvas = page.locator("canvas");
+  const canvas = page.getByTestId("viewport-hud");
   const box = (await canvas.boundingBox())!;
   const zoom = Math.min((box.width - 80) / 250, (box.height - 80) / 210);
   const panX = (box.width - 250 * zoom) / 2;
@@ -179,7 +179,8 @@ test("merge se promítne i na ostatní sklíčka se shodnou trasou", async ({ pa
  *  a nově vznikající uzly, takže jejich počet měří, zda se náhled vykresluje. */
 async function cyanPixels(page: Page) {
   return await page.evaluate(() => {
-    const c = document.querySelector("canvas") as HTMLCanvasElement;
+    // Náhled sloučení kreslí HUD (2D canvas nad scénou)
+    const c = document.querySelector("[data-testid=viewport-hud]") as HTMLCanvasElement;
     const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
     let cyan = 0;
     for (let i = 0; i < d.length; i += 4) {

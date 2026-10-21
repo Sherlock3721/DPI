@@ -557,6 +557,182 @@ pub fn union_loops(contours: &[Contour]) -> Option<Vec<Contour>> {
     Some(loops)
 }
 
+// ─── Kompenzace šířky stopy ─────────────────────────────────────────────────
+
+/// Mřížka hran obrysů pro dotaz na vzdálenost bodu od nejbližší hrany
+/// (do vzdálenosti `range`).
+struct EdgeGrid {
+    cell: f64,
+    edges: Vec<(Point2D, Point2D)>,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl EdgeGrid {
+    fn new(contours: &[Contour], range: f64) -> Self {
+        let cell = range.max(1e-3);
+        let mut grid = EdgeGrid { cell, edges: Vec::new(), cells: Default::default() };
+        for c in contours {
+            for i in 0..c.pts.len() {
+                let (a, b) = c.edge(i);
+                let id = grid.edges.len();
+                grid.edges.push((a, b));
+                // Vzorky po hraně s krokem buňky — dotaz prohledá okolí 5×5
+                let steps = (a.distance(&b) / cell).ceil().max(1.0) as usize;
+                for k in 0..=steps {
+                    let t = k as f64 / steps as f64;
+                    let key = grid.key(Point2D::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+                    let list = grid.cells.entry(key).or_default();
+                    if list.last() != Some(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+        }
+        grid
+    }
+
+    fn key(&self, p: Point2D) -> (i64, i64) {
+        ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64)
+    }
+
+    /// Vzdálenost k nejbližší hraně, nejvýš ~`range` (dál = nekonečno).
+    fn dist(&self, p: Point2D) -> f64 {
+        let (cx, cy) = self.key(p);
+        let mut best = f64::INFINITY;
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                for &e in self.cells.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    let (a, b) = self.edges[e];
+                    best = best.min(dist_to_segment(p, a, b));
+                }
+            }
+        }
+        best
+    }
+}
+
+fn dist_to_segment(p: Point2D, a: Point2D, b: Point2D) -> f64 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-18 {
+        return p.distance(&a);
+    }
+    let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0);
+    p.distance(&Point2D::new(a.x + t * dx, a.y + t * dy))
+}
+
+/// Obrysy oblasti zúžené o `r`: každá hranice (vnější i díry) se posune o `r`
+/// dovnitř výplně. Tryska pak jede `r` od okraje a vytištěný okraj housenky
+/// leží na okraji tvaru. Vypouklé rohy zůstanou ostré (průsečík posunutých
+/// hran), vnitřní rohy se zaoblí. None, pokud zúžení tvar zdeformuje (část
+/// užší než 2·r, ostrá špička) — volající pak použije nezúžený tvar.
+pub fn inset_region(contours: &[Contour], r: f64) -> Option<Vec<Contour>> {
+    if r <= 0.0 || r.is_nan() {
+        return Some(contours.to_vec());
+    }
+    const ARC_STEP: f64 = std::f64::consts::PI / 12.0; // 15°
+    let grid = EdgeGrid::new(contours, r);
+    let mut out = Vec::with_capacity(contours.len());
+    for c in contours {
+        let mut pts: Vec<Point2D> = Vec::with_capacity(c.pts.len());
+        for &p in &c.pts {
+            if pts.last().is_none_or(|q| q.distance(&p) > 1e-9) {
+                pts.push(p);
+            }
+        }
+        while pts.len() > 1 && pts[0].distance(pts.last().unwrap()) <= 1e-9 {
+            pts.pop();
+        }
+        let n = pts.len();
+        if n < 3 {
+            return None;
+        }
+        let dir = |i: usize| {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            let l = a.distance(&b);
+            ((b.x - a.x) / l, (b.y - a.y) / l)
+        };
+
+        // Strana výplně: zkouška vlevo a vpravo od středu nejdelší hrany
+        let len = |i: usize| pts[i].distance(&pts[(i + 1) % n]);
+        let k = (0..n).max_by(|&i, &j| len(i).partial_cmp(&len(j)).unwrap_or(Ordering::Equal))?;
+        let (dx, dy) = dir(k);
+        let mid = Point2D::new((pts[k].x + pts[(k + 1) % n].x) / 2.0, (pts[k].y + pts[(k + 1) % n].y) / 2.0);
+        let eps = (len(k) * 0.25).min(1e-3);
+        let probe = |s: f64| in_fill(Point2D::new(mid.x - dy * eps * s, mid.y + dx * eps * s), contours);
+        let side = match (probe(1.0), probe(-1.0)) {
+            (true, false) => 1.0,
+            (false, true) => -1.0,
+            _ => return None,
+        };
+        // Normála hrany směrem do výplně
+        let normal = |i: usize| {
+            let (dx, dy) = dir(i);
+            (-dy * side, dx * side)
+        };
+
+        let mut q: Vec<Point2D> = Vec::with_capacity(n + n / 4);
+        // Rozsah bodů každého vrcholu — hrana mezi koncem vrcholu i a začátkem
+        // vrcholu i+1 je posunutá hrana i
+        let mut span: Vec<(usize, usize)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let (p, prev) = (pts[i], (i + n - 1) % n);
+            let (n1, n2) = (normal(prev), normal(i));
+            let (d1, d2) = (dir(prev), dir(i));
+            let convex = (d1.0 * d2.1 - d1.1 * d2.0) * side >= 0.0;
+            let cos_t = (n1.0 * n2.0 + n1.1 * n2.1).clamp(-1.0, 1.0);
+            let theta = cos_t.acos();
+            let first = q.len();
+            if convex || theta < ARC_STEP {
+                // Průsečík posunutých hran; příliš ostrá špička se nezúží
+                if 1.0 + cos_t < 5e-3 {
+                    return None;
+                }
+                let f = r / (1.0 + cos_t);
+                q.push(Point2D::new(p.x + (n1.0 + n2.0) * f, p.y + (n1.1 + n2.1) * f));
+            } else {
+                let a1 = n1.1.atan2(n1.0);
+                let mut delta = n2.1.atan2(n2.0) - a1;
+                if delta > std::f64::consts::PI {
+                    delta -= 2.0 * std::f64::consts::PI;
+                } else if delta < -std::f64::consts::PI {
+                    delta += 2.0 * std::f64::consts::PI;
+                }
+                let steps = (delta.abs() / ARC_STEP).ceil().max(1.0) as usize;
+                for j in 0..=steps {
+                    let a = a1 + delta * j as f64 / steps as f64;
+                    q.push(Point2D::new(p.x + r * a.cos(), p.y + r * a.sin()));
+                }
+            }
+            span.push((first, q.len() - 1));
+        }
+
+        // Kontrola: posunuté hrany míří stejně jako původní (jinak se tvar
+        // převrátil) a body i středy hran leží aspoň r od všech okrajů
+        let min_d = 0.98 * r;
+        for i in 0..n {
+            let (a, b) = (q[span[i].1], q[span[(i + 1) % n].0]);
+            let (dx, dy) = dir(i);
+            if (b.x - a.x) * dx + (b.y - a.y) * dy <= 0.0 {
+                return None;
+            }
+        }
+        for j in 0..q.len() {
+            let (a, b) = (q[j], q[(j + 1) % q.len()]);
+            let m = Point2D::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+            if grid.dist(a) < min_d || grid.dist(m) < min_d {
+                return None;
+            }
+        }
+        if !in_fill(q[0], contours) {
+            return None;
+        }
+        q.push(q[0]);
+        out.push(Contour::new(q, c.group, c.src, c.stroke).with_hole(c.hole));
+    }
+    Some(out)
+}
+
 // ─── Nejkratší cesty uvnitř výplně ──────────────────────────────────────────
 
 /// Nejkratší cesty mezi body (terminály) vedoucí jen výplní nebo po její

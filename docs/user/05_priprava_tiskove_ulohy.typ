@@ -22,6 +22,7 @@ DPI podporuje dva průmyslové a vědecké formáty vektorové grafiky:
 Při načtení grafiky DPI automaticky provádí analýzu rozměrů:
 - Pokud vzor přesahuje fyzické rozměry zvoleného sklíčka (např. 76 × 26 mm), aplikace automaticky nabídne proporční zmenšení.
 - *Hlídání okrajů skla:* Tryska má určitý vnější průměr. DPI automaticky hlídá, aby žádná část kapky ani kovové patice jehly nezasáhla okraj sklíčka. Při změně průměru jehly na větší velikost aplikace upozorní na nutnost přizpůsobení geometrie.
+- *Kompenzace šířky stopy:* Tryska u vyplněných tvarů jede o polovinu svého průměru uvnitř obrysu, takže vytištěný tvar má rozměr z výkresu (čtverec 24 mm se vytiskne jako 24 mm, ne 24 mm + šířka housenky). Díry se naopak o polovinu průměru zvětší. Ostré špičky se tím mírně zkrátí; tvary užší než tryska a čáry se tisknou beze změny. Rozlití kapaliny nad šířku trysky kompenzace nepokrývá.
 
 == 5.3 Multiplikace vzorků a mřížka podložky
 V laboratorní praxi je nutné zpracovávat desítky identických nebo mírně modifikovaných vzorků najednou.

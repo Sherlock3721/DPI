@@ -2,6 +2,7 @@ pub mod comms;
 pub mod print_tracker;
 pub mod settings;
 pub mod sync;
+pub mod viewport;
 
 use comms::{
     auto_find_printer, spawn_comms_loop, try_connect_port, PrinterCommand, PrinterManager,
@@ -500,6 +501,10 @@ pub fn run() {
             save_feedback,
             get_startup_time,
             get_local_ip,
+            viewport::viewport_init,
+            viewport::viewport_scene,
+            viewport::viewport_frame,
+            viewport::viewport_dispose,
         ])
         .setup(|app| {
             // Spusť WebSocket server pro sdílení stavu na pozadí

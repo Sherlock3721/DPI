@@ -100,6 +100,24 @@ pub struct AppSettings {
     /// Přehled pozice a rozměrů vybrané trasy / objektu v plátně.
     #[serde(default = "default_true")]
     pub show_object_info: bool,
+    /// 3D náhled: barvení drah — "substrate" | "object" | "order" (pořadí tisku).
+    #[serde(default = "default_view_color_mode")]
+    pub view_color_mode: String,
+    /// 3D náhled: přejezdy trysky včetně Z-hopu.
+    #[serde(default)]
+    pub show_travels: bool,
+    /// 3D náhled: převýšení výšky housenek (×).
+    #[serde(default = "default_z_exaggeration")]
+    pub z_exaggeration: f64,
+    /// Otočení z ortho pohledu přepne do perspektivy, pohled po ose zpět do ortho.
+    #[serde(default = "default_true")]
+    pub auto_perspective: bool,
+    /// Klik na substrát / objekt plynule vycentruje pohled.
+    #[serde(default = "default_true")]
+    pub center_on_click: bool,
+    /// Vykreslování 3D náhledu — "auto" | "native" (wgpu v aplikaci) | "wasm" (WebGL2 ve WebView).
+    #[serde(default = "default_render_host")]
+    pub render_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_fineness: Option<f64>,
     pub z_step: f64,
@@ -143,6 +161,18 @@ pub fn parse_settings(stored_json: &str) -> Result<AppSettings, String> {
 }
 
 /// Vestavěné výchozí nastavení (validované při testech).
+fn default_view_color_mode() -> String {
+    "substrate".to_string()
+}
+
+fn default_z_exaggeration() -> f64 {
+    1.0
+}
+
+fn default_render_host() -> String {
+    "auto".to_string()
+}
+
 fn default_true() -> bool {
     true
 }

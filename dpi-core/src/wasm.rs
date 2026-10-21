@@ -1,9 +1,11 @@
 use wasm_bindgen::prelude::*;
 
 use crate::bracket::{build_bracket_stl, compute_bracket_geometry, generate_bracket_svg, BracketParams, RectF};
+use crate::gcode::print_heights;
 use crate::geometry::{clip_paths_to_slide, compute_world_aabb};
 use crate::path_processing::process_substrate_paths;
-use crate::types::{LayoutPosition, SliceParams, SubstratePaths, Transform};
+use crate::types::{LayoutPosition, ProcessParams, SliceParams, SlideOverride, SubstratePaths, Transform};
+use std::collections::HashMap;
 
 fn make_transform(gui_dx: f64, gui_dy: f64, scale: f64, rotation_deg: f64, cx: f64, cy: f64) -> Transform {
     Transform { gui_dx, gui_dy, scale, rotation: rotation_deg, cx, cy }
@@ -216,4 +218,17 @@ pub fn wasm_bracket_stl(
         left_wall_rect, bottom_wall_rect, wall_extend,
         bracket_thickness, wall_extra_height,
     )
+}
+
+/// Výšky pro 3D náhled (tloušťka skla, mezera, průřez housenky) — viz
+/// `gcode::print_heights`. Vstup JSON `ProcessParams` (z_offset v mm) a mapa
+/// `SlideOverride`, výstup JSON `{ "-1" | "0".. : SlideHeights }`.
+#[wasm_bindgen]
+pub fn wasm_print_heights(params_json: &str, overrides_json: &str, calibration_factor: f64) -> Result<String, JsValue> {
+    let params: ProcessParams = serde_json::from_str(params_json)
+        .map_err(|e| JsValue::from_str(&format!("Neplatné parametry: {e}")))?;
+    let overrides: HashMap<String, SlideOverride> = serde_json::from_str(overrides_json)
+        .map_err(|e| JsValue::from_str(&format!("Neplatné přepisy: {e}")))?;
+    serde_json::to_string(&print_heights(&params, &overrides, calibration_factor))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }

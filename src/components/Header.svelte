@@ -62,10 +62,12 @@
   const toggleOn = (s: AppSettings, t: (typeof viewToggles)[number]) => s[t.key] ?? t.fallback;
 </script>
 
+<!-- Stejná 12sloupcová mřížka a mezery jako hlavní rozložení (App.svelte):
+     prostřední slot leží přesně nad plátnem a má jeho šířku -->
 <header
-  class="glass-panel flex items-center justify-between px-4 py-2 rounded-lg border border-slate-700/30 relative z-50"
+  class="glass-panel grid grid-cols-12 gap-3 items-center py-1.5 rounded-lg border border-slate-700/30 relative z-50"
 >
-  <div class="flex items-center gap-6">
+  <div class="col-span-3 min-w-0 flex items-center gap-6 pl-4">
     <!-- DROPDOWN MENU BAR (100% PyQt6 Parity) -->
     <div class="flex items-center gap-4 text-xs font-semibold text-slate-400">
       <!-- SOUBOR -->
@@ -286,4 +288,6 @@
       </div>
     </div>
   </div>
+  <!-- Lišta nástrojů plátna (GraphicsView ji sem přenese akcí portal) -->
+  <div id="canvas-toolbar-slot" class="col-span-6 min-w-0"></div>
 </header>

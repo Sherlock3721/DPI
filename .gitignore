@@ -5,6 +5,7 @@ target/
 dist/
 node_modules/
 src/wasm/
+src/wasm-render/
 
 # =========================
 # Logy a testy

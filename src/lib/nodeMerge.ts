@@ -7,10 +7,10 @@
  * volba kotvy ani vyjmutí uzlu v jedné skupině neovlivní ostatní.
  *
  * Modul je čistý (bez vazby na Svelte): UI drží MergeNodesPopup, vykreslení
- * náhledu Canvas2D přes drawMergePreview.
+ * náhledu v HUD plátna přes drawMergePreview (src/lib/viewport/hud.ts).
  */
 import type { Point2D, SubstratePaths, Transform } from "./tauri";
-import { tpt } from "./canvas2dDraw";
+import { tpt } from "./pathMath";
 
 /** Kvantizace souřadnice pro klíč uzlu (1 nm) — totožný bod má totožný klíč. */
 const KEY_QUANT = 1e-6;
