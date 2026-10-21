@@ -262,6 +262,17 @@ export class OrbitCamera {
     return { x: o[0] + d[0] * t, y: o[1] + d[1] * t };
   }
 
+  /** Bod pod kurzorem v rovině kolmé na pohled, procházející targetem
+   *  (v ní platí `scale` i u perspektivy) — kotva zoomu, když rovinu desky
+   *  paprsek netrefí (boční pohled). */
+  screenToFocal(sx: number, sy: number): Vec3 {
+    const r = this.right(),
+      u = this.up();
+    const ox = (sx - this.width / 2) / this.scale,
+      oy = (this.height / 2 - sy) / this.scale;
+    return add(add(this.target, mul(r, ox)), mul(u, oy));
+  }
+
   /** Lze v aktuálním pohledu editovat v rovině desky? (Ne v bočním pohledu.) */
   canEditPlane(): boolean {
     return Math.sin(this.pitch) >= GRAZING * 1.5;

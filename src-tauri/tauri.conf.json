@@ -1,6 +1,6 @@
 {
   "productName": "Droplet Printing Interface",
-  "version": "2.2.9",
+  "version": "2.2.10",
   "identifier": "cz.vut.droplet-printer",
   "bundle": {
     "active": true,

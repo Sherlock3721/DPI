@@ -328,12 +328,16 @@
     return best;
   }
 
-  /** Bod pro zoom kolečkem: vršek skla pod kurzorem → deska → rovina targetu. */
-  function wheelAnchor(sx: number, sy: number): Vec3 | null {
-    const i = pickSlide(sx, sy);
-    const z = i >= 0 ? glassTop(i) : 0;
-    const p = cam.screenToPlane(sx, sy, z, true) ?? cam.screenToPlane(sx, sy, cam.target[2], true);
-    return p ? [p.x, p.y, p ? z : cam.target[2]] : null;
+  /** Bod pro zoom kolečkem: vršek skla pod kurzorem → deska → rovina kolmá
+   *  na pohled přes target (boční pohled, kde rovinu desky paprsek netrefí). */
+  function wheelAnchor(sx: number, sy: number): Vec3 {
+    if (cam.canEditPlane()) {
+      const i = pickSlide(sx, sy);
+      const z = i >= 0 ? glassTop(i) : 0;
+      const p = cam.screenToPlane(sx, sy, z, true);
+      if (p) return [p.x, p.y, z];
+    }
+    return cam.screenToFocal(sx, sy);
   }
 
   function markInteraction() {
@@ -960,9 +964,13 @@
     return el instanceof HTMLInputElement && !["checkbox", "radio", "button", "range"].includes(el.type);
   }
 
-  /** Pohled po ose (numpad 1/3/7, gizmo) — vždy ortho. */
+  /** Pohled po ose (numpad 1/3/7, gizmo) — vždy ortho. Z boku se pivot
+   *  zvedne tak, aby vršek desky ležel v dolní třetině výřezu (nad ním je
+   *  to podstatné — skla a dráhy). */
   function axisView(yaw: number, pitch: number) {
-    cam.animateTo({ yaw, pitch, projection: "ortho" });
+    const side = pitch < PITCH_TOP / 2;
+    const target: Vec3 = side ? [cam.target[0], cam.target[1], (height * 0.2) / cam.scale] : [...cam.target];
+    cam.animateTo({ yaw, pitch, projection: "ortho", target });
     scheduleDraw();
   }
 
@@ -1943,6 +1951,8 @@
         slides: slideFrames(st),
       });
       await host.render(frame, w, h);
+      // Komponenta mohla být mezitím odpojena (HMR, zavření)
+      if (destroyed || !hudCtx) return;
     }
     drawHud(st, view);
     if (!ready) ready = true;
@@ -2040,11 +2050,12 @@
 
     if (navOp?.kind === "orbit") hud.drawPivot(ctx, view);
 
-    // Osy — shora popisky podél hran desky; z boku (ortho po ose X / Y) navíc
-    // svislá osa Z, aby šla odečíst výška skel a drah
-    if (showAxes) {
-      if (view.isAxisView() && !view.isTopDown()) hud.drawSideAxes(ctx, view, bedMaxX, bedMaxY, BED_THICKNESS);
-      else hud.drawAxisLabels(ctx, view, bedMaxX, bedMaxY, gMajor);
+    // Osy s jednotkami jen v pohledu přesně po ose (ortho): shora popisky
+    // podél hran desky, z boku navíc svislá osa Z pro odečet výšky skel a drah.
+    // V natočeném pohledu se nekreslí — rozměry v něm odečíst nejdou.
+    if (showAxes && view.isAxisView()) {
+      if (view.isTopDown()) hud.drawAxisLabels(ctx, view, bedMaxX, bedMaxY, gMajor);
+      else hud.drawSideAxes(ctx, view, bedMaxX, bedMaxY, BED_THICKNESS);
     }
 
     hud.drawGizmo(ctx, view, hud.gizmoLayout(width), hoverGizmo);
@@ -2311,6 +2322,7 @@
   });
 
   // ─── Hostitel rendereru ───────────────────────────────────────────────────
+  let destroyed = false;
   let _hostSetting: string | undefined = undefined;
   let _hostGen = 0;
 
@@ -2384,6 +2396,7 @@
     // Po prvním framu zajistíme rozměry z BoundingClientRect — obchází případné
     // timing problémy kdy ResizeObserver vystřelí před finálním CSS grid layoutem.
     requestAnimationFrame(() => {
+      if (destroyed || !container) return;
       const rect = container.getBoundingClientRect();
       applySize(rect.width, rect.height);
       if (!cam.initialized) resetCamera();
@@ -2401,6 +2414,8 @@
     }
 
     return () => {
+      destroyed = true;
+      hudCtx = null;
       ro.disconnect();
       window.removeEventListener("wheel", handleWheel, { capture: true });
       _hostGen++;

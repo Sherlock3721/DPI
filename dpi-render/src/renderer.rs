@@ -45,6 +45,7 @@ struct Globals {
     nozzle_real: [f32; 4],
     nozzle_preview: [f32; 4],
     clear: [f32; 4],
+    /// Šířka, výška desky, přesah podlahy, tloušťka podložky.
     bed: [f32; 4],
     light: [f32; 4],
     misc: [f32; 4],
@@ -199,6 +200,8 @@ struct Targets {
 
 struct Pipelines {
     ground: wgpu::RenderPipeline,
+    slab_walls: wgpu::RenderPipeline,
+    slab_edges: wgpu::RenderPipeline,
     bead: wgpu::RenderPipeline,
     dot: wgpu::RenderPipeline,
     ghost: wgpu::RenderPipeline,
@@ -468,6 +471,34 @@ impl Renderer {
                 blend: None,
                 bias: no_bias,
             }),
+            slab_walls: mk(PipeDesc {
+                label: "dpi bed walls",
+                layout: &layout_g,
+                module: &m_ground,
+                vs: "vs_slab_walls",
+                fs: "fs_slab_walls",
+                buffers: &[],
+                topology: tri,
+                cull: back,
+                depth_write: true,
+                depth_compare: Less,
+                blend: None,
+                bias: no_bias,
+            }),
+            slab_edges: mk(PipeDesc {
+                label: "dpi bed edges",
+                layout: &layout_g,
+                module: &m_ground,
+                vs: "vs_slab_edges",
+                fs: "fs_slab_edges",
+                buffers: &[],
+                topology: lines,
+                cull: None,
+                depth_write: false,
+                depth_compare: LessEqual,
+                blend: alpha,
+                bias: no_bias,
+            }),
             bead: mk(PipeDesc {
                 label: "dpi beads",
                 layout: &layout_s,
@@ -600,7 +631,11 @@ impl Renderer {
             tpl_ribbon_full: m.ribbon_full,
             tpl_dome: m.dome,
             tpl_disc: m.disc,
-            bed: Bed { w: 0.0, h: 0.0 },
+            bed: Bed {
+                w: 0.0,
+                h: 0.0,
+                thickness: 0.0,
+            },
             buffers: HashMap::new(),
             slides: Vec::new(),
             travels: None,
@@ -711,7 +746,10 @@ impl Renderer {
             };
             self.buffers.insert(id, gp);
         }
-        if let Some(bed) = p.bed {
+        if let Some(mut bed) = p.bed {
+            if !(bed.thickness.is_finite() && bed.thickness > 0.0) {
+                bed.thickness = 0.0;
+            }
             self.bed = bed;
         }
         if let Some(slides) = &p.slides {
@@ -885,9 +923,15 @@ impl Renderer {
         let pl = &self.pipelines;
         pass.set_bind_group(0, &self.globals_bg, &[]);
 
-        // 1. Podlaha
+        // 1. Podlaha (z = −tloušťka) a vršek podložky (z = 0), pak její boky a hrany
         pass.set_pipeline(&pl.ground);
-        pass.draw(0..6, 0..1);
+        pass.draw(0..6, 0..2);
+        if self.bed.thickness > 0.0 && self.bed.w > 0.0 && self.bed.h > 0.0 {
+            pass.set_pipeline(&pl.slab_walls);
+            pass.draw(0..24, 0..1);
+            pass.set_pipeline(&pl.slab_edges);
+            pass.draw(0..24, 0..1);
+        }
 
         let offsets = |i: usize| {
             [
@@ -1046,7 +1090,7 @@ impl Renderer {
             nozzle_real: h.nozzle_real,
             nozzle_preview: h.nozzle_preview,
             clear: h.clear,
-            bed: [self.bed.w, self.bed.h, ext, 0.0],
+            bed: [self.bed.w, self.bed.h, ext, self.bed.thickness],
             light: [l[0], l[1], l[2], 0.0],
             misc: [0.0; 4],
         }

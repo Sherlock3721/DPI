@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use dpi_render::offscreen::{Offscreen, OffscreenOptions};
 use dpi_render::protocol::FrameHeader;
-use dpi_render::testkit::{golden_scene, orbit_view, top_view, TestScene};
+use dpi_render::testkit::{golden_scene, orbit_view, side_view, top_view, TestScene};
 
 /// Max. rozdíl kanálu, který se ještě nepočítá jako odlišný pixel.
 const CHANNEL_TOL: u8 = 8;
@@ -76,11 +76,17 @@ fn views(s: &TestScene, w: u32, h: u32) -> Vec<(&'static str, FrameHeader)> {
     // Ortho shora na sklo A: kontrola vzhledu „2D plánu“ a pásků (LOD) proti 3D
     let mut top_a = top_view(w, h, 6.11, 6.07, 86.11, 36.07);
     top_a.grid = [1.0, 10.0, 1.0, 0.0];
+    // Nízký pohled na jihozápadní roh: boky 2mm podložky nad podlahou, okraj skla A
+    let corner = orbit_view(w, h, [12.0, 10.0, 0.0], 45.0, -40.0, 18.0);
+    // Z boku (pitch 0, ortho): pás podložky 2 mm pod skly 1 mm a 2,1 mm
+    let side = side_view(w, h, 2.13, 34.13, 0.57);
     vec![
         ("top", top),
         ("oblique", oblique),
         ("closeup", close),
         ("top_slide_a", top_a),
+        ("bed_corner", corner),
+        ("side", side),
     ]
 }
 
@@ -209,6 +215,41 @@ fn readback_is_top_down_and_tight() {
         64 * 64 * 4
     );
     assert_eq!(off.render_frame(&scene.frame(&header)).unwrap(), rgba);
+}
+
+#[test]
+fn slab_keeps_top_view() {
+    // Shora (ortho) vypadá deska tloušťky 2 mm stejně jako plochá (t = 0)
+    let opts = OffscreenOptions {
+        msaa: false,
+        ..Default::default()
+    };
+    let Ok(mut off) = Offscreen::with_options(opts) else {
+        eprintln!("slab: přeskočeno — žádný adaptér");
+        return;
+    };
+    let scene = golden_scene();
+    off.apply_scene(&scene.scene).unwrap();
+    let header = top_view(320, 200, -4.13, -4.07, 123.87, 83.93);
+    let slab = off.render_frame(&scene.frame(&header)).unwrap();
+    let flat_bed = r#"{"bed": {"w": 120, "h": 80}}"#;
+    off.apply_scene(&dpi_render::protocol::encode_scene(flat_bed, &[]))
+        .unwrap();
+    let flat = off.render_frame(&scene.frame(&header)).unwrap();
+    let diff = slab
+        .chunks_exact(4)
+        .zip(flat.chunks_exact(4))
+        .filter(|(a, b)| {
+            a.iter()
+                .zip(b.iter())
+                .any(|(x, y)| x.abs_diff(*y) > CHANNEL_TOL)
+        })
+        .count();
+    eprintln!("slab: odlišných pixelů shora {diff}");
+    assert!(
+        diff * 1000 < 320 * 200,
+        "deska změnila pohled shora: {diff} px"
+    );
 }
 
 #[test]

@@ -122,6 +122,23 @@ pub fn top_view(w: u32, h: u32, x0: f32, y0: f32, x1: f32, y1: f32) -> FrameHead
     hd
 }
 
+/// Ortho pohled z boku (od jihu, kamera vodorovně, pitch 0) na výřez
+/// x ∈ [x0, x1] se středem výšky v `z_center`.
+pub fn side_view(w: u32, h: u32, x0: f32, x1: f32, z_center: f32) -> FrameHeader {
+    let mut hd = base_header(w, h);
+    let cx = 0.5 * (x0 + x1);
+    let hw = 0.5 * (x1 - x0);
+    let hh = hw * h as f32 / w as f32;
+    let eye = [cx, -500.0, z_center];
+    let view = look_at(eye, [cx, 0.0, z_center], [0.0, 0.0, 1.0]);
+    let proj = ortho(-hw, hw, -hh, hh, 1.0, 1500.0);
+    hd.view_proj = mat_mul(&proj, &view);
+    hd.eye = [eye[0], eye[1], eye[2], 1.0];
+    hd.view_dir = [0.0, 1.0, 0.0, 0.0];
+    hd.viewport[2] = w as f32 / (2.0 * hw);
+    hd
+}
+
 /// Perspektiva na `target` ze vzdálenosti `dist`, azimut (0 = od jihu, kladný
 /// = od západu… po směru hodin shora) a elevace ve stupních.
 pub fn orbit_view(w: u32, h: u32, target: V3, dist: f32, az_deg: f32, el_deg: f32) -> FrameHeader {
@@ -222,7 +239,7 @@ impl TestScene {
     }
 }
 
-/// Malá scéna pro golden testy: deska 120×80, dvě skla (1 a 2 mm), lomená
+/// Malá scéna pro golden testy: deska 120×80×2, dvě skla (1 a 2,1 mm), lomená
 /// čára, uzavřené smyčky, tečky, duch mimo sklo, částečně vytištěné sklo B.
 pub fn golden_scene() -> TestScene {
     let mut blobs = BlobWriter::default();
@@ -258,7 +275,7 @@ pub fn golden_scene() -> TestScene {
         .path(&[[55.0, 1.5], [88.0, 1.5]], 1)
         .path(&[[70.0, 10.0], [84.0, 30.0]], 0);
 
-    // Sklo B (60×28×2), otočené o 15° a zmenšené na 0,9 — rozpracované
+    // Sklo B (60×28×2,1), otočené o 15° a zmenšené na 0,9 — rozpracované
     let mut b = PathsBuilder::default();
     let mut serp = Vec::new();
     for (i, y) in [3.0, 6.0, 9.0, 12.0].iter().enumerate() {
@@ -294,7 +311,7 @@ pub fn golden_scene() -> TestScene {
     let xf_b = xf(10.0, 45.0, [30.0, 14.0], [0.9, 0.9], 15.0);
     let json = format!(
         r#"{{
-        "bed": {{"w": 120, "h": 80}},
+        "bed": {{"w": 120, "h": 80, "thickness": 2}},
         "buffers_add": [
             {{"id": 1, "pieces": {pa}, "dots": {da}, "n_segs": {na}}},
             {{"id": 2, "pieces": {pg}, "dots": {empty}, "n_segs": {ng}}},
@@ -306,7 +323,7 @@ pub fn golden_scene() -> TestScene {
               "clip": [8, 8, 83, 33],
               "objects": [{{"w": 1.0, "h": 0.5, "color": [0.376, 0.647, 0.980]}},
                           {{"w": 0.7, "h": 0.35, "color": [0.961, 0.620, 0.043]}}]}},
-            {{"glass": [10, 45, 60, 28, 2.0], "glass_fill": [0.55, 0.75, 0.88, 0.22],
+            {{"glass": [10, 45, 60, 28, 2.1], "glass_fill": [0.55, 0.75, 0.88, 0.22],
               "glass_edge": [0.70, 0.85, 0.95, 0.85], "paths": 3, "ghost": null,
               "clip": [10, 45, 70, 73],
               "objects": [{{"w": 1.2, "h": 0.6, "color": [0.204, 0.827, 0.600]}},
@@ -345,7 +362,7 @@ pub fn golden_scene() -> TestScene {
         scene,
         slides,
         bed: [120.0, 80.0],
-        preview_nozzle: [p[0], p[1], 2.0 + 0.4],
+        preview_nozzle: [p[0], p[1], 2.1 + 0.4],
     }
 }
 
@@ -418,7 +435,7 @@ pub fn bench_scene(n_slides: usize, pieces_per_slide: usize, dots_per_slide: usi
         });
     }
     let json = format!(
-        r#"{{"bed": {{"w": {}, "h": {}}}, "buffers_add": [{}], "slides": [{}]}}"#,
+        r#"{{"bed": {{"w": {}, "h": {}, "thickness": 2}}, "buffers_add": [{}], "slides": [{}]}}"#,
         bed[0],
         bed[1],
         buffers.join(","),

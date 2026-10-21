@@ -14,7 +14,7 @@ struct Globals {
     nozzle_real: vec4<f32>,
     nozzle_preview: vec4<f32>,
     clear: vec4<f32>,
-    // šířka a výška desky, přesah podlahy, rezerva
+    // šířka a výška desky, přesah podlahy, tloušťka podložky (vršek v z = 0)
     bed: vec4<f32>,
     // směr KE světlu (normalizovaný)
     light: vec4<f32>,

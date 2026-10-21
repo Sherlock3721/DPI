@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "dpi-app"
-version = "2.2.9"
+version = "2.2.10"
 dependencies = [
  "cc",
  "dpi-core",
@@ -1449,7 +1449,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]

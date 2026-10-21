@@ -54,6 +54,10 @@ pub struct ScenePacket {
 pub struct Bed {
     pub w: f32,
     pub h: f32,
+    /// Tloušťka podložky (mm): deska je kvádr [0, w] × [0, h] × [−thickness, 0],
+    /// vršek zůstává v z = 0. Chybí = 0 (plochá deska).
+    #[serde(default)]
+    pub thickness: f32,
 }
 
 /// Geometrie drah jednoho objektu `SubstratePaths` v jeho lokálních souřadnicích `p`.
@@ -328,6 +332,16 @@ mod tests {
         assert_eq!(back[0].b, [1.0, 0.0]);
         assert!(parsed.packet.slides.is_none());
         assert!(parsed.packet.travels.is_none());
+    }
+
+    #[test]
+    fn bed_thickness_defaults_to_zero() {
+        let thickness = |json: &str| {
+            let bytes = encode_scene(json, &[]);
+            parse_scene(&bytes).unwrap().packet.bed.unwrap().thickness
+        };
+        assert_eq!(thickness(r#"{"bed":{"w":120,"h":80}}"#), 0.0);
+        assert_eq!(thickness(r#"{"bed":{"w":120,"h":80,"thickness":2}}"#), 2.0);
     }
 
     #[test]
